@@ -13,6 +13,10 @@ inputs:
     description: 'Gemini model to use'
     required: false
     default: 'gemini-3.5-flash'
+  command:
+    description: 'Command to run (review, triage)'
+    required: false
+    default: 'review'
 
 runs:
   using: 'composite'
@@ -25,7 +29,7 @@ runs:
     - name: Install uv
       uses: astral-sh/setup-uv@v5
 
-    - name: Run Review Script
+    - name: Run Script
       shell: bash
       env:
         GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
@@ -35,4 +39,9 @@ runs:
         GITHUB_EVENT_PATH: ${{ github.event_path }}
         GITHUB_EVENT_NAME: ${{ github.event_name }}
       run: |
-        uv run ${{ github.action_path }}/gemini_pr_review.py
+        if [ "${{ inputs.command }}" = "triage" ]; then
+          uv run ${{ github.action_path }}/gemini_issue_triage.py
+        else
+          uv run ${{ github.action_path }}/gemini_pr_review.py
+        fi
+
