@@ -1,0 +1,38 @@
+name: 'Gemini Code Review'
+description: 'Automated Pull Request code reviews using Gemini 3.5'
+author: 'derailed-dash'
+
+inputs:
+  gemini_api_key:
+    description: 'API key for Gemini'
+    required: true
+  github_token:
+    description: 'GitHub token (defaults to secrets.GITHUB_TOKEN)'
+    required: true
+  gemini_model:
+    description: 'Gemini model to use'
+    required: false
+    default: 'gemini-3.5-flash'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+
+    - name: Run Review Script
+      shell: bash
+      env:
+        GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        GEMINI_MODEL: ${{ inputs.gemini_model }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        GITHUB_EVENT_PATH: ${{ github.event_path }}
+        GITHUB_EVENT_NAME: ${{ github.event_name }}
+      run: |
+        uv run ${{ github.action_path }}/gemini_pr_review.py
