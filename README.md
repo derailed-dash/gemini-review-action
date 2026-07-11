@@ -1,10 +1,23 @@
-# Gemini PR Code Review Action
+# Gemini-Review-Action
 
-Automated Pull Request code reviews on GitHub using Google Gemini, the Google Gen AI SDK (`google-genai`), and Pydantic Structured Outputs.
+- Automated Pull Request code reviews and Issue Triaging on GitHub
+- Leverages Google Gemini
+- Can be used in your GitHub Actions-based workflows and pipelines
+- Can be used as a drop-in replacement for the deprecated `run-gemini-cli`
+- Supports use of API keys and Workload Identity Federation
 
-This is a custom-built, highly resilient GitHub Action that can be used as an in-place replacement for the deprecated `run-gemini-cli`. It is designed to perform precise, context-aware reviews on your pull requests while avoiding common failure points such as binary file encoding issues or malformed response formats.
+## Features Overview
 
----
+- **AI-Powered Code Reviews**: Automated, constructive line-specific feedback on Pull Requests using Google Gemini models.
+- **Automated Issue Triage**: Dynamically labels, prioritises, and triages incoming issues.
+- **Structured Outputs**: Error-free JSON response formatting using Pydantic schema validation.
+- **Context-Enriched Analysis**: Surrounds diff patches with the full contents of modified files from the local workspace to allow deeper, more context-aware reviews.
+- **Interactive Suggestions**: Formats code recommendations inside native GitHub ` ```suggestion ` blocks for one-click merge applications.
+- **Fast-Execution Composite Action**: Avoids containerisation build/pull latency (no slow `docker build` on every execution) by running as a native composite action powered by Astral `uv`.
+- **Cross-Platform Support**: Runs natively on Linux, macOS, and Windows runners (both GitHub-hosted and self-hosted).
+- **Modern SDK Execution**: Leverages the official Google GenAI SDK (`google-genai`), rather than older APIs and SDKs.
+- **Enterprise-Grade Security**: Flexible authentication via either Google Gemini API Keys or Google Cloud Workload Identity Federation (WIF).
+- **Customisable Prompts**: Supports repository-specific overrides for both reviews and triaging via simple TOML config files.
 
 ## How It Works
 
@@ -14,11 +27,23 @@ This is a custom-built, highly resilient GitHub Action that can be used as an in
 4. **Interactive suggestions**: Code recommendations are wrapped in native GitHub ` ```suggestion ` blocks, allowing reviewers to apply the changes directly on the PR with one click.
 5. **Resilient Comment Posting**: The review is posted atomically via the GitHub Pull Request Review API. If the API call fails (e.g. if the model hallucinates an invalid line number in the diff), the script catches the error and falls back to posting comments individually, ensuring your CI status check stays green while still delivering all valid feedback.
 
+## The Step-by-Step Flow
+
+1. **Trigger Event**: A developer opens or pushes an update to a Pull Request on GitHub.
+2. **Workflow Run**: GitHub Actions detects the event and starts a runner, checking out the pull request ref and executing the review action.
+3. **Context Preparation**:
+   - The action retrieves the PR diff files via pagination from the GitHub API.
+   - It filters out non-text files and blacklisted paths (like lock files or binaries).
+   - It reads the full text of the remaining modified files from the local workspace filesystem.
+4. **Gemini API Call**: The action merges the diff hunks, full-file surrounding context, and system instructions (from [gemini-review.toml](gemini-review.toml)) into a unified prompt payload and posts it to the Google Gemini API.
+5. **Structured Assessment**: The Gemini model analyses the files and changes, and generates a structured code review response guaranteed to follow the Pydantic schema constraints ([ReviewResult](gemini_pr_review.py#L35-L39)).
+6. **Publish Feedback**: The action parses the structured JSON response and submits line-specific inline comments containing severity markers and interactive suggestions back to the Pull Request. If a comment contains a line range mismatch, the resilient handler falls back to publishing comments individually so that valid reviews are not lost and the workflow status stays green.
+
 ---
 
 ## Setup & Configuration
 
-Add this workflow to your repository under `.github/workflows/gemini-review.yml`:
+Add this workflow to your repository using a custom action like this: `.github/workflows/gemini-review.yml`
 
 ```yaml
 name: '🔎 Gemini Code Review'
@@ -28,10 +53,10 @@ on:
     branches:
       - main
     # Optional: restrict paths to trigger reviews only on relevant files
-    paths:
-      - 'src/**'
-      - 'tests/**'
-      - 'pyproject.toml'
+    # paths:
+    #   - 'src/**'
+    #   - 'tests/**'
+    #   - 'pyproject.toml'
   issue_comment:
     types: [created]
 
@@ -93,8 +118,6 @@ If you prefer to authenticate using **Google Cloud Workload Identity Federation 
 - `GOOGLE_CLOUD_LOCATION: "global"`
 
 Ensure you have run the `google-github-actions/auth` step prior to running this action to configure Application Default Credentials.
-
----
 
 ## Customising the Prompt
 
