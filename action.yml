@@ -1,6 +1,6 @@
 name: 'Gemini Code Review'
-description: 'Automated Pull Request code reviews using Gemini 3.5'
-author: 'derailed-dash'
+description: 'Automated Pull Request code reviews using Google Gemini'
+author: 'Dazbo (derailed-dash)'
 
 inputs:
   gemini_api_key:

@@ -51,11 +51,15 @@ def load_triage_prompt(issue_title: str, issue_body: str, available_labels: list
     """Load prompt guidelines from gemini-triage.toml and substitute template parameters."""
     path = ".github/commands/gemini-triage.toml"
     if not os.path.exists(path):
-        return (
-            "You are a helpful issue triage assistant. Categorise the following issue "
-            "using only labels from this list: " + ", ".join(available_labels) + "\n\n"
-            f"Title: {issue_title}\nBody: {issue_body}"
-        )
+        action_default_path = os.path.join(os.path.dirname(__file__), "gemini-triage.toml")
+        if os.path.exists(action_default_path):
+            path = action_default_path
+        else:
+            return (
+                "You are a helpful issue triage assistant. Categorise the following issue "
+                "using only labels from this list: " + ", ".join(available_labels) + "\n\n"
+                f"Title: {issue_title}\nBody: {issue_body}"
+            )
 
     with open(path, "rb") as f:
         config = tomllib.load(f)
