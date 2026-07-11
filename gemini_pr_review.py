@@ -108,7 +108,11 @@ def load_system_instruction(repository: str | None, pr_number: int) -> str:
     """Load system instructions from Dazbo's gemini-review.toml prompt configuration."""
     path = ".github/commands/gemini-review.toml"
     if not os.path.exists(path):
-        return "You are a world-class code review agent. Analyze changes and output constructive feedback using English (UK) spelling."
+        action_default_path = os.path.join(os.path.dirname(__file__), "gemini-review.toml")
+        if os.path.exists(action_default_path):
+            path = action_default_path
+        else:
+            return "You are a world-class code review agent. Analyze changes and output constructive feedback using English (UK) spelling."
 
     with open(path, "rb") as f:
         config = tomllib.load(f)

@@ -1,8 +1,8 @@
 # Gemini PR Code Review Action
 
-Automated Pull Request code reviews on GitHub using the official Google Gen AI SDK (`google-genai`), Pydantic Structured Outputs, and Gemini.
+Automated Pull Request code reviews on GitHub using Google Gemini, the Google Gen AI SDK (`google-genai`), and Pydantic Structured Outputs.
 
-This is a custom-built, highly resilient GitHub Action that replaces the deprecated `run-gemini-cli`. It is designed to perform precise, context-aware reviews on your pull requests while avoiding common failure points such as binary file encoding issues or malformed response formats.
+This is a custom-built, highly resilient GitHub Action that can be used as an in-place replacement for the deprecated `run-gemini-cli`. It is designed to perform precise, context-aware reviews on your pull requests while avoiding common failure points such as binary file encoding issues or malformed response formats.
 
 ---
 
@@ -68,6 +68,13 @@ jobs:
           gemini_model: 'gemini-3.5-flash'
 ```
 
+### Triggering Reviews via Comments
+
+If the workflow is configured with the `issue_comment` trigger as shown in the example above, you can trigger a code review manually at any time by posting a comment on the Pull Request:
+
+* Simply comment `/gemini-review` on the PR.
+* **Security & Access Control:** To prevent unauthorised runs and control costs, the action will only trigger if the commenter is an `OWNER`, `MEMBER`, or `COLLABORATOR` of the repository.
+
 ### Action Inputs
 
 | Input | Description | Required | Default |
@@ -77,8 +84,10 @@ jobs:
 | `gemini_model` | The Gemini model version to target. | No | `gemini-3.5-flash` |
 
 ### Environment Variables & Authentication
+
 By default, this action uses your AI Studio API key (`gemini_api_key`).
 If you prefer to authenticate using **Google Cloud Workload Identity Federation (WIF)** and Vertex AI, you can omit `gemini_api_key` and configure the following environment variables in your calling step:
+
 - `GOOGLE_GENAI_USE_VERTEXAI: "True"`
 - `GOOGLE_CLOUD_PROJECT: "your-project-id"`
 - `GOOGLE_CLOUD_LOCATION: "global"`
@@ -89,12 +98,20 @@ Ensure you have run the `google-github-actions/auth` step prior to running this 
 
 ## Customising the Prompt
 
-You can customize the instructions given to the code review bot on a repository-by-repository basis. 
+This action bundles high-quality default prompt configurations for both review and triage:
+* **Default Review Prompt:** [gemini-review.toml](file:///home/dazbo/localdev/gemini-review-action/gemini-review.toml)
+* **Default Triage Prompt:** [gemini-triage.toml](file:///home/dazbo/localdev/gemini-review-action/gemini-triage.toml)
 
-To define repository-specific review criteria, create a file at `.github/commands/gemini-review.toml` in your calling repository. 
+### Overriding the Default Prompt
+
+You can customize or completely override the prompt instructions given to the review or triage bots on a repository-by-repository basis:
+
+* **To override the Code Review prompt:** Create a file at `.github/commands/gemini-review.toml` in your calling repository.
+* **To override the Issue Triage prompt:** Create a file at `.github/commands/gemini-triage.toml` in your calling repository.
 
 ### Custom Prompt Schema
-The file must contain a `prompt` key enclosing your system instructions in markdown format:
+
+Your custom TOML file must contain a `prompt` key enclosing your system instructions in markdown format:
 
 ```toml
 description = "Reviews a pull request with Gemini"
@@ -117,12 +134,18 @@ Review the diff and full file contents to identify performance, security, and lo
 
 ### Prompt Placeholders
 
-The action parses the TOML file and dynamically substitutes the following legacy expressions:
-- `!{echo $REPOSITORY}`: Replaced with the current repository name (e.g. `derailed-dash/my-repo`).
-- `!{echo $PULL_REQUEST_NUMBER}`: Replaced with the number of the Pull Request being triaged.
-- `!{echo $ADDITIONAL_CONTEXT}`: Replaced with empty space or triggering comment arguments.
+The action parses the TOML files and dynamically substitutes the following expressions:
 
-If `.github/commands/gemini-review.toml` is not present in the calling repository, the action will automatically fall back to an embedded, high-quality general-purpose review prompt.
+* **Code Review placeholders:**
+  * `!{echo $REPOSITORY}`: Replaced with the current repository name (e.g. `derailed-dash/my-repo`).
+  * `!{echo $PULL_REQUEST_NUMBER}`: Replaced with the number of the Pull Request being triaged.
+  * `!{echo $ADDITIONAL_CONTEXT}`: Replaced with empty space or triggering comment arguments.
+
+* **Issue Triage placeholders:**
+  * `!{echo $AVAILABLE_LABELS}`: Replaced with a comma-separated list of available labels.
+  * `!{echo $ISSUE_TITLE}`: Replaced with the title of the issue.
+  * `!{echo $ISSUE_BODY}`: Replaced with the body text of the issue.
+  * `!{echo $GITHUB_ENV}`: Replaced with the file path to append output environment variables.
 
 ## Review Response Format
 
