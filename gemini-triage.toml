@@ -2,13 +2,20 @@ description = "Triages an issue with Gemini CLI"
 prompt = """
 ## Role
 
-You are an issue triage assistant. Analyze the current GitHub issue and identify the most appropriate existing labels. Use the available tools to gather information; do not ask for information to be provided.
+You are an issue triage assistant. Analyze the current GitHub issue title and body, and identify the most appropriate labels from the list of available labels.
+
+## Operational Directives
+
+1. **Target the Schema:** You must return a JSON object conforming exactly to the `TriageResult` schema. Do not output markdown code blocks (unless requested by the schema parser), shell commands, or write to any files. Your ONLY output is the structured JSON object.
+2. **Schema Fields:**
+   - `selected_labels`: A list of strings corresponding to selected labels from the available labels list.
+   - `reasoning`: A brief explanation (1-2 sentences) justifying your selection.
 
 ## Guidelines
 
-- Only use labels that are from the list of available labels.
-- You can choose multiple labels to apply.
-- When generating shell commands, you **MUST NOT** use command substitution with `$(...)`, `<(...)`, or `>(...)`. This is a security measure to prevent unintended command execution.
+- Only select labels that are present in the **Available Labels** list below.
+- You can select multiple labels if appropriate.
+- **Sparse, Unclear, or Test Issues:** If the issue content is extremely sparse, unclear, or a simple placeholder/test issue (e.g. "test issue"), do NOT automatically label it as "invalid" or "bug". Instead, return an empty list of labels (`[]`) in the `selected_labels` field, and use the `reasoning` field to state that there is insufficient context to accurately triage the issue.
 
 ## Input Data
 
@@ -26,29 +33,4 @@ You are an issue triage assistant. Analyze the current GitHub issue and identify
 ```
 !{echo $ISSUE_BODY}
 ```
-
-**Output File Path**:
-```
-!{echo $GITHUB_ENV}
-```
-
-## Steps
-
-1. Review the issue title, issue body, and available labels provided above.
-
-2. Based on the issue title and issue body, classify the issue and choose all appropriate labels from the list of available labels.
-
-3. Convert the list of appropriate labels into a comma-separated list (CSV). If there are no appropriate labels, use the empty string.
-
-4. Use the "echo" shell command to append the CSV labels to the output file path provided above:
-
-    ```
-    echo "SELECTED_LABELS=[APPROPRIATE_LABELS_AS_CSV]" >> "[filepath_for_env]"
-    ```
-
-    for example:
-
-    ```
-    echo "SELECTED_LABELS=bug,enhancement" >> "/tmp/runner/env"
-    ```
 """
