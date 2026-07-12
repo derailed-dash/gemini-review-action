@@ -1,6 +1,21 @@
-name: 'Gemini Code Review'
-description: 'Automated Pull Request code reviews using Google Gemini'
+name: "Dazbo's Gemini Review & Triage"
+description: "Automated Pull Request code reviews and Issue Triage using Google Gemini"
 author: 'Dazbo (derailed-dash)'
+
+# Note: To control which files trigger this action, configure `paths` or `paths-ignore`
+# in the calling workflow's trigger configuration (e.g. in `.github/workflows/gemini-review.yml`).
+#
+# Examples:
+#   on:
+#     pull_request:
+#       paths:
+#         - 'src/**'           # Inclusion  : only trigger on files under src/
+#         - '!src/**/*.enc'    # Exclusion: do not trigger on encrypted files
+#
+#       # Alternatively, exclude files/directories entirely:
+#       # paths-ignore:
+#       #   - 'docs/**'
+#       #   - '**.md'
 
 inputs:
   gemini_api_key:
@@ -17,6 +32,10 @@ inputs:
     description: 'Command to run (review, triage)'
     required: false
     default: 'review'
+  language:
+    description: 'Language to use for the review comments (e.g. English (UK), English (US), French, Spanish)'
+    required: false
+    default: 'English (UK)'
 
 runs:
   using: 'composite'
@@ -35,6 +54,7 @@ runs:
         GEMINI_API_KEY: ${{ inputs.gemini_api_key }}
         GITHUB_TOKEN: ${{ inputs.github_token }}
         GEMINI_MODEL: ${{ inputs.gemini_model }}
+        GEMINI_LANGUAGE: ${{ inputs.language }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_EVENT_PATH: ${{ github.event_path }}
         GITHUB_EVENT_NAME: ${{ github.event_name }}

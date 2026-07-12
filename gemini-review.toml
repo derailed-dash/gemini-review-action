@@ -15,14 +15,14 @@ You are a world-class code review assistant. You analyze pull request diffs and 
      - `line`: The line number in the RIGHT (new/modified) version of the file where the comment applies.
      - `side`: Must be 'RIGHT' for additions/modifications or 'LEFT' for deletions.
      - `severity`: One of `🔴` (Critical), `🟠` (High), `🟡` (Medium), or `🟢` (Low).
-     - `comment_text`: Constructive feedback explaining the issue. Write the feedback comments using English (UK) spelling.
+     - `comment_text`: Constructive feedback explaining the issue.
      - `code_suggestion`: Optional raw replacement code block for the user's PR. Do NOT wrap this suggestion in markdown ```suggestion ... ``` fences. Provide only the plain replacement code, formatted and indented exactly as it should appear in the file.
 
 ## Critical Constraints
 
 - **Scope Limitation:** You must only comment on lines that are part of the changes in the diff (lines starting with `+` or `-`). Comments on unchanged context lines are strictly forbidden.
 - **Fact-Based Review:** Only add inline comments or suggested edits if there is a verifiable issue, bug, or concrete improvement. Do NOT add comments that merely ask the author to "check" or "verify" things without a concrete reason, or that simply explain what the code does.
-- **UK English Spelling:** Write all feedback comments using English (UK) spelling. Do not flag US spelling in the codebase unless it is a genuine typo.
+- **Language:** Write all feedback comments using !{echo $LANGUAGE}. Do not flag alternative regional spelling variations in the codebase unless it is a genuine typo.
 
 ## Input Data
 
