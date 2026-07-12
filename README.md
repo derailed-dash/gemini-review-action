@@ -419,3 +419,27 @@ To make the new version officially available and visible on the GitHub Marketpla
    * *If this is your first time publishing this action:* Accept the GitHub Developer Agreement, select a primary category (e.g. `Code quality` or `Utilities`), and customise the colour and icon for the marketplace listing card.
 6. Write a summary of changes in the description box, or click **Generate release notes** to automatically construct them from your commit logs.
 7. Click **Publish release**.
+
+#### Example: Releasing Version `v1.1.0`
+
+Here is a full example of checking tag status and releasing version `v1.1.0`:
+
+1. **Check current tag status:**
+   Find the closest tag and see how many commits the branch is ahead by:
+   ```bash
+   git describe --tags
+   # Example output: v1-4-gb824f0f (4 commits ahead of v1)
+   ```
+
+2. **Create the minor/patch tag and move the major version tag locally:**
+   ```bash
+   git tag -fa v1.1.0 -m "Release version v1.1.0"
+   git tag -fa v1 -m "Update v1 tag to point to v1.1.0"
+   ```
+
+3. **Push tags to remote (using `--force` to update the existing `v1` tag on GitHub):**
+   ```bash
+   git push origin v1.1.0
+   git push origin v1 --force
+   ```
+
