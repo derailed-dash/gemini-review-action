@@ -51,7 +51,7 @@ Alternatively, we can use WIF and ADC to authenticate. In this approach, we do n
 
 ### PR Review Action Definition
 
-Add this GitHub Action to your repository, by copying the example workflow below to `.github/workflows/gemini-review.yml` in your repo.
+One-time step: add this GitHub Action to your repository, by copying the example workflow below to `.github/workflows/gemini-review.yml` in your repo.
 
 ```yaml
 name: "🔎 Dazbo's Gemini Code Review"
@@ -100,6 +100,21 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gemini_model: 'gemini-3.5-flash'
 ```
+
+### Seeing It In Action
+
+1. Create a PR in the repository:
+
+    ![Create the PR](./assets/create-pr.png)
+
+2. Watch the workflow run. The action will automatically start a review process:
+
+    ![Automated PR Review Starts](./assets/pr-running.png)
+
+3. Once complete, you will see a review comment with recommendations:
+
+    ![Automated PR Review Completes](./assets/pr-review-summary.png)
+
 
 #### Filtering Trigger Paths (Inclusions & Exclusions)
 
