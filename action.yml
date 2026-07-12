@@ -65,3 +65,7 @@ runs:
           uv run ${{ github.action_path }}/gemini_pr_review.py
         fi
 
+branding:
+  icon: 'eye'
+  color: 'purple'
+
