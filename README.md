@@ -356,6 +356,7 @@ Here is an overview of the directory tree and the purpose of each file:
 ├── assets/                  # Documentation assets (banners, images)
 ├── tests/                   # Unit tests
 ├── action.yml               # GitHub Action definition (inputs, environment, and steps)
+├── CONTRIBUTING.md          # Collaboration guidelines for developers
 ├── gemini-review.toml       # Default prompt template for PR reviews
 ├── gemini-triage.toml       # Default prompt template for issue triage
 ├── gemini_issue_triage.py   # Python script to triage and label incoming issues
