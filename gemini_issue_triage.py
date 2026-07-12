@@ -12,16 +12,16 @@ Loads prompt configuration from .github/commands/gemini-triage.toml, fetches
 available labels from GitHub API, queries Gemini using Structured Outputs,
 and applies the selected labels to the issue.
 """
-
 import json
 import os
 import sys
 import tomllib
 from typing import List
+
+import requests
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
-import requests
 
 
 class TriageResult(BaseModel):

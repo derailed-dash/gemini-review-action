@@ -28,7 +28,7 @@ class InlineComment(BaseModel):
     line: int = Field(description="The line number in the RIGHT (new/modified) version of the file where the comment applies.")
     side: str = Field(default="RIGHT", description="Must be 'RIGHT' for additions/modifications or 'LEFT' for deletions.")
     severity: str = Field(description="Severity icon: 🔴 (Critical), 🟠 (High), 🟡 (Medium), 🟢 (Low)")
-    comment_text: str = Field(description="Constructive feedback explaining the issue. Write the feedback comments using English (UK) spelling, but do not flag US spelling in the codebase unless it is a genuine typo.")
+    comment_text: str = Field(description="Constructive feedback explaining the issue. Write the feedback comments in the requested language.")
     code_suggestion: str | None = Field(None, description="Optional drop-in code suggestion replacement. Must match the exact structure and indentation of the replaced code, formatted as a suggestion.")
 
 
@@ -112,7 +112,7 @@ def load_system_instruction(repository: str | None, pr_number: int) -> str:
         if os.path.exists(action_default_path):
             path = action_default_path
         else:
-            return "You are a world-class code review agent. Analyze changes and output constructive feedback using English (UK) spelling."
+            return f"You are a world-class code review agent. Analyze changes and output constructive feedback using {os.environ.get('GEMINI_LANGUAGE', 'English (UK)')} spelling."
 
     with open(path, "rb") as f:
         config = tomllib.load(f)
@@ -121,6 +121,9 @@ def load_system_instruction(repository: str | None, pr_number: int) -> str:
     prompt = prompt.replace("!{echo $REPOSITORY}", repository or "unknown")
     prompt = prompt.replace("!{echo $PULL_REQUEST_NUMBER}", str(pr_number))
     prompt = prompt.replace("!{echo $ADDITIONAL_CONTEXT}", "")
+
+    language = os.environ.get("GEMINI_LANGUAGE", "English (UK)")
+    prompt = prompt.replace("!{echo $LANGUAGE}", language)
     return prompt
 
 
