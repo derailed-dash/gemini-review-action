@@ -67,5 +67,6 @@ def test_apply_labels(mocker):
     mock_post.assert_called_once_with(
         "https://api.github.com/repos/derailed-dash/gemini-review-action/issues/123/labels",
         headers={"Authorization": "token test"},
-        json={"labels": ["bug"]}
+        json={"labels": ["bug"]},
+        timeout=60
     )

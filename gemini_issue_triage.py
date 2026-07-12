@@ -11,31 +11,37 @@ Description: Runs an automated GitHub Issue triage using the Google GenAI SDK.
 Loads prompt configuration from .github/commands/gemini-triage.toml, fetches
 available labels from GitHub API, queries Gemini using Structured Outputs,
 and applies the selected labels to the issue.
+
+Outputs and logs (including errors and progress messages) are printed to stderr
+and stdout, which are viewable in the GitHub Actions runner execution logs
+for the workflow run.
 """
 import json
 import os
 import sys
 import tomllib
-from typing import List
 
 import requests
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 
+DEFAULT_TIMEOUT = 60
+
 
 class TriageResult(BaseModel):
-    selected_labels: List[str] = Field(description="List of appropriate labels selected from the available labels list. Must match available labels exactly.")
+    """Represents the structured issue triage results returned by the Gemini model."""
+    selected_labels: list[str] = Field(description="List of appropriate labels selected from the available labels list. Must match available labels exactly.")
     reasoning: str = Field(description="A brief explanation of why these labels were selected (1-2 sentences).")
 
 
-def get_available_labels(repository: str, headers: dict) -> list:
+def get_available_labels(repository: str, headers: dict, timeout: int = DEFAULT_TIMEOUT) -> list:
     """Fetch all available labels for the repository."""
     labels = []
     page = 1
     while True:
         url = f"https://api.github.com/repos/{repository}/labels?page={page}&per_page=100"
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=timeout)
         if response.status_code != 200:
             print(f"Error fetching repository labels: {response.status_code} - {response.text}", file=sys.stderr)
             break
@@ -71,7 +77,7 @@ def load_triage_prompt(issue_title: str, issue_body: str, available_labels: list
     return prompt
 
 
-def apply_labels(repository: str, issue_number: int, labels: list, headers: dict) -> None:
+def apply_labels(repository: str, issue_number: int, labels: list, headers: dict, timeout: int = DEFAULT_TIMEOUT) -> None:
     """Apply the selected labels to the GitHub issue."""
     if not labels:
         print("No labels selected to apply. Skipping API request.", file=sys.stderr)
@@ -79,7 +85,7 @@ def apply_labels(repository: str, issue_number: int, labels: list, headers: dict
 
     url = f"https://api.github.com/repos/{repository}/issues/{issue_number}/labels"
     print(f"Applying labels {labels} to Issue #{issue_number} on {repository}...", file=sys.stderr)
-    res = requests.post(url, headers=headers, json={"labels": labels})
+    res = requests.post(url, headers=headers, json={"labels": labels}, timeout=timeout)
 
     if res.status_code in (200, 201):
         print("Successfully applied labels.", file=sys.stderr)
@@ -98,9 +104,17 @@ def main():
     location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
     model_name = os.environ.get("GEMINI_MODEL", os.environ.get("MODEL", "gemini-3.5-flash"))
 
+    try:
+        timeout = int(os.environ.get("GEMINI_TIMEOUT", str(DEFAULT_TIMEOUT)))
+    except ValueError:
+        timeout = DEFAULT_TIMEOUT
+
     headers = {}
     if github_token:
+        print("GitHub API Authentication: using GITHUB_TOKEN.", file=sys.stderr)
         headers["Authorization"] = f"token {github_token}"
+    else:
+        print("GitHub API Authentication: GITHUB_TOKEN not set.", file=sys.stderr)
     headers["Accept"] = "application/vnd.github.v3+json"
 
     is_dry_run = False
@@ -128,17 +142,18 @@ def main():
     if is_dry_run:
         available_labels = ["bug", "documentation", "enhancement", "duplicate", "help wanted", "good first issue"]
     else:
-        available_labels = get_available_labels(repository, headers)
+        available_labels = get_available_labels(repository, headers, timeout=timeout)
 
     if not available_labels:
         print("No repository labels found. Exiting.", file=sys.stderr)
         sys.exit(0)
 
-    # Initialize Gemini client
-    print(f"Initializing GenAI Client (Model: {model_name})...", file=sys.stderr)
+    # Initialise Gemini client
     if use_vertexai:
+        print(f"Initialising GenAI Client (Model: {model_name}) using Vertex AI authentication...", file=sys.stderr)
         client = genai.Client(vertexai=True, project=project, location=location)
     else:
+        print(f"Initialising GenAI Client (Model: {model_name}) using Google AI Studio API Key authentication...", file=sys.stderr)
         client = genai.Client(api_key=gemini_api_key)
 
     triage_prompt = load_triage_prompt(issue_title, issue_body, available_labels)
@@ -162,7 +177,7 @@ def main():
         print(f"Chosen Labels: {triage.selected_labels}")
         print(f"Reasoning: {triage.reasoning}\n")
     else:
-        apply_labels(repository, issue_number, triage.selected_labels, headers)
+        apply_labels(repository, issue_number, triage.selected_labels, headers, timeout=timeout)
 
 
 if __name__ == "__main__":

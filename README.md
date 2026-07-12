@@ -205,6 +205,7 @@ jobs:
 | `gemini_model` | The Gemini model version to target. | No | `gemini-3.5-flash` |
 | `command` | The mode/command to run: `review` (for PR reviews) or `triage` (for issue triaging). | No | `review` |
 | `language` | The language to use for the review comments (e.g. `English (UK)`, `English (US)`, `French`, `Spanish`). | No | `English (UK)` |
+| `timeout` | Timeout for API requests in seconds. | No | `60` |
 
 ### Custom Prompts / Instructions
 
@@ -281,6 +282,12 @@ Gemini uses a strict Pydantic schema to generate reviews. Every submitted review
    - Severity icons: `🔴` (Critical), `🟠` (High), `🟡` (Medium), `🟢` (Low).
    - Constructive explanation written in English (UK) spelling.
    - Interactive code replacement suggestion blocks (optional).
+
+### Logging & Troubleshooting
+
+All standard output (`stdout`) and error logs (`stderr`) produced by the action's execution (such as API call progress, validation warnings, or error details) are printed directly to the console. 
+
+You can view these logs by opening the specific workflow run in the **Actions** tab of your GitHub repository, selecting the active job (e.g. `review` or `triage`), and expanding the **Run Script** step.
 
 ## Author
 

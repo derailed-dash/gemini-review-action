@@ -10,6 +10,10 @@
 Description: Runs a Pull Request code review using the Google GenAI SDK.
 Supports both standard PR events and comment-triggered '/gemini-review' runs.
 Includes dry-run mode for local developers to test and run offline.
+
+Outputs and logs (including errors and progress messages) are printed to stderr
+and stdout, which are viewable in the GitHub Actions runner execution logs
+for the workflow run.
 """
 
 import json
@@ -22,8 +26,11 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 
+DEFAULT_TIMEOUT = 60
+
 
 class InlineComment(BaseModel):
+    """Represents a single inline comment to be posted on a file in the Pull Request."""
     path: str = Field(description="The relative file path being reviewed.")
     line: int = Field(description="The line number in the RIGHT (new/modified) version of the file where the comment applies.")
     side: str = Field(default="RIGHT", description="Must be 'RIGHT' for additions/modifications or 'LEFT' for deletions.")
@@ -33,6 +40,7 @@ class InlineComment(BaseModel):
 
 
 class ReviewResult(BaseModel):
+    """Represents the structured review results returned by the Gemini model."""
     summary: str = Field(description="A brief, high-level assessment of the Pull Request's objective and quality (2-3 sentences).")
     general_feedback: list[str] = Field(description="A list of general observations, positive highlights, or recurring patterns.")
     comments: list[InlineComment] = Field(description="List of targeted inline comments on the code changes.")
@@ -65,13 +73,13 @@ def get_file_content(path: str) -> str:
         return ""
 
 
-def get_pr_files(repository: str, pr_number: int, headers: dict) -> list:
+def get_pr_files(repository: str, pr_number: int, headers: dict, timeout: int = DEFAULT_TIMEOUT) -> list:
     """Fetch changed files list in PR using pagination."""
     files = []
     page = 1
     while True:
         url = f"https://api.github.com/repos/{repository}/pulls/{pr_number}/files?page={page}&per_page=100"
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=timeout)
         if response.status_code != 200:
             print(f"Error fetching files: {response.status_code} - {response.text}", file=sys.stderr)
             break
@@ -154,7 +162,7 @@ def build_prompt(files: list) -> str:
     return "\n".join(prompt_parts)
 
 
-def post_review(repository: str, pr_number: int, commit_id: str, review: ReviewResult, headers: dict) -> None:
+def post_review(repository: str, pr_number: int, commit_id: str, review: ReviewResult, headers: dict, timeout: int = DEFAULT_TIMEOUT) -> None:
     """Submit review comments atomically or fall back to individual comments if needed."""
     comments_payload = []
     for c in review.comments:
@@ -179,7 +187,7 @@ def post_review(repository: str, pr_number: int, commit_id: str, review: ReviewR
 
     url = f"https://api.github.com/repos/{repository}/pulls/{pr_number}/reviews"
     print(f"Submitting review to PR #{pr_number} on {repository}...", file=sys.stderr)
-    res = requests.post(url, headers=headers, json=payload)
+    res = requests.post(url, headers=headers, json=payload, timeout=timeout)
 
     if res.status_code in (200, 201):
         print("Successfully posted PR review atomically.", file=sys.stderr)
@@ -190,7 +198,7 @@ def post_review(repository: str, pr_number: int, commit_id: str, review: ReviewR
 
     # 1. Post review summary as a single comment on the PR conversation
     issue_url = f"https://api.github.com/repos/{repository}/issues/{pr_number}/comments"
-    res_summary = requests.post(issue_url, headers=headers, json={"body": review_body})
+    res_summary = requests.post(issue_url, headers=headers, json={"body": review_body}, timeout=timeout)
     if res_summary.status_code not in (200, 201):
         print(f"Error posting review summary comment: {res_summary.status_code} - {res_summary.text}", file=sys.stderr)
 
@@ -204,7 +212,7 @@ def post_review(repository: str, pr_number: int, commit_id: str, review: ReviewR
             "line": c["line"],
             "side": c["side"]
         }
-        res_comment = requests.post(comments_url, headers=headers, json=c_payload)
+        res_comment = requests.post(comments_url, headers=headers, json=c_payload, timeout=timeout)
         if res_comment.status_code in (200, 201):
             print(f"Posted comment {idx+1}/{len(comments_payload)} successfully.", file=sys.stderr)
         else:
@@ -222,9 +230,17 @@ def main():
     location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
     model_name = os.environ.get("GEMINI_MODEL", os.environ.get("MODEL", "gemini-3.5-flash"))
 
+    try:
+        timeout = int(os.environ.get("GEMINI_TIMEOUT", str(DEFAULT_TIMEOUT)))
+    except ValueError:
+        timeout = DEFAULT_TIMEOUT
+
     headers = {}
     if github_token:
+        print("GitHub API Authentication: using GITHUB_TOKEN.", file=sys.stderr)
         headers["Authorization"] = f"token {github_token}"
+    else:
+        print("GitHub API Authentication: GITHUB_TOKEN not set.", file=sys.stderr)
     headers["Accept"] = "application/vnd.github.v3+json"
 
     is_dry_run = False
@@ -260,7 +276,7 @@ def main():
 
             pr_number = event_payload["issue"]["number"]
             url = f"https://api.github.com/repos/{repository}/pulls/{pr_number}"
-            res = requests.get(url, headers=headers)
+            res = requests.get(url, headers=headers, timeout=timeout)
             if res.status_code != 200:
                 print(f"Error fetching PR details: {res.status_code} - {res.text}", file=sys.stderr)
                 sys.exit(1)
@@ -276,7 +292,7 @@ def main():
         files = get_local_git_files()
     else:
         print(f"Fetching files for PR #{pr_number} from GitHub API...", file=sys.stderr)
-        files = get_pr_files(repository, pr_number, headers)
+        files = get_pr_files(repository, pr_number, headers, timeout=timeout)
 
     if not files:
         print("No files modified in this PR. Exiting.", file=sys.stderr)
@@ -288,11 +304,12 @@ def main():
         print("No text-based files to review. Exiting.", file=sys.stderr)
         sys.exit(0)
 
-    # Initialize Gemini client
-    print(f"Initializing GenAI Client (Model: {model_name})...", file=sys.stderr)
+    # Initialise Gemini client
     if use_vertexai:
+        print(f"Initialising GenAI Client (Model: {model_name}) using Vertex AI authentication...", file=sys.stderr)
         client = genai.Client(vertexai=True, project=project, location=location)
     else:
+        print(f"Initialising GenAI Client (Model: {model_name}) using Google AI Studio API Key authentication...", file=sys.stderr)
         client = genai.Client(api_key=gemini_api_key)
 
     system_instruction = load_system_instruction(repository, pr_number)
@@ -323,7 +340,7 @@ def main():
             suggestion_str = f"\nSuggestion:\n{c.code_suggestion}" if c.code_suggestion else ""
             print(f"File: {c.path}:{c.line} ({c.side}) - Severity: {c.severity}\n{c.comment_text}{suggestion_str}\n")
     else:
-        post_review(repository, pr_number, head_sha, review, headers)
+        post_review(repository, pr_number, head_sha, review, headers, timeout=timeout)
 
 
 if __name__ == "__main__":

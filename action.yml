@@ -36,6 +36,10 @@ inputs:
     description: 'Language to use for the review comments (e.g. English (UK), English (US), French, Spanish)'
     required: false
     default: 'English (UK)'
+  timeout:
+    description: 'Timeout for API requests in seconds'
+    required: false
+    default: '60'
 
 runs:
   using: 'composite'
@@ -55,6 +59,7 @@ runs:
         GITHUB_TOKEN: ${{ inputs.github_token }}
         GEMINI_MODEL: ${{ inputs.gemini_model }}
         GEMINI_LANGUAGE: ${{ inputs.language }}
+        GEMINI_TIMEOUT: ${{ inputs.timeout }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_EVENT_PATH: ${{ github.event_path }}
         GITHUB_EVENT_NAME: ${{ github.event_name }}
