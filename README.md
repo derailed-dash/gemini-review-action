@@ -6,6 +6,8 @@
 
 ## Features Overview
 
+![Features Overview](assets/features-overview.png)
+
 - **AI-Powered Code Reviews**: Automated, constructive line-specific feedback on Pull Requests using Google Gemini models (Gemini 3.5 Flash by default).
 - **Automated Issue Triage**: Dynamically labels, prioritises, and triages incoming issues.
 - **Drop-in Migration**: Fully compatible as a direct, drop-in replacement for the deprecated `run-gemini-cli` action.
@@ -100,6 +102,10 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gemini_model: 'gemini-3.5-flash'
 ```
+
+After adding the workflow to your repository, it should look something like this:
+
+![gemini-review.yml included in your repo](assets/including-the-workflow.png)
 
 ### Seeing It In Action
 
