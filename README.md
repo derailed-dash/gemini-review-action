@@ -4,6 +4,8 @@
 
 **Automated, Google Gemini-based Pull Request reviews and Issue Triaging for all your GitHub repositories and CI/CD pipelines.**
 
+See the supporting blog post about this action [here](https://medium.com/google-cloud/automated-github-code-reviewsusing-google-gemini-7b4d027b3092).
+
 ## Features Overview
 
 ![Features Overview](assets/features-overview.png)
