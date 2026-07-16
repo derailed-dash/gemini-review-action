@@ -1,6 +1,6 @@
 [project]
 name = "gemini-review-action"
-version = "1.2.0"
+version = "1.2.1"
 description = "Automated Pull Request code reviews and Issue Triage using Google Gemini"
 readme = "README.md"
 requires-python = ">=3.12"
