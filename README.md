@@ -366,6 +366,7 @@ Here is an overview of the directory tree and the purpose of each file:
 
 ```text
 .                                   
+├── .github/                 # GitHub workflows (used for dogfooding our own action)
 ├── assets/                  # Documentation assets (banners, images)
 ├── tests/                   # Unit tests
 ├── action.yml               # GitHub Action definition (inputs, environment, and steps)
@@ -377,6 +378,10 @@ Here is an overview of the directory tree and the purpose of each file:
 ├── pyproject.toml           # Python project config, dependencies
 └── README.md                # Project documentation, setup guide, and usage examples
 ```
+
+> [!NOTE]
+> The `.github/` folder in this repository contains the workflows we use to dogfood our own action on this project. If you are installing this action in your own repository, you do not need to care about or copy this folder; you only need to reference `uses: derailed-dash/gemini-review-action` in your own workflow files.
+
 
 This project uses `uv` for python environment and dependency management. To configure your local environment and run the test suite:
 
