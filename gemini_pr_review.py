@@ -136,7 +136,7 @@ def get_all_repo_files() -> list[str]:
     try:
         res = subprocess.run(["git", "ls-files"], capture_output=True, text=True, check=True)
         all_files = [f.strip() for f in res.stdout.split("\n") if f.strip()]
-        return [f for f in all_files if is_text_file(f) and os.path.exists(f)]
+        return [f.replace("\\", "/") for f in all_files if is_text_file(f) and os.path.exists(f)]
     except Exception as e:
         print(f"Error running git ls-files: {e}", file=sys.stderr)
         # Fallback to os.walk if git is not available
@@ -146,7 +146,7 @@ def get_all_repo_files() -> list[str]:
             for file in files:
                 filepath = os.path.relpath(os.path.join(root, file), ".")
                 if is_text_file(filepath) and os.path.exists(filepath):
-                    text_files.append(filepath)
+                    text_files.append(filepath.replace("\\", "/"))
         return text_files
 
 
@@ -163,7 +163,7 @@ def generate_file_tree(files: list[str]) -> str:
     """Generate a text-based folder tree structure from a list of file paths."""
     tree = {}
     for f in sorted(files):
-        parts = f.split(os.sep)
+        parts = f.replace("\\", "/").split("/")
         curr = tree
         for part in parts:
             if part not in curr:
@@ -266,6 +266,7 @@ def build_prompt(files: list, config: dict) -> str:
 
     repo_files = get_all_repo_files()
     other_files = [f for f in repo_files if f not in pr_filenames]
+    print(f"Codebase context: found {len(repo_files)} total tracked files, {len(other_files)} other files (excluding PR diff files).", file=sys.stderr)
 
     if other_files:
         total_size = 0
@@ -278,7 +279,10 @@ def build_prompt(files: list, config: dict) -> str:
             except Exception:
                 continue
 
+        print(f"Codebase context: total size of other text files is {total_size} bytes (limit is {max_context_bytes} bytes).", file=sys.stderr)
+
         if total_size <= max_context_bytes:
+            print("Codebase context: running in Full Context Mode (attaching all repository text files).", file=sys.stderr)
             prompt_parts.append("=== Repository Context (Full Codebase) ===")
             prompt_parts.append("Below are the contents of all other files in this repository for context:\n")
             for f in other_files:
@@ -289,6 +293,7 @@ def build_prompt(files: list, config: dict) -> str:
                     prompt_parts.append("-----------------\n")
             prompt_parts.append("=========================================\n")
         else:
+            print("Codebase context: running in Sparse Context Mode (attaching file tree and core manifests/documentation).", file=sys.stderr)
             prompt_parts.append("=== Repository Context (Large Codebase) ===")
             prompt_parts.append("Because this codebase is large, we have included the project file structure and key configuration/documentation files for context:\n")
 
@@ -299,7 +304,7 @@ def build_prompt(files: list, config: dict) -> str:
             prompt_parts.append("---------------------------------\n")
 
             prompt_parts.append("--- Key Configuration and Documentation Files ---")
-            core_files_included = False
+            core_files_included = []
             for f in other_files:
                 if is_core_file(f, core_patterns):
                     content = get_file_content(f)
@@ -307,9 +312,12 @@ def build_prompt(files: list, config: dict) -> str:
                         prompt_parts.append(f"--- File: {f} ---")
                         prompt_parts.append(content)
                         prompt_parts.append("-----------------\n")
-                        core_files_included = True
-            if not core_files_included:
+                        core_files_included.append(f)
+            if core_files_included:
+                print(f"Codebase context: attached {len(core_files_included)} core configuration/documentation files: {', '.join(core_files_included)}", file=sys.stderr)
+            else:
                 prompt_parts.append("(No additional key configuration or documentation files found.)\n")
+                print("Codebase context: no core files matched or found.", file=sys.stderr)
             prompt_parts.append("==========================================\n")
 
     return "\n".join(prompt_parts)

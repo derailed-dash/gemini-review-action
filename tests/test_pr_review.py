@@ -7,12 +7,16 @@ PR number, and language) correctly.
 import os
 
 from gemini_pr_review import (
+    ReviewResult,
     build_prompt,
     generate_file_tree,
     get_all_repo_files,
+    get_pr_files,
     is_core_file,
     is_text_file,
+    load_config,
     load_system_instruction,
+    post_review,
 )
 
 
@@ -143,3 +147,131 @@ def test_build_prompt_sparse_context(mocker):
     assert "--- File: README.md ---" in prompt
     assert "Content of README.md" in prompt
     assert "Content of large_file.py" not in prompt  # Not a core file content block
+
+
+def test_load_config_fallback(mocker):
+    mock_exists = mocker.patch("os.path.exists")
+    # Simulate first path (.github/commands/gemini-review.toml) doesn't exist,
+    # but second path (starter-examples/gemini-review.toml) exists.
+    mock_exists.side_effect = lambda path: "starter-examples" in path
+
+    mock_toml_content = {"max_context_bytes": 1234}
+    mocker.patch("tomllib.load", return_value=mock_toml_content)
+    mocker.patch("builtins.open", mocker.mock_open())
+
+    config = load_config()
+    assert config == {"max_context_bytes": 1234}
+
+
+def test_load_config_invalid(mocker):
+    mocker.patch("os.path.exists", return_value=True)
+    # Simulate corrupted TOML
+    mocker.patch("tomllib.load", side_effect=ValueError("Invalid TOML syntax"))
+    mocker.patch("builtins.open", mocker.mock_open())
+
+    config = load_config()
+    assert config == {}
+
+
+def test_generate_file_tree_windows_paths():
+    # Mix of Windows path separators and Unix path separators
+    files = ["src\\utils.py", "src/main.py", "README.md"]
+    expected = (
+        ".\n"
+        "├── README.md\n"
+        "└── src/\n"
+        "    ├── main.py\n"
+        "    └── utils.py"
+    )
+    assert generate_file_tree(files) == expected
+
+
+def test_get_pr_files(mocker):
+    mock_get = mocker.patch("requests.get")
+
+    # Simulate paginated files list from GitHub API
+    mock_res_1 = mocker.Mock()
+    mock_res_1.status_code = 200
+    mock_res_1.json.return_value = [{"filename": "main.py"}, {"filename": "utils.py"}]
+    # GitHub pagination link header for page 1
+    mock_res_1.headers = {"Link": '<https://api.github.com/...page=2>; rel="next"'}
+
+    mock_res_2 = mocker.Mock()
+    mock_res_2.status_code = 200
+    mock_res_2.json.return_value = [{"filename": "README.md"}]
+    mock_res_2.headers = {}
+
+    # Empty list response to terminate the page iteration loop
+    mock_res_3 = mocker.Mock()
+    mock_res_3.status_code = 200
+    mock_res_3.json.return_value = []
+    mock_res_3.headers = {}
+
+    mock_get.side_effect = [mock_res_1, mock_res_2, mock_res_3]
+
+    files = get_pr_files("derailed-dash/gemini-review-action", 42, {"Authorization": "token test"})
+    assert files == [{"filename": "main.py"}, {"filename": "utils.py"}, {"filename": "README.md"}]
+
+
+def test_post_review_atomic(mocker):
+    mock_post = mocker.patch("requests.post")
+    mock_res = mocker.Mock()
+    mock_res.status_code = 200
+    mock_post.return_value = mock_res
+
+    review = ReviewResult(
+        summary="Looks good",
+        general_feedback=["Clean code"],
+        comments=[]
+    )
+
+    post_review("derailed-dash/gemini-review-action", 42, "head_sha_123", review, {"Authorization": "token test"})
+
+    # Assert atomic review creation was attempted
+    mock_post.assert_called_once_with(
+        "https://api.github.com/repos/derailed-dash/gemini-review-action/pulls/42/reviews",
+        headers={"Authorization": "token test"},
+        json={
+            "body": "## 📋 Review Summary\n\nLooks good\n\n## 🔍 General Feedback\n\n- Clean code",
+            "event": "COMMENT",
+            "comments": []
+        },
+        timeout=60
+    )
+
+
+def test_post_review_fallback(mocker):
+    mock_post = mocker.patch("requests.post")
+
+    # First post (atomic review) fails with 422
+    mock_res_atomic = mocker.Mock()
+    mock_res_atomic.status_code = 422
+
+    # Subsequent individual comments post and review post succeed
+    mock_res_ok = mocker.Mock()
+    mock_res_ok.status_code = 201
+
+    mock_post.side_effect = [mock_res_atomic, mock_res_ok, mock_res_ok]
+
+    review = ReviewResult(
+        summary="Some bugs",
+        general_feedback=["Needs fix"],
+        comments=[
+            {
+                "path": "main.py",
+                "line": 10,
+                "side": "RIGHT",
+                "severity": "🔴",
+                "comment_text": "Fix this crash",
+                "code_suggestion": "print('fixed')"
+            }
+        ]
+    )
+
+    post_review("derailed-dash/gemini-review-action", 42, "head_sha_123", review, {"Authorization": "token test"})
+
+    # We expect 3 requests total:
+    # 1. Atomic review post (which fails)
+    # 2. Individual comment post for the single comment
+    # 3. Final review submit post (without comments)
+    assert mock_post.call_count == 3
