@@ -14,7 +14,7 @@ See the supporting blog post about this action [here](https://medium.com/google-
 - **Automated Issue Triage**: Dynamically labels, prioritises, and triages incoming issues.
 - **Drop-in Migration**: Fully compatible as a direct, drop-in replacement for the deprecated `run-gemini-cli` action.
 - **Structured Outputs**: Error-free JSON response formatting using Pydantic schema validation.
-- **Hybrid Codebase Context**: Automatically feeds repository-wide context into reviews. It uses *Full Context Mode* for small repositories (supplying all text files) and switches to *Sparse Context Mode* for larger codebases (generating a project tree and supplying core manifest and documentation files).
+- **Hybrid Codebase Context**: Automatically includes codebase context based on the overall size of the codebase. If the codebase isn't huge, the entire repo is loaded into context; but if it is huge, the agent reads the overall directory tree and judiciously includes a subset of the repo. (Note that it always reads markdown files, dependency files, packaging files, etc.)
 - **Interactive Suggestions**: Formats code recommendations inside native GitHub ` ```suggestion ` blocks for one-click merge applications.
 - **Triggers**: The action triggers automatically in response to PR events. It can also be triggered by posting a comment in the PR starting with `/gemini-review`.
 - **Fast-Execution Composite Action**: Avoids containerisation build/pull latency (no slow `docker build` on every execution) by running as a native composite action.
@@ -57,7 +57,7 @@ Alternatively, we can use WIF and ADC to authenticate. In this approach, we do n
 
 ### PR Review Action Definition
 
-One-time step: add this GitHub Action to your repository, by copying the example workflow below to `.github/workflows/gemini-review.yml` in your repo.
+One-time step: add this GitHub Action to your repository, by copying the starter example workflow [gemini-review.yml](file:///home/dazbo/localdev/gemini-review-action/starter-examples/gemini-review.yml) to `.github/workflows/gemini-review.yml` in your repo (or use the inline template below):
 
 ```yaml
 name: "🔎 Dazbo's Gemini Code Review"
@@ -176,7 +176,7 @@ If the workflow is configured to allow triggering via comments (e.g. with the `i
 
 ### Issues Triage Action Definition
 
-Add this GitHub Action to your repository, by copying the example workflow below to `.github/workflows/gemini-issue.yml` in your repo.
+Add this GitHub Action to your repository, by copying the starter example workflow [gemini-triage.yml](file:///home/dazbo/localdev/gemini-review-action/starter-examples/gemini-triage.yml) to `.github/workflows/gemini-triage.yml` in your repo (or use the inline template below):
 
 ```yaml
 name: "🏷️ Dazbo's Gemini Issue Triage"
