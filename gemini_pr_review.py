@@ -16,8 +16,10 @@ and stdout, which are viewable in the GitHub Actions runner execution logs
 for the workflow run.
 """
 
+import fnmatch
 import json
 import os
+import subprocess
 import sys
 import tomllib
 
@@ -93,7 +95,6 @@ def get_pr_files(repository: str, pr_number: int, headers: dict, timeout: int = 
 
 def get_local_git_files() -> list:
     """Developer fallback to gather file diffs from local git tree."""
-    import subprocess
     try:
         res = subprocess.run(["git", "diff", "main...HEAD", "--name-only"], capture_output=True, text=True, check=True)
         filenames = [f.strip() for f in res.stdout.split("\n") if f.strip()]
@@ -112,20 +113,86 @@ def get_local_git_files() -> list:
         return []
 
 
-def load_system_instruction(repository: str | None, pr_number: int) -> str:
-    """Load system instructions from Dazbo's gemini-review.toml prompt configuration."""
+def load_config() -> dict:
+    """Load configuration from gemini-review.toml."""
     path = ".github/commands/gemini-review.toml"
     if not os.path.exists(path):
-        action_default_path = os.path.join(os.path.dirname(__file__), "gemini-review.toml")
+        action_default_path = os.path.join(os.path.dirname(__file__), "starter-examples", "gemini-review.toml")
         if os.path.exists(action_default_path):
             path = action_default_path
         else:
-            return f"You are a world-class code review agent. Analyze changes and output constructive feedback using {os.environ.get('GEMINI_LANGUAGE', 'English (UK)')} spelling."
+            return {}
 
-    with open(path, "rb") as f:
-        config = tomllib.load(f)
+    try:
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    except Exception as e:
+        print(f"Warning: Failed to load config from {path}: {e}", file=sys.stderr)
+        return {}
 
+
+def get_all_repo_files() -> list[str]:
+    """Get list of all tracked text files in the repository."""
+    try:
+        res = subprocess.run(["git", "ls-files"], capture_output=True, text=True, check=True)
+        all_files = [f.strip() for f in res.stdout.split("\n") if f.strip()]
+        return [f for f in all_files if is_text_file(f) and os.path.exists(f)]
+    except Exception as e:
+        print(f"Error running git ls-files: {e}", file=sys.stderr)
+        # Fallback to os.walk if git is not available
+        text_files = []
+        for root, dirs, files in os.walk("."):
+            dirs[:] = [d for d in dirs if not d.startswith(".")]
+            for file in files:
+                filepath = os.path.relpath(os.path.join(root, file), ".")
+                if is_text_file(filepath) and os.path.exists(filepath):
+                    text_files.append(filepath)
+        return text_files
+
+
+def is_core_file(filename: str, patterns: list[str]) -> bool:
+    """Check if the filename matches any of the core file patterns."""
+    basename = os.path.basename(filename)
+    for pattern in patterns:
+        if fnmatch.fnmatch(basename, pattern) or fnmatch.fnmatch(filename, pattern):
+            return True
+    return False
+
+
+def generate_file_tree(files: list[str]) -> str:
+    """Generate a text-based folder tree structure from a list of file paths."""
+    tree = {}
+    for f in sorted(files):
+        parts = f.split(os.sep)
+        curr = tree
+        for part in parts:
+            if part not in curr:
+                curr[part] = {}
+            curr = curr[part]
+
+    def _render(node: dict, indent: str = "") -> list[str]:
+        lines = []
+        keys = list(node.keys())
+        for idx, key in enumerate(keys):
+            is_last = (idx == len(keys) - 1)
+            marker = "└── " if is_last else "├── "
+            child_indent = "    " if is_last else "│   "
+            if node[key]:
+                lines.append(f"{indent}{marker}{key}/")
+                lines.extend(_render(node[key], indent + child_indent))
+            else:
+                lines.append(f"{indent}{marker}{key}")
+        return lines
+
+    return ".\n" + "\n".join(_render(tree))
+
+
+def load_system_instruction(repository: str | None, pr_number: int, config: dict) -> str:
+    """Load system instructions from Dazbo's gemini-review.toml prompt configuration."""
     prompt = config.get("prompt", "")
+    if not prompt:
+        return f"You are a world-class code review agent. Analyze changes and output constructive feedback using {os.environ.get('GEMINI_LANGUAGE', 'English (UK)')} spelling."
+
     prompt = prompt.replace("!{echo $REPOSITORY}", repository or "unknown")
     prompt = prompt.replace("!{echo $PULL_REQUEST_NUMBER}", str(pr_number))
     prompt = prompt.replace("!{echo $ADDITIONAL_CONTEXT}", "")
@@ -135,10 +202,13 @@ def load_system_instruction(repository: str | None, pr_number: int) -> str:
     return prompt
 
 
-def build_prompt(files: list) -> str:
+
+def build_prompt(files: list, config: dict) -> str:
     """Consolidate file patches and file contents into a single review context."""
     prompt_parts = []
     prompt_parts.append("Below are the files and changes included in this Pull Request:\n")
+
+    pr_filenames = {f["filename"] for f in files}
 
     for f in files:
         filename = f["filename"]
@@ -158,6 +228,89 @@ def build_prompt(files: list) -> str:
             prompt_parts.append("--- Full Current File Content ---")
             prompt_parts.append(full_content)
         prompt_parts.append("=========================\n")
+
+    # Add Repository Context (Hybrid Mode)
+    max_context_bytes = config.get("max_context_bytes", 500 * 1024)
+    if "GEMINI_MAX_CONTEXT_BYTES" in os.environ:
+        try:
+            max_context_bytes = int(os.environ["GEMINI_MAX_CONTEXT_BYTES"])
+        except ValueError:
+            pass
+
+    core_patterns = config.get("core_file_patterns", [
+        # Documentation
+        "*.md",
+        # Python
+        "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile",
+        # JavaScript / TypeScript / Node
+        "package.json", "tsconfig.json",
+        # Go
+        "go.mod",
+        # Rust
+        "Cargo.toml",
+        # Java / Kotlin
+        "pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle",
+        # Ruby
+        "Gemfile", "*.gemspec",
+        # PHP
+        "composer.json",
+        # C# / .NET
+        "*.csproj", "*.sln",
+        # Swift / Objective-C
+        "Package.swift", "Podfile",
+        # Docker / Infrastructure
+        "Dockerfile", "docker-compose.yml",
+        # Configuration
+        "gemini-review.toml", "action.yml"
+    ])
+
+    repo_files = get_all_repo_files()
+    other_files = [f for f in repo_files if f not in pr_filenames]
+
+    if other_files:
+        total_size = 0
+        file_sizes = {}
+        for f in other_files:
+            try:
+                size = os.path.getsize(f)
+                file_sizes[f] = size
+                total_size += size
+            except Exception:
+                continue
+
+        if total_size <= max_context_bytes:
+            prompt_parts.append("=== Repository Context (Full Codebase) ===")
+            prompt_parts.append("Below are the contents of all other files in this repository for context:\n")
+            for f in other_files:
+                content = get_file_content(f)
+                if content:
+                    prompt_parts.append(f"--- File: {f} ---")
+                    prompt_parts.append(content)
+                    prompt_parts.append("-----------------\n")
+            prompt_parts.append("=========================================\n")
+        else:
+            prompt_parts.append("=== Repository Context (Large Codebase) ===")
+            prompt_parts.append("Because this codebase is large, we have included the project file structure and key configuration/documentation files for context:\n")
+
+            full_tree_files = list(pr_filenames.union(set(other_files)))
+            file_tree = generate_file_tree(full_tree_files)
+            prompt_parts.append("--- Repository File Structure ---")
+            prompt_parts.append(file_tree)
+            prompt_parts.append("---------------------------------\n")
+
+            prompt_parts.append("--- Key Configuration and Documentation Files ---")
+            core_files_included = False
+            for f in other_files:
+                if is_core_file(f, core_patterns):
+                    content = get_file_content(f)
+                    if content:
+                        prompt_parts.append(f"--- File: {f} ---")
+                        prompt_parts.append(content)
+                        prompt_parts.append("-----------------\n")
+                        core_files_included = True
+            if not core_files_included:
+                prompt_parts.append("(No additional key configuration or documentation files found.)\n")
+            prompt_parts.append("==========================================\n")
 
     return "\n".join(prompt_parts)
 
@@ -312,8 +465,9 @@ def main():
         print(f"Initialising GenAI Client (Model: {model_name}) using Google AI Studio API Key authentication...", file=sys.stderr)
         client = genai.Client(api_key=gemini_api_key)
 
-    system_instruction = load_system_instruction(repository, pr_number)
-    prompt_context = build_prompt(text_files)
+    config = load_config()
+    system_instruction = load_system_instruction(repository, pr_number, config)
+    prompt_context = build_prompt(text_files, config)
 
     print("Generating code review...", file=sys.stderr)
     response = client.models.generate_content(

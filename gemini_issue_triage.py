@@ -57,7 +57,7 @@ def load_triage_prompt(issue_title: str, issue_body: str, available_labels: list
     """Load prompt guidelines from gemini-triage.toml and substitute template parameters."""
     path = ".github/commands/gemini-triage.toml"
     if not os.path.exists(path):
-        action_default_path = os.path.join(os.path.dirname(__file__), "gemini-triage.toml")
+        action_default_path = os.path.join(os.path.dirname(__file__), "starter-examples", "gemini-triage.toml")
         if os.path.exists(action_default_path):
             path = action_default_path
         else:

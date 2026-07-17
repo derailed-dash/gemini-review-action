@@ -14,7 +14,7 @@ See the supporting blog post about this action [here](https://medium.com/google-
 - **Automated Issue Triage**: Dynamically labels, prioritises, and triages incoming issues.
 - **Drop-in Migration**: Fully compatible as a direct, drop-in replacement for the deprecated `run-gemini-cli` action.
 - **Structured Outputs**: Error-free JSON response formatting using Pydantic schema validation.
-- **Context-Enriched Analysis**: Surrounds diffs with the full contents of modified files for context-aware reviews.
+- **Hybrid Codebase Context**: Automatically feeds repository-wide context into reviews. It uses *Full Context Mode* for small repositories (supplying all text files) and switches to *Sparse Context Mode* for larger codebases (generating a project tree and supplying core manifest and documentation files).
 - **Interactive Suggestions**: Formats code recommendations inside native GitHub ` ```suggestion ` blocks for one-click merge applications.
 - **Triggers**: The action triggers automatically in response to PR events. It can also be triggered by posting a comment in the PR starting with `/gemini-review`.
 - **Fast-Execution Composite Action**: Avoids containerisation build/pull latency (no slow `docker build` on every execution) by running as a native composite action.
@@ -26,7 +26,9 @@ See the supporting blog post about this action [here](https://medium.com/google-
 ## How It Works
 
 1. **Change Discovery**: The action scans the Pull Request diff. It uses a robust extension and path exclusion list to automatically filter out binary, encrypted, or locked files (like `.png`, `.enc`, `uv.lock`, `.env`, etc.).
-2. **Context Enrichment**: For every modified text file in the diff, the script reads the *full file contents* from the local workspace. This provides Gemini with complete file context surrounding the diff hunks, allowing it to perform much higher quality reviews.
+2. **Hybrid Context Enrichment**: In addition to surrounding modified file content, the action gathers context from the rest of the repository. It measures the total size of all other tracked text files:
+   - **Full Context Mode**: If the codebase is under the configured size threshold (default: 500 KB), the full contents of all other text files are included.
+   - **Sparse Context Mode**: If the codebase exceeds the threshold, it includes a structured text-based file tree of the entire project, plus the full contents of key configuration and documentation files (like `*.md`, `pyproject.toml`, `package.json`, `go.mod`, etc.).
 3. **Structured Review Generation**: The action sends the diff and file contexts to Gemini. It uses Gemini's native **Structured Outputs** (`response_schema`) to force the model to respond in a strict JSON format.
 4. **Interactive suggestions**: Change recommendations are wrapped in native GitHub ` ```suggestion ` blocks, allowing reviewers to apply the changes directly on the PR with one click.
 5. **Resilient Comment Posting**: The review is posted atomically via the GitHub Pull Request Review API. If the API call fails (e.g. if the model hallucinates an invalid line number in the diff), the script catches the error and falls back to posting comments individually, ensuring your CI status check stays green while still delivering all valid feedback.
@@ -103,6 +105,7 @@ jobs:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gemini_model: 'gemini-3.5-flash'
+          language: 'English (UK)'           # Optional (e.g. English (UK), French, Spanish)
 ```
 
 After adding the workflow to your repository, it should look something like this:
@@ -200,6 +203,7 @@ jobs:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gemini_model: 'gemini-3.5-flash'
+          language: 'English (UK)'           # Optional
 ```
 
 ## Configuration
@@ -215,11 +219,25 @@ jobs:
 | `language` | The language to use for the review comments (e.g. `English (UK)`, `English (US)`, `French`, `Spanish`). | No | `English (UK)` |
 | `timeout` | Timeout for API requests in seconds. | No | `60` |
 
+### Codebase Context Configuration
+
+By default, the action uses a hybrid context engine to feed codebase context to the model during review:
+*   **max_context_bytes** (Default: `512000` / 500 KB): The total size of all other text files in the repository. If the repository is smaller than this limit, the action runs in *Full Context Mode* and includes all files. If the repository exceeds this limit, it switches to *Sparse Context Mode*.
+*   **core_file_patterns**: A list of glob patterns matching project manifest, build, or documentation files that should always be read and passed along as context in *Sparse Context Mode*.
+
+You can configure these settings by adding the following keys to your custom `.github/commands/gemini-review.toml` configuration:
+
+```toml
+# Codebase Context Configuration (Optional)
+max_context_bytes = 512000  # Threshold in bytes
+core_file_patterns = ["*.md", "pyproject.toml", "package.json", "go.mod", "Cargo.toml"]  # File patterns to always include
+```
+
 ### Custom Prompts / Instructions
 
 This action bundles high-quality default prompt configurations for both review and triage:
-* **Default Review Prompt:** [gemini-review.toml](file:///home/dazbo/localdev/gemini-review-action/gemini-review.toml)
-* **Default Triage Prompt:** [gemini-triage.toml](file:///home/dazbo/localdev/gemini-review-action/gemini-triage.toml)
+* **Default Review Prompt:** [starter-examples/gemini-review.toml](file:///home/dazbo/localdev/gemini-review-action/starter-examples/gemini-review.toml)
+* **Default Triage Prompt:** [starter-examples/gemini-triage.toml](file:///home/dazbo/localdev/gemini-review-action/starter-examples/gemini-triage.toml)
 
 You can customize or completely override the prompt instructions given to the review or triage reviewers on a repository-by-repository basis:
 
@@ -273,7 +291,7 @@ The action parses the TOML files and dynamically substitutes the following expre
    - The action retrieves the Pull Request diff from the GitHub API.
    - It performs exclusion filtering to automatically ignore non-text files and configured paths (like lock files or binaries).
    - For all remaining modified files, it reads the full text from the local workspace filesystem to provide surrounding file context.
-3. **Gemini AI Analysis**: The action packs the diff, the full-file surrounding context, and the system prompt instructions (loaded from [gemini-review.toml](gemini-review.toml) or [gemini-triage.toml](gemini-triage.toml)) into a payload and sends it to the Google Gemini API. The model performs in-depth analysis (assessing code quality, identifying bugs or improvements, and scanning for security concerns).
+3. **Gemini AI Analysis**: The action packs the diff, the full-file surrounding context, and the system prompt instructions (loaded from [gemini-review.toml](starter-examples/gemini-review.toml) or [gemini-triage.toml](starter-examples/gemini-triage.toml)) into a payload and sends it to the Google Gemini API. The model performs in-depth analysis (assessing code quality, identifying bugs or improvements, and scanning for security concerns).
 4. **Automated Feedback**:
    - The model generates a structured assessment guaranteed to follow the Pydantic schema constraints (such as [ReviewResult](gemini_pr_review.py#L35-L39)).
    - The action parses this structured response and automatically posts comments (including severity markers and interactive suggestions) or labels back to the GitHub PR or Issue.
@@ -370,11 +388,11 @@ Here is an overview of the directory tree and the purpose of each file:
 .                                   
 ├── .github/                 # GitHub workflows (used for dogfooding our own action)
 ├── assets/                  # Documentation assets (banners, images)
+├── docs/                    # Technical documentation and architecture guides
+├── starter-examples/        # Starter workflow files and default prompt templates
 ├── tests/                   # Unit tests
 ├── action.yml               # GitHub Action definition (inputs, environment, and steps)
 ├── CONTRIBUTING.md          # Collaboration guidelines for developers
-├── gemini-review.toml       # Default prompt template for PR reviews
-├── gemini-triage.toml       # Default prompt template for issue triage
 ├── gemini_issue_triage.py   # Python script to triage and label incoming issues
 ├── gemini_pr_review.py      # Python script to review PRs
 ├── pyproject.toml           # Python project config, dependencies
@@ -384,6 +402,8 @@ Here is an overview of the directory tree and the purpose of each file:
 > [!NOTE]
 > The `.github/` folder in this repository contains the workflows we use to dogfood our own action on this project. If you are installing this action in your own repository, you do not need to care about or copy this folder; you only need to reference `uses: derailed-dash/gemini-review-action` in your own workflow files.
 
+
+For a detailed guide on how the inner workings, prompt generations, and codebase parsing logic are implemented, see our [Architecture & Code Walkthrough](docs/architecture.md).
 
 This project uses `uv` for python environment and dependency management. To configure your local environment and run the test suite:
 
