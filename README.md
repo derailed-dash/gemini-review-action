@@ -63,7 +63,30 @@ If you prefer to authenticate using a combination of **Google Cloud Workload Ide
 
 Alternatively, we can use WIF and ADC to authenticate. In this approach, we do not use persistent Gemini API key. This will be shown later.
 
-### PR Review Action Definition
+### Setup Using Install-Gemini-Code-Review-Action Skill (Recommended)
+
+If you are using an agentic coding environment like Google Antigravity, you can install and configure this action and its triage workflow automatically using Dazbo's skill from [derailed-dash/dazbo-agent-skills](https://github.com/derailed-dash/dazbo-agent-skills).
+
+> [!IMPORTANT]
+> **Prerequisite:** Regardless of whether you use the automatic skill setup or the manual setup, you must configure authentication (either a Gemini API Key or Workload Identity Federation) as described in the **Authentication** section above.
+
+The `install-gemini-code-review-action` skill automatically handles:
+- Detecting and removing conflicting legacy workflows (e.g., `run-gemini-cli` or `gemini-code-assist`).
+- Asking for your preferences (e.g., installing PR Review, Issue Triage, or both, plus your preferred language and model).
+- Writing the workflow YAML files and default TOML prompt configurations.
+- Commit and push of the new workflow files.
+
+To install the skill locally, run:
+```bash
+npx skills add https://github.com/derailed-dash/dazbo-agent-skills -y -g --skill install-gemini-code-review-action
+```
+
+Once installed, simply ask your agent:
+> "Install the Gemini code review action"
+
+---
+
+### Alternative Manual Setup: PR Review Action Definition
 
 One-time step: add this GitHub Action to your repository, by copying the starter example workflow [gemini-review.yml](file:///home/dazbo/localdev/gemini-review-action/starter-examples/gemini-review.yml) to `.github/workflows/gemini-review.yml` in your repo (or use the inline template below):
 
