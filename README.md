@@ -27,7 +27,7 @@ See the supporting blog post about this action [here](https://medium.com/google-
 
 1. **Change Discovery**: The action scans the Pull Request diff. It uses a robust extension and path exclusion list to automatically filter out binary, encrypted, or locked files (like `.png`, `.enc`, `uv.lock`, `.env`, etc.).
 2. **Hybrid Context Enrichment**: In addition to surrounding modified file content, the action gathers context from the rest of the repository. It measures the total size of all other tracked text files:
-   - **Full Context Mode**: If the codebase is under the configured size threshold (default: 500 KB), the full contents of all other text files are included.
+   - **Full Context Mode**: If the codebase is under the configured size threshold (default: 1.5 MB), the full contents of all other text files are included.
    - **Sparse Context Mode**: If the codebase exceeds the threshold, it includes a structured text-based file tree of the entire project, plus the full contents of key configuration and documentation files (like `*.md`, `pyproject.toml`, `package.json`, `go.mod`, etc.).
 3. **Structured Review Generation**: The action sends the diff and file contexts to Gemini. It uses Gemini's native **Structured Outputs** (`response_schema`) to force the model to respond in a strict JSON format.
 4. **Interactive suggestions**: Change recommendations are wrapped in native GitHub ` ```suggestion ` blocks, allowing reviewers to apply the changes directly on the PR with one click.
@@ -253,14 +253,14 @@ jobs:
 ### Codebase Context Configuration
 
 By default, the action uses a hybrid context engine to feed codebase context to the model during review:
-*   **max_context_bytes** (Default: `512000` / 500 KB): The total size of all other text files in the repository. If the repository is smaller than this limit, the action runs in *Full Context Mode* and includes all files. If the repository exceeds this limit, it switches to *Sparse Context Mode*.
+*   **max_context_bytes** (Default: `1500000` / 1.5 MB): The total size of all other text files in the repository. At ~375,000 tokens, 1.5 MB safely fits within Gemini's 1M+ token window while leaving plenty of headroom for the PR diff/patch and structured reviews. If the repository is smaller than this limit, the action runs in *Full Context Mode* and includes all files. If the repository exceeds this limit, it switches to *Sparse Context Mode*.
 *   **core_file_patterns**: A list of glob patterns matching project manifest, build, or documentation files that should always be read and passed along as context in *Sparse Context Mode*.
 
 You can configure these settings by adding the following keys to your custom `.github/commands/gemini-review.toml` configuration:
 
 ```toml
 # Codebase Context Configuration (Optional)
-max_context_bytes = 512000  # Threshold in bytes
+max_context_bytes = 1500000  # Threshold in bytes
 core_file_patterns = ["*.md", "pyproject.toml", "package.json", "go.mod", "Cargo.toml"]  # File patterns to always include
 ```
 

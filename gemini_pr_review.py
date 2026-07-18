@@ -312,7 +312,9 @@ def build_prompt(files: list, config: dict) -> str:
         prompt_parts.append("=========================\n")
 
     # Add Repository Context (Hybrid Mode)
-    max_context_bytes = config.get("max_context_bytes", 500 * 1024)
+    # Default is 1.5 MB (~375K tokens), which safely fits in Gemini's 1M+ token window
+    # while leaving plenty of headroom for the PR diff/patch and structured outputs.
+    max_context_bytes = config.get("max_context_bytes", 1500 * 1024)
     if "GEMINI_MAX_CONTEXT_BYTES" in os.environ:
         try:
             max_context_bytes = int(os.environ["GEMINI_MAX_CONTEXT_BYTES"])
