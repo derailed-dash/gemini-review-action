@@ -77,7 +77,7 @@ def get_valid_changed_lines(patch: str) -> set[int]:
         if line.startswith("@@"):
             try:
                 # Header format: @@ -old_start,old_count +new_start,new_count @@
-                parts = line.split(" ")
+                parts = line.split()
                 new_info = parts[2].lstrip("+")
                 if "," in new_info:
                     start_line, _ = new_info.split(",")
@@ -85,10 +85,9 @@ def get_valid_changed_lines(patch: str) -> set[int]:
                     start_line = new_info
                 current_line = int(start_line)
             except Exception:
-                pass
+                current_line = 0
         elif line.startswith("+") or line.startswith(" ") or line == "":
             if current_line > 0:
-
                 valid_lines.add(current_line)
                 current_line += 1
         elif line.startswith("-"):
