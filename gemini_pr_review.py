@@ -66,6 +66,88 @@ def is_text_file(filename: str) -> bool:
     return True
 
 
+def get_valid_changed_lines(patch: str) -> set[int]:
+    """Parse the diff patch to find all line numbers in the new file (RIGHT side) that are part of the diff."""
+    valid_lines = set()
+    if not patch:
+        return valid_lines
+
+    current_line = 0
+    for line in patch.splitlines():
+        if line.startswith("@@"):
+            try:
+                # Header format: @@ -old_start,old_count +new_start,new_count @@
+                parts = line.split()
+                new_info = parts[2].lstrip("+")
+                if "," in new_info:
+                    start_line, _ = new_info.split(",")
+                else:
+                    start_line = new_info
+                current_line = int(start_line)
+            except Exception:
+                current_line = 0
+        elif line.startswith("+") or line.startswith(" ") or line == "":
+            if current_line > 0:
+                valid_lines.add(current_line)
+                current_line += 1
+        elif line.startswith("-"):
+            # Deleted lines do not advance line numbers in the new file (RIGHT side)
+            pass
+    return valid_lines
+
+
+def filter_review_comments(review: ReviewResult, text_files: list) -> ReviewResult:
+    """Filter inline comments to ensure they apply to valid lines in the diff, redirecting others to general feedback."""
+    # Map file path -> set of valid line numbers
+    file_patches = {f["filename"]: f.get("patch", "") for f in text_files}
+    valid_lines_by_file = {
+        filename: get_valid_changed_lines(patch)
+        for filename, patch in file_patches.items()
+    }
+
+    filtered_comments = []
+    redirected_feedback = []
+
+    for comment in review.comments:
+        comment_path = comment.path.replace("\\", "/")
+
+        matched_file = None
+        for fn in valid_lines_by_file:
+            if fn.replace("\\", "/").lower() == comment_path.lower():
+                matched_file = fn
+                break
+
+        if not matched_file:
+            warning_msg = f"Warning: Redirecting inline comment on {comment.path}:{comment.line} (File not found in PR changes)."
+            print(warning_msg, file=sys.stderr)
+
+            feedback_item = f"**{comment.path}** (Line {comment.line}): {comment.severity} {comment.comment_text}"
+            if comment.code_suggestion:
+                feedback_item += f"\n  ```suggestion\n  {comment.code_suggestion}\n  ```"
+            redirected_feedback.append(feedback_item)
+            continue
+
+        valid_lines = valid_lines_by_file[matched_file]
+        if comment.line in valid_lines:
+            comment.path = matched_file
+            filtered_comments.append(comment)
+        else:
+            warning_msg = f"Warning: Redirecting inline comment on {comment.path}:{comment.line} (Line not in PR diff patch)."
+            print(warning_msg, file=sys.stderr)
+
+            feedback_item = f"**{comment.path}** (Line {comment.line}): {comment.severity} {comment.comment_text}"
+            if comment.code_suggestion:
+                feedback_item += f"\n  ```suggestion\n  {comment.code_suggestion}\n  ```"
+            redirected_feedback.append(feedback_item)
+
+    if redirected_feedback:
+        review.general_feedback.append("💡 **Additional Feedback on Unmodified Lines:**")
+        review.general_feedback.extend(redirected_feedback)
+
+    review.comments = filtered_comments
+    return review
+
+
 def get_file_content(path: str) -> str:
     """Read file content safely as UTF-8."""
     try:
@@ -490,6 +572,8 @@ def main():
 
     review_data = json.loads(response.text)
     review = ReviewResult(**review_data)
+    review = filter_review_comments(review, text_files)
+
 
     if is_dry_run:
         print("\n=== DRY RUN REVIEW SUMMARY ===", file=sys.stderr)

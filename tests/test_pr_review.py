@@ -7,11 +7,14 @@ PR number, and language) correctly.
 import os
 
 from gemini_pr_review import (
+    InlineComment,
     ReviewResult,
     build_prompt,
+    filter_review_comments,
     generate_file_tree,
     get_all_repo_files,
     get_pr_files,
+    get_valid_changed_lines,
     is_core_file,
     is_text_file,
     load_config,
@@ -275,3 +278,93 @@ def test_post_review_fallback(mocker):
     # 2. Individual comment post for the single comment
     # 3. Final review submit post (without comments)
     assert mock_post.call_count == 3
+
+
+def test_get_valid_changed_lines():
+    patch = (
+        "@@ -10,3 +10,4 @@ context\n"
+        " line1\n"
+        "-line2\n"
+        "+added1\n"
+        "+added2\n"
+        " line3\n"
+    )
+    # The start is 10 on RIGHT.
+    # context line1: 10
+    # added1: 11
+    # added2: 12
+    # context line3: 13
+    expected = {10, 11, 12, 13}
+    assert get_valid_changed_lines(patch) == expected
+
+
+def test_filter_review_comments():
+    text_files = [
+        {
+            "filename": "src/main.py",
+            "patch": (
+                "@@ -10,3 +10,4 @@ context\n"
+                " line1\n"
+                "-line2\n"
+                "+added1\n"
+                "+added2\n"
+                " line3\n"
+            )
+        },
+        {
+            "filename": "README.md",
+            "patch": (
+                "@@ -1,3 +1,3 @@\n"
+                " # Test\n"
+                "-old\n"
+                "+new\n"
+            )
+        }
+    ]
+
+    comments = [
+        InlineComment(
+            path="src/main.py",
+            line=11,
+            side="RIGHT",
+            severity="🟢",
+            comment_text="Valid comment"
+        ),
+        InlineComment(
+            path="src/main.py",
+            line=5,
+            side="RIGHT",
+            severity="🟡",
+            comment_text="Invalid line comment",
+            code_suggestion="print('suggested')"
+        ),
+        InlineComment(
+            path="invalid_file.py",
+            line=1,
+            side="RIGHT",
+            severity="🔴",
+            comment_text="Invalid path comment"
+        )
+    ]
+
+    review = ReviewResult(
+        summary="A summary",
+        general_feedback=["Feedback 1"],
+        comments=comments
+    )
+
+    filtered_review = filter_review_comments(review, text_files)
+
+    # 1. Check that only the valid comment remains inline
+    assert len(filtered_review.comments) == 1
+    assert filtered_review.comments[0].comment_text == "Valid comment"
+
+    # 2. Check that general feedback was updated with redirected comments
+    assert len(filtered_review.general_feedback) == 4
+    assert "💡 **Additional Feedback on Unmodified Lines:**" in filtered_review.general_feedback[1]
+    assert any("src/main.py" in item for item in filtered_review.general_feedback[2:])
+    assert any("Line 5" in item for item in filtered_review.general_feedback[2:])
+    assert any("print('suggested')" in item for item in filtered_review.general_feedback[2:])
+    assert any("invalid_file.py" in item for item in filtered_review.general_feedback[2:])
+
+
