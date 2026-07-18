@@ -23,9 +23,9 @@ The PR review workflow is designed to retrieve PR details, collect local codebas
 ### 2. Hybrid Codebase Context Engine
 To provide Gemini with project-wide awareness, the script traverses the workspace to find all tracked files via `get_all_repo_files()`. It then sums the file sizes (excluding the changed PR files) to determine the context mode:
 
-* **Full Context Mode (≤ 500 KB):**
+* **Full Context Mode (≤ 1.5 MB):**
   If the rest of the text files in the repository fit within the size limit, the script reads their full contents using `get_file_content()` and appends them to the prompt under the section `=== Repository Context (Full Codebase) ===`.
-* **Sparse Context Mode (> 500 KB):**
+* **Sparse Context Mode (> 1.5 MB):**
   If the repository is large, the script generates a visual directory/file tree representation of the codebase using `generate_file_tree()`. It also reads the full contents of only the core documentation or manifest files matching `core_file_patterns` (like `*.md`, `package.json`, `go.mod`, etc.) using `is_core_file()`.
 
 ### 3. Structured Output Schemas
@@ -78,7 +78,7 @@ description = "Reviews a pull request using Google Gemini"
 prompt = "..."
 
 # Codebase Context Configuration (Optional)
-max_context_bytes = 512000  # Size threshold in bytes to trigger Sparse Mode
+max_context_bytes = 1500000  # Size threshold in bytes to trigger Sparse Mode
 core_file_patterns = [
     "*.md",
     "pyproject.toml", "package.json", "go.mod", "Cargo.toml", "pom.xml",
