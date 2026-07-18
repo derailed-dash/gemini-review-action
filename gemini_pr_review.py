@@ -86,8 +86,9 @@ def get_valid_changed_lines(patch: str) -> set[int]:
                 current_line = int(start_line)
             except Exception:
                 pass
-        elif line.startswith("+") or line.startswith(" "):
+        elif line.startswith("+") or line.startswith(" ") or line == "":
             if current_line > 0:
+
                 valid_lines.add(current_line)
                 current_line += 1
         elif line.startswith("-"):
@@ -123,7 +124,7 @@ def filter_review_comments(review: ReviewResult, text_files: list) -> ReviewResu
 
             feedback_item = f"**{comment.path}** (Line {comment.line}): {comment.severity} {comment.comment_text}"
             if comment.code_suggestion:
-                feedback_item += f"\n```suggestion\n{comment.code_suggestion}\n```"
+                feedback_item += f"\n  ```suggestion\n  {comment.code_suggestion}\n  ```"
             redirected_feedback.append(feedback_item)
             continue
 
@@ -137,18 +138,15 @@ def filter_review_comments(review: ReviewResult, text_files: list) -> ReviewResu
 
             feedback_item = f"**{comment.path}** (Line {comment.line}): {comment.severity} {comment.comment_text}"
             if comment.code_suggestion:
-                feedback_item += f"\n```suggestion\n{comment.code_suggestion}\n```"
+                feedback_item += f"\n  ```suggestion\n  {comment.code_suggestion}\n  ```"
             redirected_feedback.append(feedback_item)
 
     if redirected_feedback:
-        # Prepend a header to make it clean
-        section_header = "### 💡 Additional Feedback on Unmodified Lines"
-        review.general_feedback.append(f"{section_header}\n\n" + "\n\n".join(f"- {item}" for item in redirected_feedback))
+        review.general_feedback.append("💡 **Additional Feedback on Unmodified Lines:**")
+        review.general_feedback.extend(redirected_feedback)
 
     review.comments = filtered_comments
     return review
-
-
 
 
 def get_file_content(path: str) -> str:

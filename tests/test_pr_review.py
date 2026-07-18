@@ -360,10 +360,11 @@ def test_filter_review_comments():
     assert filtered_review.comments[0].comment_text == "Valid comment"
 
     # 2. Check that general feedback was updated with redirected comments
-    assert len(filtered_review.general_feedback) == 2
-    assert "### 💡 Additional Feedback on Unmodified Lines" in filtered_review.general_feedback[1]
-    assert "src/main.py" in filtered_review.general_feedback[1]
-    assert "Line 5" in filtered_review.general_feedback[1]
-    assert "print('suggested')" in filtered_review.general_feedback[1]
-    assert "invalid_file.py" in filtered_review.general_feedback[1]
+    assert len(filtered_review.general_feedback) == 4
+    assert "💡 **Additional Feedback on Unmodified Lines:**" in filtered_review.general_feedback[1]
+    assert any("src/main.py" in item for item in filtered_review.general_feedback[2:])
+    assert any("Line 5" in item for item in filtered_review.general_feedback[2:])
+    assert any("print('suggested')" in item for item in filtered_review.general_feedback[2:])
+    assert any("invalid_file.py" in item for item in filtered_review.general_feedback[2:])
+
 
