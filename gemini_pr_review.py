@@ -355,6 +355,7 @@ def list_available_skills() -> list[dict[str, str]]:
 
     The agent can call load_skill_instructions to retrieve instructions for a specific skill.
     """
+    print("Tool Call: list_available_skills() invoked by agent.", file=sys.stderr)
     skills = []
 
     # 1. Built-in skills packaged with the action
@@ -366,8 +367,9 @@ def list_available_skills() -> list[dict[str, str]]:
                 if file == "SKILL.md" or file.endswith(".md"):
                     full_path = os.path.join(root, file)
                     meta = parse_skill_metadata(full_path)
-                    # Prefix built-in skills to distinguish them
-                    meta["id"] = f"builtin:{os.path.relpath(full_path, built_in_dir)}"
+                    # Prefix built-in skills and standardise path separators
+                    rel_skill_path = os.path.relpath(full_path, built_in_dir).replace(os.sep, "/")
+                    meta["id"] = f"builtin:{rel_skill_path}"
                     skills.append(meta)
 
     # 2. Workspace-specific skills in the target repo
@@ -378,7 +380,7 @@ def list_available_skills() -> list[dict[str, str]]:
                 if file == "SKILL.md" or file.endswith(".md"):
                     full_path = os.path.join(root, file)
                     meta = parse_skill_metadata(full_path)
-                    meta["id"] = os.path.relpath(full_path, skills_dir)
+                    meta["id"] = os.path.relpath(full_path, skills_dir).replace(os.sep, "/")
                     skills.append(meta)
 
     return skills
@@ -390,6 +392,7 @@ def load_skill_instructions(skill_id: str) -> str:
     Args:
         skill_id: The relative path or identifier of the skill (e.g. 'builtin:agent-aware-cli/SKILL.md' or 'git-workflow-and-versioning.md').
     """
+    print(f"Tool Call: load_skill_instructions(skill_id='{skill_id}') invoked by agent.", file=sys.stderr)
     if skill_id.startswith("builtin:"):
         action_dir = os.path.dirname(__file__)
         skills_dir = os.path.abspath(os.path.join(action_dir, "starter-examples", "skills"))
@@ -398,8 +401,14 @@ def load_skill_instructions(skill_id: str) -> str:
         skills_dir = os.path.abspath(".agents/skills")
         rel_path = skill_id
 
+    # Normalise separators for safe joining
+    rel_path = rel_path.replace("/", os.sep).replace("\\", os.sep)
     safe_path = os.path.abspath(os.path.join(skills_dir, rel_path))
-    if not safe_path.startswith(skills_dir):
+
+    try:
+        if os.path.commonpath([skills_dir, safe_path]) != skills_dir:
+            return "Error: Access denied (path traversal blocked)."
+    except Exception:
         return "Error: Access denied (path traversal blocked)."
 
     if os.path.exists(safe_path) and os.path.isfile(safe_path):
@@ -443,6 +452,7 @@ def search_google_developer_knowledge(query: str) -> str:
     Args:
         query: The search query, e.g. 'How to configure Google Cloud Run with custom domains'.
     """
+    print(f"Tool Call: search_google_developer_knowledge(query='{query}') invoked by agent.", file=sys.stderr)
     headers = get_google_auth_headers()
     if not headers or ("X-Goog-Api-Key" not in headers and "Authorization" not in headers):
         return "Error: No API key or Application Default Credentials found. Google Developer Knowledge Search is unavailable."
@@ -487,6 +497,7 @@ def get_google_developer_documents(names: list[str]) -> str:
         names: A list of document names/URIs returned by search_google_developer_knowledge.
                Format of each name: 'documents/docs.cloud.google.com/...'
     """
+    print(f"Tool Call: get_google_developer_documents(names={names}) invoked by agent.", file=sys.stderr)
     headers = get_google_auth_headers()
     if not headers or ("X-Goog-Api-Key" not in headers and "Authorization" not in headers):
         return "Error: No API key or Application Default Credentials found. Document retrieval is unavailable."
@@ -509,6 +520,7 @@ def get_google_developer_documents(names: list[str]) -> str:
             return f"API Error: {json.dumps(data['error'])}"
 
         result = data.get("result", {})
+
         content_list = result.get("content", [])
 
         text_outputs = []
