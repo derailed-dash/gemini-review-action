@@ -426,15 +426,15 @@ def load_skill_instructions(skill_id: str) -> str:
     print(f"Tool Call: load_skill_instructions(skill_id='{skill_id}') invoked by agent.", file=sys.stderr)
     if skill_id.startswith("builtin:"):
         action_dir = os.path.dirname(__file__)
-        skills_dir = os.path.abspath(os.path.join(action_dir, "starter-examples", "skills"))
+        skills_dir = os.path.realpath(os.path.join(action_dir, "starter-examples", "skills"))
         rel_path = skill_id[len("builtin:") :]
     else:
-        skills_dir = os.path.abspath(".agents/skills")
+        skills_dir = os.path.realpath(".agents/skills")
         rel_path = skill_id
 
     # Normalise separators for safe joining
     rel_path = rel_path.replace("/", os.sep).replace("\\", os.sep)
-    safe_path = os.path.abspath(os.path.join(skills_dir, rel_path))
+    safe_path = os.path.realpath(os.path.join(skills_dir, rel_path))
 
     try:
         if os.path.commonpath([skills_dir, safe_path]) != skills_dir:
@@ -470,8 +470,10 @@ def get_google_auth_headers() -> dict:
         credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
         auth_req = google.auth.transport.requests.Request()
         credentials.refresh(auth_req)
-        headers["Authorization"] = f"Bearer {credentials.token}"
-        return headers
+        if credentials.token:
+            headers["Authorization"] = f"Bearer {credentials.token}"
+            return headers
+        return {}
     except Exception as e:
         print(f"Warning: Failed to fetch Application Default Credentials for Developer Knowledge: {e}", file=sys.stderr)
         return {}
