@@ -325,7 +325,12 @@ def load_workspace_rules() -> str:
 
 def parse_skill_metadata(skill_path: str) -> dict[str, str]:
     """Parse name and description from a skill's markdown file frontmatter or first heading."""
-    metadata = {"name": os.path.basename(os.path.dirname(skill_path)), "description": ""}
+    base_name = os.path.basename(skill_path)
+    if base_name.lower() in ("skill.md", "readme.md"):
+        default_name = os.path.basename(os.path.dirname(skill_path))
+    else:
+        default_name = os.path.splitext(base_name)[0]
+    metadata = {"name": default_name, "description": ""}
     try:
         with open(skill_path, "r", encoding="utf-8-sig") as f:
             content = f.read()
@@ -401,7 +406,6 @@ def list_available_skills() -> list[dict[str, str]]:
                 skills.append(meta)
 
     return skills
-
 
 
 def load_skill_instructions(skill_id: str) -> str:

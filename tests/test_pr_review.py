@@ -404,7 +404,6 @@ def test_list_available_skills_workspace(mocker):
     assert skills[0]["name"] == "Custom Skill"
 
 
-
 def test_load_skill_instructions_builtin(mocker):
     # Verify resolving a builtin skill works safely
     mocker.patch("os.path.exists", return_value=True)
@@ -428,3 +427,17 @@ def test_load_skill_instructions_workspace(mocker):
 def test_load_skill_instructions_path_traversal():
     content = load_skill_instructions("builtin:../../../../etc/passwd")
     assert "Error: Access denied (path traversal blocked)." in content
+
+
+def test_parse_skill_metadata(mocker):
+    from gemini_pr_review import parse_skill_metadata
+
+    # 1. Folder-structured skill (e.g. SKILL.md)
+    mocker.patch("builtins.open", mocker.mock_open(read_data="---\nname: Specific Folder Skill\n---\n"))
+    meta = parse_skill_metadata("some/folder/path/SKILL.md")
+    assert meta["name"] == "Specific Folder Skill"
+
+    # 2. File-structured skill without YAML metadata (falls back to file stem)
+    mocker.patch("builtins.open", mocker.mock_open(read_data="# Heading Skill\nSome content"))
+    meta = parse_skill_metadata("some/folder/path/file-based-skill.md")
+    assert meta["name"] == "Heading Skill"

@@ -71,7 +71,33 @@ This action natively supports the **Google Developer Knowledge MCP API**. If ava
 
 To enable this capability, see [Google Developer Knowledge Setup Guide](docs/developer_knowledge.md).
 
+### On-Demand Agent Skills (Coding Guidelines)
+
+This action supports **On-Demand Skills Discovery**. Instead of cramming all your repository's formatting rules, coding guidelines, and API specs directly into the prompt context (which wastes tokens and confuses the model), the reviewer agent queries a list of available guidelines and loads the relevant instructions dynamically as needed.
+
+#### 1. Default (Built-in) Skills Included
+The action comes pre-packaged with a comprehensive set of default skills that are automatically available for every run. These cover:
+*   **Google Enterprise & Agent Development**: Best practices for Google ADK (Agent Development Kit), Gemini Agents API, serving endpoint management, prompt orchestration, and model tuning.
+*   **Google Cloud Best Practices**: Official architecture patterns, operational excellence, reliability, performance, security, and GCS/Cloud Run/GKE setup.
+*   **Data Analytics**: BigQuery query optimization, BigFrames, property graphs, and time-series forecasting.
+
+#### 2. Adding Custom Skills to Your Repository
+To add project-specific coding standards or team rules that your PR reviewer should check against:
+1.  Create a folder named `.agents/skills/` at the root of your repository.
+2.  Add a subdirectory for your skill, and create a `SKILL.md` file inside it (e.g. `.agents/skills/my-react-rules/SKILL.md`).
+3.  Format the file with a YAML frontmatter header containing its name and description:
+    ```markdown
+    ---
+    name: "My Project Style Guide"
+    description: "Rules for component structure, CSS modules, and custom hooks"
+    ---
+    # Instructions
+    Write your detailed rules here...
+    ```
+4.  Commit and push these files. The PR review agent will automatically detect your project's custom guidelines and invoke them when reviewing relevant code changes.
+
 ### Setup Using Install-Gemini-Code-Review-Action Skill (Recommended)
+
 If you are using an agentic coding environment like Google Antigravity, you can install and configure this action and its triage workflow automatically using Dazbo's skill from [derailed-dash/dazbo-agent-skills](https://github.com/derailed-dash/dazbo-agent-skills).
 
 > [!IMPORTANT]
