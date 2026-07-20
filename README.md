@@ -69,7 +69,7 @@ Alternatively, we can use WIF and ADC to authenticate. In this approach, we do n
 
 This action natively supports the **Google Developer Knowledge MCP API**. If available under your `GEMINI_API_KEY` (or Google Cloud Application Default Credentials), the PR reviewer agent can dynamically query official, up-to-date documentation for services like Google Cloud, Firebase, and Android to ensure your code follows best practices.
 
-To enable this capability, see [Google Developer Knowledge Setup Guide](file:///home/dazbo/localdev/gemini-review-action/docs/developer_knowledge.md).
+To enable this capability, see [Google Developer Knowledge Setup Guide](docs/developer_knowledge.md).
 
 ### Setup Using Install-Gemini-Code-Review-Action Skill (Recommended)
 If you are using an agentic coding environment like Google Antigravity, you can install and configure this action and its triage workflow automatically using Dazbo's skill from [derailed-dash/dazbo-agent-skills](https://github.com/derailed-dash/dazbo-agent-skills).
@@ -95,7 +95,7 @@ Once installed, simply ask your agent:
 
 ### Alternative Manual Setup: PR Review Action Definition
 
-One-time step: add this GitHub Action to your repository, by copying the starter example workflow [gemini-review.yml](file:///home/dazbo/localdev/gemini-review-action/starter-examples/gemini-review.yml) to `.github/workflows/gemini-review.yml` in your repo (or use the inline template below):
+One-time step: add this GitHub Action to your repository, by copying the starter example workflow [gemini-review.yml](starter-examples/gemini-review.yml) to `.github/workflows/gemini-review.yml` in your repo (or use the inline template below):
 
 ```yaml
 name: "🔎 Dazbo's Gemini Code Review"
@@ -214,7 +214,7 @@ If the workflow is configured to allow triggering via comments (e.g. with the `i
 
 ### Issues Triage Action Definition
 
-Add this GitHub Action to your repository, by copying the starter example workflow [gemini-triage.yml](file:///home/dazbo/localdev/gemini-review-action/starter-examples/gemini-triage.yml) to `.github/workflows/gemini-triage.yml` in your repo (or use the inline template below):
+Add this GitHub Action to your repository, by copying the starter example workflow [gemini-triage.yml](starter-examples/gemini-triage.yml) to `.github/workflows/gemini-triage.yml` in your repo (or use the inline template below):
 
 ```yaml
 name: "🏷️ Dazbo's Gemini Issue Triage"
@@ -274,8 +274,8 @@ core_file_patterns = ["*.md", "pyproject.toml", "package.json", "go.mod", "Cargo
 ### Custom Prompts / Instructions
 
 This action bundles high-quality default prompt configurations for both review and triage:
-* **Default Review Prompt:** [starter-examples/gemini-review.toml](file:///home/dazbo/localdev/gemini-review-action/starter-examples/gemini-review.toml)
-* **Default Triage Prompt:** [starter-examples/gemini-triage.toml](file:///home/dazbo/localdev/gemini-review-action/starter-examples/gemini-triage.toml)
+* **Default Review Prompt:** [starter-examples/gemini-review.toml](starter-examples/gemini-review.toml)
+* **Default Triage Prompt:** [starter-examples/gemini-triage.toml](starter-examples/gemini-triage.toml)
 
 You can customize or completely override the prompt instructions given to the review or triage reviewers on a repository-by-repository basis:
 

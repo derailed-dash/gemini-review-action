@@ -327,7 +327,7 @@ def parse_skill_metadata(skill_path: str) -> dict[str, str]:
     """Parse name and description from a skill's markdown file frontmatter or first heading."""
     metadata = {"name": os.path.basename(os.path.dirname(skill_path)), "description": ""}
     try:
-        with open(skill_path, "r", encoding="utf-8") as f:
+        with open(skill_path, "r", encoding="utf-8-sig") as f:
             content = f.read()
         match = re.match(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
         if match:
@@ -362,28 +362,46 @@ def list_available_skills() -> list[dict[str, str]]:
     action_dir = os.path.dirname(__file__)
     built_in_dir = os.path.join(action_dir, "starter-examples", "skills")
     if os.path.isdir(built_in_dir):
-        for root, dirs, files in os.walk(built_in_dir):
-            for file in files:
-                if file == "SKILL.md" or file.endswith(".md"):
-                    full_path = os.path.join(root, file)
-                    meta = parse_skill_metadata(full_path)
-                    # Prefix built-in skills and standardise path separators
-                    rel_skill_path = os.path.relpath(full_path, built_in_dir).replace(os.sep, "/")
-                    meta["id"] = f"builtin:{rel_skill_path}"
+        for entry in os.listdir(built_in_dir):
+            entry_path = os.path.join(built_in_dir, entry)
+            if os.path.isdir(entry_path):
+                # Search only for SKILL.md or main .md files at the root of the skill folder
+                skill_md = os.path.join(entry_path, "SKILL.md")
+                if os.path.isfile(skill_md):
+                    meta = parse_skill_metadata(skill_md)
+                    meta["id"] = f"builtin:{entry}/SKILL.md"
                     skills.append(meta)
+                else:
+                    for f in os.listdir(entry_path):
+                        if f.endswith(".md") and os.path.isfile(os.path.join(entry_path, f)):
+                            meta = parse_skill_metadata(os.path.join(entry_path, f))
+                            meta["id"] = f"builtin:{entry}/{f}"
+                            skills.append(meta)
 
     # 2. Workspace-specific skills in the target repo
     skills_dir = ".agents/skills"
     if os.path.isdir(skills_dir):
-        for root, dirs, files in os.walk(skills_dir):
-            for file in files:
-                if file == "SKILL.md" or file.endswith(".md"):
-                    full_path = os.path.join(root, file)
-                    meta = parse_skill_metadata(full_path)
-                    meta["id"] = os.path.relpath(full_path, skills_dir).replace(os.sep, "/")
+        for entry in os.listdir(skills_dir):
+            entry_path = os.path.join(skills_dir, entry)
+            if os.path.isdir(entry_path):
+                skill_md = os.path.join(entry_path, "SKILL.md")
+                if os.path.isfile(skill_md):
+                    meta = parse_skill_metadata(skill_md)
+                    meta["id"] = f"{entry}/SKILL.md"
                     skills.append(meta)
+                else:
+                    for f in os.listdir(entry_path):
+                        if f.endswith(".md") and os.path.isfile(os.path.join(entry_path, f)):
+                            meta = parse_skill_metadata(os.path.join(entry_path, f))
+                            meta["id"] = f"{entry}/{f}"
+                            skills.append(meta)
+            elif os.path.isfile(entry_path) and entry.endswith(".md"):
+                meta = parse_skill_metadata(entry_path)
+                meta["id"] = entry
+                skills.append(meta)
 
     return skills
+
 
 
 def load_skill_instructions(skill_id: str) -> str:

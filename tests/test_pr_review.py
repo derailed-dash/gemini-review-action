@@ -375,9 +375,10 @@ def test_search_google_developer_knowledge_api_error(mocker):
 
 
 def test_list_available_skills_builtin(mocker):
-    # Mock starter-examples/skills folder check
-    mocker.patch("os.path.isdir", side_effect=lambda path: "starter-examples" in path)
-    mocker.patch("os.walk", return_value=[("starter-examples/skills/my-skill", [], ["SKILL.md"])])
+    # Mock folder checks and contents
+    mocker.patch("os.path.isdir", side_effect=lambda path: "starter-examples" in path or "my-skill" in path)
+    mocker.patch("os.listdir", return_value=["my-skill"])
+    mocker.patch("os.path.isfile", side_effect=lambda path: "SKILL.md" in path)
     mocker.patch(
         "gemini_pr_review.parse_skill_metadata", return_value={"name": "My Skill", "description": "Dummy skill"}
     )
@@ -389,9 +390,10 @@ def test_list_available_skills_builtin(mocker):
 
 
 def test_list_available_skills_workspace(mocker):
-    # Mock workspace folder check
-    mocker.patch("os.path.isdir", side_effect=lambda path: ".agents/skills" in path)
-    mocker.patch("os.walk", return_value=[(".agents/skills/custom-skill", [], ["SKILL.md"])])
+    # Mock workspace folder checks and contents
+    mocker.patch("os.path.isdir", side_effect=lambda path: ".agents/skills" in path or "custom-skill" in path)
+    mocker.patch("os.listdir", return_value=["custom-skill"])
+    mocker.patch("os.path.isfile", side_effect=lambda path: "SKILL.md" in path)
     mocker.patch(
         "gemini_pr_review.parse_skill_metadata", return_value={"name": "Custom Skill", "description": "Project rules"}
     )
@@ -400,6 +402,7 @@ def test_list_available_skills_workspace(mocker):
     assert len(skills) == 1
     assert skills[0]["id"] == "custom-skill/SKILL.md"
     assert skills[0]["name"] == "Custom Skill"
+
 
 
 def test_load_skill_instructions_builtin(mocker):
