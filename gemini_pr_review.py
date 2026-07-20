@@ -1,6 +1,6 @@
 # /// script
 # dependencies = [
-#   "google-genai>=2.10.0",
+#   "google-genai>=2.12.1",
 #   "requests",
 #   "pydantic",
 # ]

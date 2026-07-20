@@ -27,4 +27,5 @@ jobs:
           uvx ruff@latest format --check .
 
       - name: Run unit tests
-        run: uv run pytest
+        run: PYTHONPATH=. uv run pytest
+
