@@ -3,6 +3,7 @@ Unit tests for the issue triage script (gemini_issue_triage.py).
 Tests include verifying prompt construction (both fallback and custom TOML templates),
 mocking GitHub label retrieval with pagination, and validating issue labeling API requests.
 """
+
 from gemini_issue_triage import apply_labels, get_available_labels, load_triage_prompt
 
 
@@ -26,9 +27,7 @@ def test_load_triage_prompt_custom(mocker):
     mock_exists = mocker.patch("os.path.exists")
     mock_exists.side_effect = lambda path: "gemini-triage.toml" in path
 
-    mock_toml_content = {
-        "prompt": "Triage: !{echo $ISSUE_TITLE} / !{echo $ISSUE_BODY} / [!{echo $AVAILABLE_LABELS}]."
-    }
+    mock_toml_content = {"prompt": "Triage: !{echo $ISSUE_TITLE} / !{echo $ISSUE_BODY} / [!{echo $AVAILABLE_LABELS}]."}
 
     # Mock tomllib.load and built-in open
     mocker.patch("tomllib.load", return_value=mock_toml_content)
@@ -68,5 +67,5 @@ def test_apply_labels(mocker):
         "https://api.github.com/repos/derailed-dash/gemini-review-action/issues/123/labels",
         headers={"Authorization": "token test"},
         json={"labels": ["bug"]},
-        timeout=60
+        timeout=60,
     )

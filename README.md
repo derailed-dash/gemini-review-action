@@ -22,8 +22,10 @@ See the supporting blog post about this action [here](https://medium.com/google-
 - **Modern SDK Execution**: Leverages the modern Google GenAI SDK (`google-genai`).
 - **Enterprise-Grade Security**: Authentication via either Google Gemini API Keys or Google Cloud Workload Identity Federation (WIF).
 - **Customisable Prompts**: Supports repository-specific overrides for both reviews and triaging via simple TOML config files.
+- **Google Developer Knowledge Integration**: Automatically queries official Google developer documentation (Google Cloud, Firebase, Android, etc.) via MCP to cross-reference your changes against up-to-date best practices.
 
 ## How It Works
+
 
 1. **Change Discovery**: The action scans the Pull Request diff. It uses a robust extension and path exclusion list to automatically filter out binary, encrypted, or locked files (like `.png`, `.enc`, `uv.lock`, `.env`, etc.).
 2. **Hybrid Context Enrichment**: In addition to surrounding modified file content, the action gathers context from the rest of the repository. It measures the total size of all other tracked text files:
@@ -63,8 +65,13 @@ If you prefer to authenticate using a combination of **Google Cloud Workload Ide
 
 Alternatively, we can use WIF and ADC to authenticate. In this approach, we do not use persistent Gemini API key. This will be shown later.
 
-### Setup Using Install-Gemini-Code-Review-Action Skill (Recommended)
+### Google Developer Knowledge MCP Integration (Optional)
 
+This action natively supports the **Google Developer Knowledge MCP API**. If available under your `GEMINI_API_KEY` (or Google Cloud Application Default Credentials), the PR reviewer agent can dynamically query official, up-to-date documentation for services like Google Cloud, Firebase, and Android to ensure your code follows best practices.
+
+To enable this capability, see [Google Developer Knowledge Setup Guide](file:///home/dazbo/localdev/gemini-review-action/docs/developer_knowledge.md).
+
+### Setup Using Install-Gemini-Code-Review-Action Skill (Recommended)
 If you are using an agentic coding environment like Google Antigravity, you can install and configure this action and its triage workflow automatically using Dazbo's skill from [derailed-dash/dazbo-agent-skills](https://github.com/derailed-dash/dazbo-agent-skills).
 
 > [!IMPORTANT]

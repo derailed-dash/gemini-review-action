@@ -4,6 +4,7 @@ Tests include verifying the file filtering rules (text file checking) and
 ensuring the prompt construction substitutes placeholders (e.g. repository,
 PR number, and language) correctly.
 """
+
 import os
 
 from gemini_pr_review import (
@@ -13,13 +14,17 @@ from gemini_pr_review import (
     filter_review_comments,
     generate_file_tree,
     get_all_repo_files,
+    get_google_auth_headers,
     get_pr_files,
     get_valid_changed_lines,
     is_core_file,
     is_text_file,
+    list_available_skills,
     load_config,
+    load_skill_instructions,
     load_system_instruction,
     post_review,
+    search_google_developer_knowledge,
 )
 
 
@@ -71,15 +76,7 @@ def test_is_core_file():
 
 def test_generate_file_tree():
     files = ["src/utils.py", "src/main.py", "tests/test_utils.py", "README.md"]
-    expected = (
-        ".\n"
-        "├── README.md\n"
-        "├── src/\n"
-        "│   ├── main.py\n"
-        "│   └── utils.py\n"
-        "└── tests/\n"
-        "    └── test_utils.py"
-    )
+    expected = ".\n├── README.md\n├── src/\n│   ├── main.py\n│   └── utils.py\n└── tests/\n    └── test_utils.py"
     assert generate_file_tree(files) == expected
 
 
@@ -102,10 +99,10 @@ def test_get_all_repo_files_git_fallback(mocker):
     mocker.patch("subprocess.run", side_effect=Exception("git not installed"))
 
     # Mock os.walk
-    mocker.patch("os.walk", return_value=[
-        (".", ["dir1", ".git"], ["README.md", "image.png"]),
-        ("./dir1", [], ["main.py", "non_text.zip"])
-    ])
+    mocker.patch(
+        "os.walk",
+        return_value=[(".", ["dir1", ".git"], ["README.md", "image.png"]), ("./dir1", [], ["main.py", "non_text.zip"])],
+    )
 
     mocker.patch("os.path.exists", return_value=True)
 
@@ -121,9 +118,7 @@ def test_build_prompt_full_context(mocker):
     mocker.patch("gemini_pr_review.get_file_content", side_effect=lambda path: f"Content of {path}")
 
     pr_files = [{"filename": "src/main.py", "status": "modified", "patch": "+++ diff"}]
-    config = {
-        "max_context_bytes": 500
-    }
+    config = {"max_context_bytes": 500}
 
     prompt = build_prompt(pr_files, config)
     assert "=== Repository Context (Full Codebase) ===" in prompt
@@ -134,13 +129,13 @@ def test_build_prompt_full_context(mocker):
 def test_build_prompt_sparse_context(mocker):
     # Setup mock files in repo where size exceeds limit
     mocker.patch("gemini_pr_review.get_all_repo_files", return_value=["README.md", "large_file.py", "src/utils.py"])
-    mocker.patch("os.path.getsize", return_value=1000) # 3 files * 1000 = 3000 bytes
+    mocker.patch("os.path.getsize", return_value=1000)  # 3 files * 1000 = 3000 bytes
     mocker.patch("gemini_pr_review.get_file_content", side_effect=lambda path: f"Content of {path}")
 
     pr_files = [{"filename": "src/main.py", "status": "modified", "patch": "+++ diff"}]
     config = {
-        "max_context_bytes": 500, # threshold is 500, total is 3000 -> Sparse Context Mode
-        "core_file_patterns": ["README.md"]
+        "max_context_bytes": 500,  # threshold is 500, total is 3000 -> Sparse Context Mode
+        "core_file_patterns": ["README.md"],
     }
 
     prompt = build_prompt(pr_files, config)
@@ -179,13 +174,7 @@ def test_load_config_invalid(mocker):
 def test_generate_file_tree_windows_paths():
     # Mix of Windows path separators and Unix path separators
     files = ["src\\utils.py", "src/main.py", "README.md"]
-    expected = (
-        ".\n"
-        "├── README.md\n"
-        "└── src/\n"
-        "    ├── main.py\n"
-        "    └── utils.py"
-    )
+    expected = ".\n├── README.md\n└── src/\n    ├── main.py\n    └── utils.py"
     assert generate_file_tree(files) == expected
 
 
@@ -222,11 +211,7 @@ def test_post_review_atomic(mocker):
     mock_res.status_code = 200
     mock_post.return_value = mock_res
 
-    review = ReviewResult(
-        summary="Looks good",
-        general_feedback=["Clean code"],
-        comments=[]
-    )
+    review = ReviewResult(summary="Looks good", general_feedback=["Clean code"], comments=[])
 
     post_review("derailed-dash/gemini-review-action", 42, "head_sha_123", review, {"Authorization": "token test"})
 
@@ -237,9 +222,9 @@ def test_post_review_atomic(mocker):
         json={
             "body": "## 📋 Review Summary\n\nLooks good\n\n## 🔍 General Feedback\n\n- Clean code",
             "event": "COMMENT",
-            "comments": []
+            "comments": [],
         },
-        timeout=60
+        timeout=60,
     )
 
 
@@ -266,9 +251,9 @@ def test_post_review_fallback(mocker):
                 "side": "RIGHT",
                 "severity": "🔴",
                 "comment_text": "Fix this crash",
-                "code_suggestion": "print('fixed')"
+                "code_suggestion": "print('fixed')",
             }
-        ]
+        ],
     )
 
     post_review("derailed-dash/gemini-review-action", 42, "head_sha_123", review, {"Authorization": "token test"})
@@ -281,14 +266,7 @@ def test_post_review_fallback(mocker):
 
 
 def test_get_valid_changed_lines():
-    patch = (
-        "@@ -10,3 +10,4 @@ context\n"
-        " line1\n"
-        "-line2\n"
-        "+added1\n"
-        "+added2\n"
-        " line3\n"
-    )
+    patch = "@@ -10,3 +10,4 @@ context\n line1\n-line2\n+added1\n+added2\n line3\n"
     # The start is 10 on RIGHT.
     # context line1: 10
     # added1: 11
@@ -300,58 +278,24 @@ def test_get_valid_changed_lines():
 
 def test_filter_review_comments():
     text_files = [
-        {
-            "filename": "src/main.py",
-            "patch": (
-                "@@ -10,3 +10,4 @@ context\n"
-                " line1\n"
-                "-line2\n"
-                "+added1\n"
-                "+added2\n"
-                " line3\n"
-            )
-        },
-        {
-            "filename": "README.md",
-            "patch": (
-                "@@ -1,3 +1,3 @@\n"
-                " # Test\n"
-                "-old\n"
-                "+new\n"
-            )
-        }
+        {"filename": "src/main.py", "patch": ("@@ -10,3 +10,4 @@ context\n line1\n-line2\n+added1\n+added2\n line3\n")},
+        {"filename": "README.md", "patch": ("@@ -1,3 +1,3 @@\n # Test\n-old\n+new\n")},
     ]
 
     comments = [
-        InlineComment(
-            path="src/main.py",
-            line=11,
-            side="RIGHT",
-            severity="🟢",
-            comment_text="Valid comment"
-        ),
+        InlineComment(path="src/main.py", line=11, side="RIGHT", severity="🟢", comment_text="Valid comment"),
         InlineComment(
             path="src/main.py",
             line=5,
             side="RIGHT",
             severity="🟡",
             comment_text="Invalid line comment",
-            code_suggestion="print('suggested')"
+            code_suggestion="print('suggested')",
         ),
-        InlineComment(
-            path="invalid_file.py",
-            line=1,
-            side="RIGHT",
-            severity="🔴",
-            comment_text="Invalid path comment"
-        )
+        InlineComment(path="invalid_file.py", line=1, side="RIGHT", severity="🔴", comment_text="Invalid path comment"),
     ]
 
-    review = ReviewResult(
-        summary="A summary",
-        general_feedback=["Feedback 1"],
-        comments=comments
-    )
+    review = ReviewResult(summary="A summary", general_feedback=["Feedback 1"], comments=comments)
 
     filtered_review = filter_review_comments(review, text_files)
 
@@ -368,3 +312,116 @@ def test_filter_review_comments():
     assert any("invalid_file.py" in item for item in filtered_review.general_feedback[2:])
 
 
+def test_get_google_auth_headers_api_key(mocker):
+    mocker.patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
+    headers = get_google_auth_headers()
+    assert headers["X-Goog-Api-Key"] == "test-key"
+    assert headers["Content-Type"] == "application/json"
+
+
+def test_get_google_auth_headers_adc(mocker):
+    mocker.patch.dict(os.environ, {}, clear=True)
+
+    mock_creds = mocker.Mock()
+    mock_creds.token = "fake-oauth-token"
+    mocker.patch("google.auth.default", return_value=(mock_creds, "fake-project"))
+    mocker.patch("google.auth.transport.requests.Request")
+
+    headers = get_google_auth_headers()
+    assert headers["Authorization"] == "Bearer fake-oauth-token"
+    assert headers["Content-Type"] == "application/json"
+
+
+def test_get_google_auth_headers_none(mocker):
+    mocker.patch.dict(os.environ, {}, clear=True)
+    mocker.patch("google.auth.default", side_effect=Exception("No credentials"))
+
+    headers = get_google_auth_headers()
+    assert headers == {}
+
+
+def test_search_google_developer_knowledge_success(mocker):
+    mocker.patch("gemini_pr_review.get_google_auth_headers", return_value={"X-Goog-Api-Key": "key"})
+
+    mock_post = mocker.patch("requests.post")
+    mock_resp = mocker.Mock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "result": {"content": [{"type": "text", "text": "Match 1"}, {"type": "text", "text": "Match 2"}]}
+    }
+    mock_post.return_value = mock_resp
+
+    res = search_google_developer_knowledge("query")
+    assert res == "Match 1\n\nMatch 2"
+
+
+def test_search_google_developer_knowledge_no_auth(mocker):
+    mocker.patch("gemini_pr_review.get_google_auth_headers", return_value={})
+    res = search_google_developer_knowledge("query")
+    assert "Error: No API key or Application Default Credentials found" in res
+
+
+def test_search_google_developer_knowledge_api_error(mocker):
+    mocker.patch("gemini_pr_review.get_google_auth_headers", return_value={"X-Goog-Api-Key": "key"})
+
+    mock_post = mocker.patch("requests.post")
+    mock_resp = mocker.Mock()
+    mock_resp.status_code = 500
+    mock_resp.text = "Internal error"
+    mock_post.return_value = mock_resp
+
+    res = search_google_developer_knowledge("query")
+    assert "Error from Google Developer Knowledge API: 500" in res
+
+
+def test_list_available_skills_builtin(mocker):
+    # Mock starter-examples/skills folder check
+    mocker.patch("os.path.isdir", side_effect=lambda path: "starter-examples" in path)
+    mocker.patch("os.walk", return_value=[("starter-examples/skills/my-skill", [], ["SKILL.md"])])
+    mocker.patch(
+        "gemini_pr_review.parse_skill_metadata", return_value={"name": "My Skill", "description": "Dummy skill"}
+    )
+
+    skills = list_available_skills()
+    assert len(skills) == 1
+    assert skills[0]["id"] == "builtin:my-skill/SKILL.md"
+    assert skills[0]["name"] == "My Skill"
+
+
+def test_list_available_skills_workspace(mocker):
+    # Mock workspace folder check
+    mocker.patch("os.path.isdir", side_effect=lambda path: ".agents/skills" in path)
+    mocker.patch("os.walk", return_value=[(".agents/skills/custom-skill", [], ["SKILL.md"])])
+    mocker.patch(
+        "gemini_pr_review.parse_skill_metadata", return_value={"name": "Custom Skill", "description": "Project rules"}
+    )
+
+    skills = list_available_skills()
+    assert len(skills) == 1
+    assert skills[0]["id"] == "custom-skill/SKILL.md"
+    assert skills[0]["name"] == "Custom Skill"
+
+
+def test_load_skill_instructions_builtin(mocker):
+    # Verify resolving a builtin skill works safely
+    mocker.patch("os.path.exists", return_value=True)
+    mocker.patch("os.path.isfile", return_value=True)
+    mocker.patch("builtins.open", mocker.mock_open(read_data="Built-in instructions"))
+
+    content = load_skill_instructions("builtin:agent-aware-cli/SKILL.md")
+    assert content == "Built-in instructions"
+
+
+def test_load_skill_instructions_workspace(mocker):
+    # Verify resolving workspace skill
+    mocker.patch("os.path.exists", return_value=True)
+    mocker.patch("os.path.isfile", return_value=True)
+    mocker.patch("builtins.open", mocker.mock_open(read_data="Workspace instructions"))
+
+    content = load_skill_instructions("custom-rules.md")
+    assert content == "Workspace instructions"
+
+
+def test_load_skill_instructions_path_traversal():
+    content = load_skill_instructions("builtin:../../../../etc/passwd")
+    assert "Error: Access denied (path traversal blocked)." in content
