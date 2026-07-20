@@ -1,6 +1,6 @@
 # /// script
 # dependencies = [
-#   "google-genai>=2.10.0",
+#   "google-genai>=2.12.1",
 #   "requests",
 #   "pydantic",
 # ]
@@ -19,6 +19,7 @@ for the workflow run.
 import fnmatch
 import json
 import os
+import re
 import subprocess
 import sys
 import tomllib
@@ -33,27 +34,62 @@ DEFAULT_TIMEOUT = 60
 
 class InlineComment(BaseModel):
     """Represents a single inline comment to be posted on a file in the Pull Request."""
+
     path: str = Field(description="The relative file path being reviewed.")
-    line: int = Field(description="The line number in the RIGHT (new/modified) version of the file where the comment applies.")
-    side: str = Field(default="RIGHT", description="Must be 'RIGHT' for additions/modifications or 'LEFT' for deletions.")
+    line: int = Field(
+        description="The line number in the RIGHT (new/modified) version of the file where the comment applies."
+    )
+    side: str = Field(
+        default="RIGHT", description="Must be 'RIGHT' for additions/modifications or 'LEFT' for deletions."
+    )
     severity: str = Field(description="Severity icon: 🔴 (Critical), 🟠 (High), 🟡 (Medium), 🟢 (Low)")
-    comment_text: str = Field(description="Constructive feedback explaining the issue. Write the feedback comments in the requested language.")
-    code_suggestion: str | None = Field(None, description="Optional drop-in code suggestion replacement. Must match the exact structure and indentation of the replaced code, formatted as a suggestion.")
+    comment_text: str = Field(
+        description="Constructive feedback explaining the issue. Write the feedback comments in the requested language."
+    )
+    code_suggestion: str | None = Field(
+        None,
+        description="Optional drop-in code suggestion replacement. Must match the exact structure and indentation of the replaced code, formatted as a suggestion.",
+    )
 
 
 class ReviewResult(BaseModel):
     """Represents the structured review results returned by the Gemini model."""
-    summary: str = Field(description="A brief, high-level assessment of the Pull Request's objective and quality (2-3 sentences).")
-    general_feedback: list[str] = Field(description="A list of general observations, positive highlights, or recurring patterns.")
+
+    summary: str = Field(
+        description="A brief, high-level assessment of the Pull Request's objective and quality (2-3 sentences)."
+    )
+    general_feedback: list[str] = Field(
+        description="A list of general observations, positive highlights, or recurring patterns."
+    )
     comments: list[InlineComment] = Field(description="List of targeted inline comments on the code changes.")
 
 
 def is_text_file(filename: str) -> bool:
     """Filter out typical binary, lock, and encrypted file formats."""
     excluded_extensions = {
-        ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".pdf", ".zip", ".tar", ".gz",
-        ".enc", ".lock", ".db", ".pyc", ".o", ".so", ".dylib", ".dll", ".exe",
-        ".woff", ".woff2", ".eot", ".ttf"
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".gif",
+        ".ico",
+        ".svg",
+        ".pdf",
+        ".zip",
+        ".tar",
+        ".gz",
+        ".enc",
+        ".lock",
+        ".db",
+        ".pyc",
+        ".o",
+        ".so",
+        ".dylib",
+        ".dll",
+        ".exe",
+        ".woff",
+        ".woff2",
+        ".eot",
+        ".ttf",
     }
     _, ext = os.path.splitext(filename.lower())
     if ext in excluded_extensions:
@@ -100,10 +136,7 @@ def filter_review_comments(review: ReviewResult, text_files: list) -> ReviewResu
     """Filter inline comments to ensure they apply to valid lines in the diff, redirecting others to general feedback."""
     # Map file path -> set of valid line numbers
     file_patches = {f["filename"]: f.get("patch", "") for f in text_files}
-    valid_lines_by_file = {
-        filename: get_valid_changed_lines(patch)
-        for filename, patch in file_patches.items()
-    }
+    valid_lines_by_file = {filename: get_valid_changed_lines(patch) for filename, patch in file_patches.items()}
 
     filtered_comments = []
     redirected_feedback = []
@@ -118,7 +151,9 @@ def filter_review_comments(review: ReviewResult, text_files: list) -> ReviewResu
                 break
 
         if not matched_file:
-            warning_msg = f"Warning: Redirecting inline comment on {comment.path}:{comment.line} (File not found in PR changes)."
+            warning_msg = (
+                f"Warning: Redirecting inline comment on {comment.path}:{comment.line} (File not found in PR changes)."
+            )
             print(warning_msg, file=sys.stderr)
 
             feedback_item = f"**{comment.path}** (Line {comment.line}): {comment.severity} {comment.comment_text}"
@@ -132,7 +167,9 @@ def filter_review_comments(review: ReviewResult, text_files: list) -> ReviewResu
             comment.path = matched_file
             filtered_comments.append(comment)
         else:
-            warning_msg = f"Warning: Redirecting inline comment on {comment.path}:{comment.line} (Line not in PR diff patch)."
+            warning_msg = (
+                f"Warning: Redirecting inline comment on {comment.path}:{comment.line} (Line not in PR diff patch)."
+            )
             print(warning_msg, file=sys.stderr)
 
             feedback_item = f"**{comment.path}** (Line {comment.line}): {comment.severity} {comment.comment_text}"
@@ -183,13 +220,12 @@ def get_local_git_files() -> list:
 
         files = []
         for filename in filenames:
-            diff_res = subprocess.run(["git", "diff", "main...HEAD", "--", filename], capture_output=True, text=True, check=True)
-            files.append({
-                "filename": filename,
-                "status": "modified",
-                "patch": diff_res.stdout
-            })
+            diff_res = subprocess.run(
+                ["git", "diff", "main...HEAD", "--", filename], capture_output=True, text=True, check=True
+            )
+            files.append({"filename": filename, "status": "modified", "patch": diff_res.stdout})
         return files
+
     except Exception as e:
         print(f"Error running local git diff: {e}", file=sys.stderr)
         return []
@@ -256,7 +292,7 @@ def generate_file_tree(files: list[str]) -> str:
         lines = []
         keys = list(node.keys())
         for idx, key in enumerate(keys):
-            is_last = (idx == len(keys) - 1)
+            is_last = idx == len(keys) - 1
             marker = "└── " if is_last else "├── "
             child_indent = "    " if is_last else "│   "
             if node[key]:
@@ -267,6 +303,270 @@ def generate_file_tree(files: list[str]) -> str:
         return lines
 
     return ".\n" + "\n".join(_render(tree))
+
+
+def load_workspace_rules() -> str:
+    """Check for workspace rule files (.agents/AGENTS.md, AGENTS.md, etc.) and return their combined contents."""
+    possible_paths = [".agents/AGENTS.md", "AGENTS.md", ".agents/GEMINI.md", "GEMINI.md"]
+    rules_content = []
+    for path in possible_paths:
+        if os.path.exists(path) and os.path.isfile(path):
+            try:
+                print(f"Loading workspace rules from {path}...", file=sys.stderr)
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read().strip()
+                    if content:
+                        rules_content.append(f"=== Rules from {path} ===\n{content}\n")
+            except Exception as e:
+                print(f"Warning: Failed to load workspace rules from {path}: {e}", file=sys.stderr)
+
+    return "\n".join(rules_content) if rules_content else ""
+
+
+def parse_skill_metadata(skill_path: str) -> dict[str, str]:
+    """Parse name and description from a skill's markdown file frontmatter or first heading."""
+    base_name = os.path.basename(skill_path)
+    if base_name.lower() in ("skill.md", "readme.md"):
+        default_name = os.path.basename(os.path.dirname(skill_path))
+    else:
+        default_name = os.path.splitext(base_name)[0]
+    metadata = {"name": default_name, "description": ""}
+    try:
+        with open(skill_path, "r", encoding="utf-8-sig") as f:
+            content = f.read()
+        match = re.match(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
+        if match:
+            yaml_content = match.group(1)
+            yaml_lines = yaml_content.splitlines()
+            current_key = None
+            for line in yaml_lines:
+                if ":" in line and not line.startswith(" "):
+                    key, val = line.split(":", 1)
+                    key = key.strip().lower()
+                    val = val.strip().strip('"').strip("'")
+                    if key in ("name", "description"):
+                        metadata[key] = val
+                        current_key = key
+                elif current_key and line.startswith(" "):
+                    val = line.strip().strip('"').strip("'")
+                    if metadata[current_key] in (">-", ">", "|", "|-"):
+                        metadata[current_key] = val
+                    else:
+                        metadata[current_key] += " " + val
+        else:
+            lines = [line.strip() for line in content.splitlines() if line.strip()]
+            for line in lines:
+                if line.startswith("#"):
+                    metadata["name"] = line.lstrip("#").strip()
+                    break
+    except Exception as e:
+        print(f"Error parsing skill metadata for {skill_path}: {e}", file=sys.stderr)
+    return metadata
+
+
+def list_available_skills() -> list[dict[str, str]]:
+    """Lists all custom agent skills available, including built-in action skills and workspace skills.
+
+    The agent can call load_skill_instructions to retrieve instructions for a specific skill.
+    """
+    print("Tool Call: list_available_skills() invoked by agent.", file=sys.stderr)
+    skills = []
+
+    # 1. Built-in skills packaged with the action
+    action_dir = os.path.dirname(__file__)
+    built_in_dir = os.path.join(action_dir, "starter-examples", "skills")
+    if os.path.isdir(built_in_dir):
+        for entry in os.listdir(built_in_dir):
+            entry_path = os.path.join(built_in_dir, entry)
+            if os.path.isdir(entry_path):
+                # Search only for SKILL.md or main .md files at the root of the skill folder
+                skill_md = os.path.join(entry_path, "SKILL.md")
+                if os.path.isfile(skill_md):
+                    meta = parse_skill_metadata(skill_md)
+                    meta["id"] = f"builtin:{entry}/SKILL.md"
+                    skills.append(meta)
+                else:
+                    for f in os.listdir(entry_path):
+                        if f.endswith(".md") and os.path.isfile(os.path.join(entry_path, f)):
+                            meta = parse_skill_metadata(os.path.join(entry_path, f))
+                            meta["id"] = f"builtin:{entry}/{f}"
+                            skills.append(meta)
+
+    # 2. Workspace-specific skills in the target repo
+    skills_dir = ".agents/skills"
+    if os.path.isdir(skills_dir):
+        for entry in os.listdir(skills_dir):
+            entry_path = os.path.join(skills_dir, entry)
+            if os.path.isdir(entry_path):
+                skill_md = os.path.join(entry_path, "SKILL.md")
+                if os.path.isfile(skill_md):
+                    meta = parse_skill_metadata(skill_md)
+                    meta["id"] = f"{entry}/SKILL.md"
+                    skills.append(meta)
+                else:
+                    for f in os.listdir(entry_path):
+                        if f.endswith(".md") and os.path.isfile(os.path.join(entry_path, f)):
+                            meta = parse_skill_metadata(os.path.join(entry_path, f))
+                            meta["id"] = f"{entry}/{f}"
+                            skills.append(meta)
+            elif os.path.isfile(entry_path) and entry.endswith(".md"):
+                meta = parse_skill_metadata(entry_path)
+                meta["id"] = entry
+                skills.append(meta)
+
+    return skills
+
+
+def load_skill_instructions(skill_id: str) -> str:
+    """Retrieves the full instructions/rules for a specific skill.
+
+    Args:
+        skill_id: The relative path or identifier of the skill (e.g. 'builtin:agent-aware-cli/SKILL.md' or 'git-workflow-and-versioning.md').
+    """
+    print(f"Tool Call: load_skill_instructions(skill_id='{skill_id}') invoked by agent.", file=sys.stderr)
+    if skill_id.startswith("builtin:"):
+        action_dir = os.path.dirname(__file__)
+        skills_dir = os.path.realpath(os.path.join(action_dir, "starter-examples", "skills"))
+        rel_path = skill_id[len("builtin:") :]
+    else:
+        skills_dir = os.path.realpath(".agents/skills")
+        rel_path = skill_id
+
+    # Normalise separators for safe joining
+    rel_path = rel_path.replace("/", os.sep).replace("\\", os.sep)
+    safe_path = os.path.realpath(os.path.join(skills_dir, rel_path))
+
+    try:
+        if os.path.commonpath([skills_dir, safe_path]) != skills_dir:
+            return "Error: Access denied (path traversal blocked)."
+    except Exception:
+        return "Error: Access denied (path traversal blocked)."
+
+    if os.path.exists(safe_path) and os.path.isfile(safe_path):
+        try:
+            with open(safe_path, "r", encoding="utf-8") as f:
+                return f.read()
+        except Exception as e:
+            return f"Error reading skill instructions: {e}"
+
+    return f"Error: Skill '{skill_id}' not found."
+
+
+def get_google_auth_headers() -> dict:
+    """Generate authentication headers for calling the Google Developer Knowledge API."""
+    headers = {"Content-Type": "application/json"}
+
+    # 1. Use GEMINI_API_KEY if present
+    gemini_api_key = os.environ.get("GEMINI_API_KEY")
+    if gemini_api_key:
+        headers["X-Goog-Api-Key"] = gemini_api_key
+        return headers
+
+    # 2. Try falling back to Google Cloud Application Default Credentials (ADC)
+    try:
+        import google.auth
+        import google.auth.transport.requests
+
+        credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        auth_req = google.auth.transport.requests.Request()
+        credentials.refresh(auth_req)
+        if credentials.token:
+            headers["Authorization"] = f"Bearer {credentials.token}"
+            return headers
+        return {}
+    except Exception as e:
+        print(f"Warning: Failed to fetch Application Default Credentials for Developer Knowledge: {e}", file=sys.stderr)
+        return {}
+
+
+def search_google_developer_knowledge(query: str) -> str:
+    """Searches official Google developer documentation for APIs, best practices, guides, and troubleshooting.
+
+    Args:
+        query: The search query, e.g. 'How to configure Google Cloud Run with custom domains'.
+    """
+    print(f"Tool Call: search_google_developer_knowledge(query='{query}') invoked by agent.", file=sys.stderr)
+    headers = get_google_auth_headers()
+    if not headers or ("X-Goog-Api-Key" not in headers and "Authorization" not in headers):
+        return "Error: No API key or Application Default Credentials found. Google Developer Knowledge Search is unavailable."
+
+    url = "https://developerknowledge.googleapis.com/mcp"
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {"name": "search_documents", "arguments": {"query": query}},
+        "id": 1,
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        if response.status_code != 200:
+            return f"Error from Google Developer Knowledge API: {response.status_code} - {response.text}"
+
+        data = response.json()
+        if "error" in data:
+            return f"API Error: {json.dumps(data['error'])}"
+
+        result = data.get("result", {})
+        content_list = result.get("content", [])
+
+        text_outputs = []
+        for item in content_list:
+            if item.get("type") == "text":
+                text_outputs.append(item.get("text", ""))
+
+        if not text_outputs:
+            return "No matching documentation found."
+
+        return "\n\n".join(text_outputs)
+    except Exception as e:
+        return f"Error calling Google Developer Knowledge API: {e}"
+
+
+def get_google_developer_documents(names: list[str]) -> str:
+    """Retrieves the full content of one or more documents from the Google developer documentation.
+
+    Args:
+        names: A list of document names/URIs returned by search_google_developer_knowledge.
+               Format of each name: 'documents/docs.cloud.google.com/...'
+    """
+    print(f"Tool Call: get_google_developer_documents(names={names}) invoked by agent.", file=sys.stderr)
+    headers = get_google_auth_headers()
+    if not headers or ("X-Goog-Api-Key" not in headers and "Authorization" not in headers):
+        return "Error: No API key or Application Default Credentials found. Document retrieval is unavailable."
+
+    url = "https://developerknowledge.googleapis.com/mcp"
+    payload = {
+        "jsonrpc": "2.0",
+        "method": "tools/call",
+        "params": {"name": "get_documents", "arguments": {"names": names}},
+        "id": 1,
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        if response.status_code != 200:
+            return f"Error from Google Developer Knowledge API: {response.status_code} - {response.text}"
+
+        data = response.json()
+        if "error" in data:
+            return f"API Error: {json.dumps(data['error'])}"
+
+        result = data.get("result", {})
+
+        content_list = result.get("content", [])
+
+        text_outputs = []
+        for item in content_list:
+            if item.get("type") == "text":
+                text_outputs.append(item.get("text", ""))
+
+        if not text_outputs:
+            return "Document content is empty or not found."
+
+        return "\n\n".join(text_outputs)
+    except Exception as e:
+        return f"Error calling Google Developer Knowledge API: {e}"
 
 
 def load_system_instruction(repository: str | None, pr_number: int, config: dict) -> str:
@@ -282,7 +582,6 @@ def load_system_instruction(repository: str | None, pr_number: int, config: dict
     language = os.environ.get("GEMINI_LANGUAGE", "English (UK)")
     prompt = prompt.replace("!{echo $LANGUAGE}", language)
     return prompt
-
 
 
 def build_prompt(files: list, config: dict) -> str:
@@ -321,36 +620,55 @@ def build_prompt(files: list, config: dict) -> str:
         except ValueError:
             pass
 
-    core_patterns = config.get("core_file_patterns", [
-        # Documentation
-        "*.md",
-        # Python
-        "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile",
-        # JavaScript / TypeScript / Node
-        "package.json", "tsconfig.json",
-        # Go
-        "go.mod",
-        # Rust
-        "Cargo.toml",
-        # Java / Kotlin
-        "pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle",
-        # Ruby
-        "Gemfile", "*.gemspec",
-        # PHP
-        "composer.json",
-        # C# / .NET
-        "*.csproj", "*.sln",
-        # Swift / Objective-C
-        "Package.swift", "Podfile",
-        # Docker / Infrastructure
-        "Dockerfile", "docker-compose.yml",
-        # Configuration
-        "gemini-review.toml", "action.yml"
-    ])
+    core_patterns = config.get(
+        "core_file_patterns",
+        [
+            # Documentation
+            "*.md",
+            # Python
+            "pyproject.toml",
+            "setup.py",
+            "setup.cfg",
+            "requirements.txt",
+            "Pipfile",
+            # JavaScript / TypeScript / Node
+            "package.json",
+            "tsconfig.json",
+            # Go
+            "go.mod",
+            # Rust
+            "Cargo.toml",
+            # Java / Kotlin
+            "pom.xml",
+            "build.gradle",
+            "build.gradle.kts",
+            "settings.gradle",
+            # Ruby
+            "Gemfile",
+            "*.gemspec",
+            # PHP
+            "composer.json",
+            # C# / .NET
+            "*.csproj",
+            "*.sln",
+            # Swift / Objective-C
+            "Package.swift",
+            "Podfile",
+            # Docker / Infrastructure
+            "Dockerfile",
+            "docker-compose.yml",
+            # Configuration
+            "gemini-review.toml",
+            "action.yml",
+        ],
+    )
 
     repo_files = get_all_repo_files()
     other_files = [f for f in repo_files if f not in pr_filenames]
-    print(f"Codebase context: found {len(repo_files)} total tracked files, {len(other_files)} other files (excluding PR diff files).", file=sys.stderr)
+    print(
+        f"Codebase context: found {len(repo_files)} total tracked files, {len(other_files)} other files (excluding PR diff files).",
+        file=sys.stderr,
+    )
 
     if other_files:
         total_size = 0
@@ -363,10 +681,15 @@ def build_prompt(files: list, config: dict) -> str:
             except Exception:
                 continue
 
-        print(f"Codebase context: total size of other text files is {total_size} bytes (limit is {max_context_bytes} bytes).", file=sys.stderr)
+        print(
+            f"Codebase context: total size of other text files is {total_size} bytes (limit is {max_context_bytes} bytes).",
+            file=sys.stderr,
+        )
 
         if total_size <= max_context_bytes:
-            print("Codebase context: running in Full Context Mode (attaching all repository text files).", file=sys.stderr)
+            print(
+                "Codebase context: running in Full Context Mode (attaching all repository text files).", file=sys.stderr
+            )
             prompt_parts.append("=== Repository Context (Full Codebase) ===")
             prompt_parts.append("Below are the contents of all other files in this repository for context:\n")
             for f in other_files:
@@ -377,9 +700,14 @@ def build_prompt(files: list, config: dict) -> str:
                     prompt_parts.append("-----------------\n")
             prompt_parts.append("=========================================\n")
         else:
-            print("Codebase context: running in Sparse Context Mode (attaching file tree and core manifests/documentation).", file=sys.stderr)
+            print(
+                "Codebase context: running in Sparse Context Mode (attaching file tree and core manifests/documentation).",
+                file=sys.stderr,
+            )
             prompt_parts.append("=== Repository Context (Large Codebase) ===")
-            prompt_parts.append("Because this codebase is large, we have included the project file structure and key configuration/documentation files for context:\n")
+            prompt_parts.append(
+                "Because this codebase is large, we have included the project file structure and key configuration/documentation files for context:\n"
+            )
 
             full_tree_files = list(pr_filenames.union(set(other_files)))
             file_tree = generate_file_tree(full_tree_files)
@@ -398,7 +726,10 @@ def build_prompt(files: list, config: dict) -> str:
                         prompt_parts.append("-----------------\n")
                         core_files_included.append(f)
             if core_files_included:
-                print(f"Codebase context: attached {len(core_files_included)} core configuration/documentation files: {', '.join(core_files_included)}", file=sys.stderr)
+                print(
+                    f"Codebase context: attached {len(core_files_included)} core configuration/documentation files: {', '.join(core_files_included)}",
+                    file=sys.stderr,
+                )
             else:
                 prompt_parts.append("(No additional key configuration or documentation files found.)\n")
                 print("Codebase context: no core files matched or found.", file=sys.stderr)
@@ -407,7 +738,9 @@ def build_prompt(files: list, config: dict) -> str:
     return "\n".join(prompt_parts)
 
 
-def post_review(repository: str, pr_number: int, commit_id: str, review: ReviewResult, headers: dict, timeout: int = DEFAULT_TIMEOUT) -> None:
+def post_review(
+    repository: str, pr_number: int, commit_id: str, review: ReviewResult, headers: dict, timeout: int = DEFAULT_TIMEOUT
+) -> None:
     """Submit review comments atomically or fall back to individual comments if needed."""
     comments_payload = []
     for c in review.comments:
@@ -415,20 +748,13 @@ def post_review(repository: str, pr_number: int, commit_id: str, review: ReviewR
         if c.code_suggestion:
             body_parts.append(f"```suggestion\n{c.code_suggestion}\n```")
 
-        comments_payload.append({
-            "path": c.path,
-            "line": c.line,
-            "side": c.side,
-            "body": "\n\n".join(body_parts)
-        })
+        comments_payload.append({"path": c.path, "line": c.line, "side": c.side, "body": "\n\n".join(body_parts)})
 
-    review_body = f"## 📋 Review Summary\n\n{review.summary}\n\n## 🔍 General Feedback\n\n" + "\n".join(f"- {f}" for f in review.general_feedback)
+    review_body = f"## 📋 Review Summary\n\n{review.summary}\n\n## 🔍 General Feedback\n\n" + "\n".join(
+        f"- {f}" for f in review.general_feedback
+    )
 
-    payload = {
-        "body": review_body,
-        "event": "COMMENT",
-        "comments": comments_payload
-    }
+    payload = {"body": review_body, "event": "COMMENT", "comments": comments_payload}
 
     url = f"https://api.github.com/repos/{repository}/pulls/{pr_number}/reviews"
     print(f"Submitting review to PR #{pr_number} on {repository}...", file=sys.stderr)
@@ -450,18 +776,15 @@ def post_review(repository: str, pr_number: int, commit_id: str, review: ReviewR
     # 2. Post inline comments one by one
     comments_url = f"https://api.github.com/repos/{repository}/pulls/{pr_number}/comments"
     for idx, c in enumerate(comments_payload):
-        c_payload = {
-            "body": c["body"],
-            "commit_id": commit_id,
-            "path": c["path"],
-            "line": c["line"],
-            "side": c["side"]
-        }
+        c_payload = {"body": c["body"], "commit_id": commit_id, "path": c["path"], "line": c["line"], "side": c["side"]}
         res_comment = requests.post(comments_url, headers=headers, json=c_payload, timeout=timeout)
         if res_comment.status_code in (200, 201):
-            print(f"Posted comment {idx+1}/{len(comments_payload)} successfully.", file=sys.stderr)
+            print(f"Posted comment {idx + 1}/{len(comments_payload)} successfully.", file=sys.stderr)
         else:
-            print(f"Error posting comment {idx+1} on {c['path']} (line {c['line']}): {res_comment.status_code} - {res_comment.text}", file=sys.stderr)
+            print(
+                f"Error posting comment {idx + 1} on {c['path']} (line {c['line']}): {res_comment.status_code} - {res_comment.text}",
+                file=sys.stderr,
+            )
 
 
 def main():
@@ -512,7 +835,10 @@ def main():
             author_association = event_payload["comment"]["author_association"]
             allowed_associations = {"OWNER", "MEMBER", "COLLABORATOR"}
             if author_association not in allowed_associations:
-                print(f"User association '{author_association}' not authorized to trigger code review. Exiting.", file=sys.stderr)
+                print(
+                    f"User association '{author_association}' not authorized to trigger code review. Exiting.",
+                    file=sys.stderr,
+                )
                 sys.exit(0)
 
             if "pull_request" not in event_payload["issue"]:
@@ -554,11 +880,34 @@ def main():
         print(f"Initialising GenAI Client (Model: {model_name}) using Vertex AI authentication...", file=sys.stderr)
         client = genai.Client(vertexai=True, project=project, location=location)
     else:
-        print(f"Initialising GenAI Client (Model: {model_name}) using Google AI Studio API Key authentication...", file=sys.stderr)
+        print(
+            f"Initialising GenAI Client (Model: {model_name}) using Google AI Studio API Key authentication...",
+            file=sys.stderr,
+        )
         client = genai.Client(api_key=gemini_api_key)
 
     config = load_config()
     system_instruction = load_system_instruction(repository, pr_number, config)
+
+    # Load workspace rules (AGENTS.md, etc.)
+    workspace_rules = load_workspace_rules()
+    if workspace_rules:
+        system_instruction += f"\n\n## Project Rules & Best Practices:\n{workspace_rules}"
+
+    # Assemble tools list
+    tools = [list_available_skills, load_skill_instructions]
+    auth_headers = get_google_auth_headers()
+    has_dev_knowledge = bool(auth_headers and ("X-Goog-Api-Key" in auth_headers or "Authorization" in auth_headers))
+    if has_dev_knowledge:
+        print("Registering Google Developer Knowledge MCP tools...", file=sys.stderr)
+        tools.extend([search_google_developer_knowledge, get_google_developer_documents])
+
+    # Add tools info to system instruction
+    system_instruction += "\n\n## Tools Availability:"
+    system_instruction += "\n- You have workspace skill tools: `list_available_skills` and `load_skill_instructions` to find and load local project guidelines."
+    if has_dev_knowledge:
+        system_instruction += "\n- You have Google Developer Knowledge search tools: `search_google_developer_knowledge` and `get_google_developer_documents` to query official Google APIs, Google Cloud, Firebase, and other developer docs."
+
     prompt_context = build_prompt(text_files, config)
 
     print("Generating code review...", file=sys.stderr)
@@ -567,15 +916,15 @@ def main():
         contents=prompt_context,
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
+            tools=tools,
             response_mime_type="application/json",
             response_schema=ReviewResult,
-        )
+        ),
     )
 
     review_data = json.loads(response.text)
     review = ReviewResult(**review_data)
     review = filter_review_comments(review, text_files)
-
 
     if is_dry_run:
         print("\n=== DRY RUN REVIEW SUMMARY ===", file=sys.stderr)

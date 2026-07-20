@@ -22,6 +22,8 @@ See the supporting blog post about this action [here](https://medium.com/google-
 - **Modern SDK Execution**: Leverages the modern Google GenAI SDK (`google-genai`).
 - **Enterprise-Grade Security**: Authentication via either Google Gemini API Keys or Google Cloud Workload Identity Federation (WIF).
 - **Customisable Prompts**: Supports repository-specific overrides for both reviews and triaging via simple TOML config files.
+- **Google Developer Knowledge Integration**: Automatically queries official Google developer documentation (Google Cloud, Firebase, Android, etc.) via MCP to cross-reference your changes against up-to-date best practices.
+- **On-Demand Agent Skills**: Dynamically discovers and loads project-specific formatting guidelines and coding standards from `.agents/skills` on-demand, keeping prompt contexts lightweight and relevant (bundled with defaults for Google Cloud, Gemini APIs and agentic development).
 
 ## How It Works
 
@@ -63,6 +65,37 @@ If you prefer to authenticate using a combination of **Google Cloud Workload Ide
 
 Alternatively, we can use WIF and ADC to authenticate. In this approach, we do not use persistent Gemini API key. This will be shown later.
 
+### Google Developer Knowledge MCP Integration (Optional)
+
+This action natively supports the **Google Developer Knowledge MCP API**. If available under your `GEMINI_API_KEY` (or Google Cloud Application Default Credentials), the PR reviewer agent can dynamically query official, up-to-date documentation for services like Google Cloud, Firebase, and Android to ensure your code follows best practices.
+
+To enable this capability, see [Google Developer Knowledge Setup Guide](docs/developer_knowledge.md).
+
+### On-Demand Agent Skills (Coding Guidelines)
+
+This action supports **On-Demand Skills Discovery**. Instead of cramming all your repository's formatting rules, coding guidelines, and API specs directly into the prompt context (which wastes tokens and confuses the model), the reviewer agent queries a list of available guidelines and loads the relevant instructions dynamically as needed.
+
+#### 1. Default (Built-in) Skills Included
+The action comes pre-packaged with a comprehensive set of default skills that are automatically available for every run. These cover:
+*   **Google Enterprise & Agent Development**: Best practices for Google ADK (Agent Development Kit), Gemini Agents API, serving endpoint management, prompt orchestration, and model tuning.
+*   **Google Cloud Best Practices**: Official architecture patterns, operational excellence, reliability, performance, security, and GCS/Cloud Run/GKE setup.
+*   **Data Analytics**: BigQuery query optimization, BigFrames, property graphs, and time-series forecasting.
+
+#### 2. Adding Custom Skills to Your Repository
+To add project-specific coding standards or team rules that your PR reviewer should check against:
+1.  Create a folder named `.agents/skills/` at the root of your repository.
+2.  Add a subdirectory for your skill, and create a `SKILL.md` file inside it (e.g. `.agents/skills/my-react-rules/SKILL.md`).
+3.  Format the file with a YAML frontmatter header containing its name and description:
+    ```markdown
+    ---
+    name: "My Project Style Guide"
+    description: "Rules for component structure, CSS modules, and custom hooks"
+    ---
+    # Instructions
+    Write your detailed rules here...
+    ```
+4.  Commit and push these files. The PR review agent will automatically detect your project's custom guidelines and invoke them when reviewing relevant code changes.
+
 ### Setup Using Install-Gemini-Code-Review-Action Skill (Recommended)
 
 If you are using an agentic coding environment like Google Antigravity, you can install and configure this action and its triage workflow automatically using Dazbo's skill from [derailed-dash/dazbo-agent-skills](https://github.com/derailed-dash/dazbo-agent-skills).
@@ -88,7 +121,7 @@ Once installed, simply ask your agent:
 
 ### Alternative Manual Setup: PR Review Action Definition
 
-One-time step: add this GitHub Action to your repository, by copying the starter example workflow [gemini-review.yml](file:///home/dazbo/localdev/gemini-review-action/starter-examples/gemini-review.yml) to `.github/workflows/gemini-review.yml` in your repo (or use the inline template below):
+One-time step: add this GitHub Action to your repository, by copying the starter example workflow [gemini-review.yml](starter-examples/gemini-review.yml) to `.github/workflows/gemini-review.yml` in your repo (or use the inline template below):
 
 ```yaml
 name: "🔎 Dazbo's Gemini Code Review"
@@ -207,7 +240,7 @@ If the workflow is configured to allow triggering via comments (e.g. with the `i
 
 ### Issues Triage Action Definition
 
-Add this GitHub Action to your repository, by copying the starter example workflow [gemini-triage.yml](file:///home/dazbo/localdev/gemini-review-action/starter-examples/gemini-triage.yml) to `.github/workflows/gemini-triage.yml` in your repo (or use the inline template below):
+Add this GitHub Action to your repository, by copying the starter example workflow [gemini-triage.yml](starter-examples/gemini-triage.yml) to `.github/workflows/gemini-triage.yml` in your repo (or use the inline template below):
 
 ```yaml
 name: "🏷️ Dazbo's Gemini Issue Triage"
@@ -267,8 +300,8 @@ core_file_patterns = ["*.md", "pyproject.toml", "package.json", "go.mod", "Cargo
 ### Custom Prompts / Instructions
 
 This action bundles high-quality default prompt configurations for both review and triage:
-* **Default Review Prompt:** [starter-examples/gemini-review.toml](file:///home/dazbo/localdev/gemini-review-action/starter-examples/gemini-review.toml)
-* **Default Triage Prompt:** [starter-examples/gemini-triage.toml](file:///home/dazbo/localdev/gemini-review-action/starter-examples/gemini-triage.toml)
+* **Default Review Prompt:** [starter-examples/gemini-review.toml](starter-examples/gemini-review.toml)
+* **Default Triage Prompt:** [starter-examples/gemini-triage.toml](starter-examples/gemini-triage.toml)
 
 You can customize or completely override the prompt instructions given to the review or triage reviewers on a repository-by-repository basis:
 

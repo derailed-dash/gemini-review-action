@@ -16,6 +16,7 @@ Outputs and logs (including errors and progress messages) are printed to stderr
 and stdout, which are viewable in the GitHub Actions runner execution logs
 for the workflow run.
 """
+
 import json
 import os
 import sys
@@ -31,7 +32,10 @@ DEFAULT_TIMEOUT = 60
 
 class TriageResult(BaseModel):
     """Represents the structured issue triage results returned by the Gemini model."""
-    selected_labels: list[str] = Field(description="List of appropriate labels selected from the available labels list. Must match available labels exactly.")
+
+    selected_labels: list[str] = Field(
+        description="List of appropriate labels selected from the available labels list. Must match available labels exactly."
+    )
     reasoning: str = Field(description="A brief explanation of why these labels were selected (1-2 sentences).")
 
 
@@ -77,7 +81,9 @@ def load_triage_prompt(issue_title: str, issue_body: str, available_labels: list
     return prompt
 
 
-def apply_labels(repository: str, issue_number: int, labels: list, headers: dict, timeout: int = DEFAULT_TIMEOUT) -> None:
+def apply_labels(
+    repository: str, issue_number: int, labels: list, headers: dict, timeout: int = DEFAULT_TIMEOUT
+) -> None:
     """Apply the selected labels to the GitHub issue."""
     if not labels:
         print("No labels selected to apply. Skipping API request.", file=sys.stderr)
@@ -153,7 +159,10 @@ def main():
         print(f"Initialising GenAI Client (Model: {model_name}) using Vertex AI authentication...", file=sys.stderr)
         client = genai.Client(vertexai=True, project=project, location=location)
     else:
-        print(f"Initialising GenAI Client (Model: {model_name}) using Google AI Studio API Key authentication...", file=sys.stderr)
+        print(
+            f"Initialising GenAI Client (Model: {model_name}) using Google AI Studio API Key authentication...",
+            file=sys.stderr,
+        )
         client = genai.Client(api_key=gemini_api_key)
 
     triage_prompt = load_triage_prompt(issue_title, issue_body, available_labels)
@@ -165,7 +174,7 @@ def main():
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=TriageResult,
-        )
+        ),
     )
 
     result_data = json.loads(response.text)
