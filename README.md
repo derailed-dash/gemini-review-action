@@ -498,70 +498,90 @@ GitHub Actions are versioned by Git tags. When other repositories consume this a
 
 Follow this step-by-step workflow:
 
-#### Step 1. Commit and Push Your Changes
+#### Step 1. Bump the Version and Synchronise the Lockfile
+
+Update the version number in [pyproject.toml](file:///home/dazbo/localdev/gemini-review-action/pyproject.toml) to reflect the new release (e.g. `1.3.1`). Then, synchronise your lockfile to match the updated version:
+
+```bash
+# After modifying pyproject.toml
+uv sync
+```
+
+#### Step 2. Commit and Push Your Changes
 
 Ensure all your local tests pass successfully, then commit and push your changes to the main branch:
 
 ```bash
-git add .
-git commit -m "feat: do some stuff"
+git add pyproject.toml uv.lock
+git commit -m "chore(release): bump version to v1.3.1"
 git push origin main
 ```
 
-#### Step 2. Update the Git Tags Locally
+#### Step 3. Update the Git Tags Locally & Push to Origin
 
-To let users lock to specific versions (like `v1.1.0`) while still allowing others to automatically receive updates via the major version tag (`v1`), create or move these tags on your local machine:
+To let users lock to specific versions (like `v1.3.1`) while still allowing others to automatically receive updates via the major version tag (`v1`), create or move these tags on your local machine and push them:
 
-1. **Create the minor/patch tag** (e.g. `v1.1.0`):
+1. **Create the minor/patch tag** (e.g. `v1.3.1`):
    ```bash
-   git tag -fa v1.1.0 -m "Release version v1.1.0"
+   git tag -fa v1.3.1 -m "Release version v1.3.1"
    ```
 2. **Move the major version tag** (`v1`) to point to this new release:
    ```bash
-   git tag -fa v1 -m "Update v1 tag to point to v1.1.0"
+   git tag -fa v1 -m "Update v1 tag to point to v1.3.1"
    ```
 3. **Push the tags to GitHub** (you must use the `--force` flag to update the existing `v1` tag on the remote server):
    ```bash
-   git push origin v1.1.0
+   git push origin v1.3.1
    git push origin v1 --force
    ```
 
-#### Step 3. Draft and Publish the Release on GitHub
+#### Step 4. Draft and Publish the Release on GitHub
 
-To make the new version officially available and visible on the GitHub Marketplace:
+To make the new version officially available, update the changelog, and ensure it is visible on the GitHub Marketplace:
 
 1. Open the repository on GitHub.
 2. In the right-hand sidebar, locate the **Releases** section and click **Draft a new release** (or click the gear icon and select *Create a release*).
 3. Click the **Choose a tag** dropdown:
-   * Type in the version you just pushed (e.g. `v1.1.0`).
+   * Type in the version you just pushed (e.g. `v1.3.1`).
    * Select it from the dropdown.
-4. Under **Release title**, enter a title for the version (e.g. `v1.1.0 - Configurable language & testing suite`).
+4. Under **Release title**, enter a title for the version (e.g. `v1.3.1 - MCP and Workspace Skills Integration`).
 5. **Publish to the Marketplace:**
    * Tick the checkbox next to **Publish this Action to the GitHub Marketplace**.
    * *If this is your first time publishing this action:* Accept the GitHub Developer Agreement, select a primary category (e.g. `Code quality` or `Utilities`), and customise the colour and icon for the marketplace listing card.
 6. Write a summary of changes in the description box, or click **Generate release notes** to automatically construct them from your commit logs.
 7. Click **Publish release**.
 
-#### Example: Releasing Version `v1.1.0`
+#### Example: Releasing Version `v1.3.1`
 
-Here is a full example of checking tag status and releasing version `v1.1.0`:
+Here is a full example of checking tag status, bumping the version, and releasing version `v1.3.1`:
 
 1. **Check current tag status:**
    Find the closest tag and see how many commits the branch is ahead by:
    ```bash
    git describe --tags
-   # Example output: v1-4-gb824f0f (4 commits ahead of v1)
+   # Example output: v1.3.0-4-gb824f0f (4 commits ahead of v1.3.0)
    ```
 
-2. **Create the minor/patch tag and move the major version tag locally:**
+2. **Bump the version in pyproject.toml and synchronise the lockfile:**
+   Ensure the version is set to `1.3.1` in `pyproject.toml`, then run:
    ```bash
-   git tag -fa v1.1.0 -m "Release version v1.1.0"
-   git tag -fa v1 -m "Update v1 tag to point to v1.1.0"
+   uv sync
+   git commit -am "chore(release): bump version to v1.3.1"
+   git push origin main
    ```
 
-3. **Push tags to remote (using `--force` to update the existing `v1` tag on GitHub):**
+3. **Create the minor/patch tag and move the major version tag locally:**
    ```bash
-   git push origin v1.1.0
+   git tag -fa v1.3.1 -m "Release version v1.3.1"
+   git tag -fa v1 -m "Update v1 tag to point to v1.3.1"
+   ```
+
+4. **Push tags to remote (using `--force` to update the existing `v1` tag on GitHub):**
+   ```bash
+   git push origin v1.3.1
    git push origin v1 --force
    ```
+
+5. **Publish the Release:**
+   Follow Step 4 to publish the release on GitHub.
 
