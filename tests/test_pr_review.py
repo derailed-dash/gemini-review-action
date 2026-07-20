@@ -441,3 +441,80 @@ def test_parse_skill_metadata(mocker):
     mocker.patch("builtins.open", mocker.mock_open(read_data="# Heading Skill\nSome content"))
     meta = parse_skill_metadata("some/folder/path/file-based-skill.md")
     assert meta["name"] == "Heading Skill"
+
+    # 3. Multiline frontmatter block scalar (using >-)
+    yaml_multiline_block = """---
+name: Multiline Block Skill
+description: >-
+  This is a long description
+  that spans multiple lines
+---
+"""
+    mocker.patch("builtins.open", mocker.mock_open(read_data=yaml_multiline_block))
+    meta = parse_skill_metadata("some/folder/path/SKILL.md")
+    assert meta["name"] == "Multiline Block Skill"
+    assert meta["description"] == "This is a long description that spans multiple lines"
+
+    # 4. Standard multiline indented append (without block scalar)
+    yaml_multiline_append = """---
+name: Standard Multiline Skill
+description: First line
+  and second line
+---
+"""
+    mocker.patch("builtins.open", mocker.mock_open(read_data=yaml_multiline_append))
+    meta = parse_skill_metadata("some/folder/path/SKILL.md")
+    assert meta["name"] == "Standard Multiline Skill"
+    assert meta["description"] == "First line and second line"
+
+
+def test_get_google_developer_documents_success(mocker):
+    from gemini_pr_review import get_google_developer_documents
+
+    mocker.patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
+    mock_post = mocker.patch("requests.post")
+    mock_resp = mocker.Mock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "result": {"content": [{"type": "text", "text": "Detailed setup instructions for GKE."}]}
+    }
+    mock_post.return_value = mock_resp
+
+    res = get_google_developer_documents(["documents/docs.cloud.google.com/gke"])
+    assert "Detailed setup instructions for GKE." in res
+
+
+def test_get_google_developer_documents_no_auth(mocker):
+    from gemini_pr_review import get_google_developer_documents
+
+    mocker.patch.dict(os.environ, {}, clear=True)
+    mocker.patch("google.auth.default", side_effect=Exception("No ADC"))
+
+    res = get_google_developer_documents(["documents/docs.cloud.google.com/gke"])
+    assert "Error: No API key or Application Default Credentials found." in res
+
+
+def test_get_google_developer_documents_api_error(mocker):
+    from gemini_pr_review import get_google_developer_documents
+
+    mocker.patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
+    mock_post = mocker.patch("requests.post")
+    mock_resp = mocker.Mock()
+    mock_resp.status_code = 404
+    mock_resp.text = "Not found"
+    mock_post.return_value = mock_resp
+
+    res = get_google_developer_documents(["documents/docs.cloud.google.com/gke"])
+    assert "Error from Google Developer Knowledge API: 404" in res
+
+
+def test_load_workspace_rules_success(mocker):
+    from gemini_pr_review import load_workspace_rules
+
+    mocker.patch("os.path.exists", side_effect=lambda path: path == "AGENTS.md")
+    mocker.patch("os.path.isfile", side_effect=lambda path: path == "AGENTS.md")
+    mocker.patch("builtins.open", mocker.mock_open(read_data="My Project Rules"))
+
+    rules = load_workspace_rules()
+    assert "=== Rules from AGENTS.md ===" in rules
+    assert "My Project Rules" in rules

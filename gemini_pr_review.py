@@ -337,13 +337,22 @@ def parse_skill_metadata(skill_path: str) -> dict[str, str]:
         match = re.match(r"^---\s*\n(.*?)\n---\s*\n", content, re.DOTALL)
         if match:
             yaml_content = match.group(1)
-            for line in yaml_content.splitlines():
-                if ":" in line:
+            yaml_lines = yaml_content.splitlines()
+            current_key = None
+            for line in yaml_lines:
+                if ":" in line and not line.startswith(" "):
                     key, val = line.split(":", 1)
                     key = key.strip().lower()
                     val = val.strip().strip('"').strip("'")
                     if key in ("name", "description"):
                         metadata[key] = val
+                        current_key = key
+                elif current_key and line.startswith(" "):
+                    val = line.strip().strip('"').strip("'")
+                    if metadata[current_key] in (">-", ">", "|", "|-"):
+                        metadata[current_key] = val
+                    else:
+                        metadata[current_key] += " " + val
         else:
             lines = [line.strip() for line in content.splitlines() if line.strip()]
             for line in lines:
