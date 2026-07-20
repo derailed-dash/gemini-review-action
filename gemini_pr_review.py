@@ -922,13 +922,14 @@ def main():
         ),
     )
 
-    review_data = json.loads(response.text)
     if response.usage_metadata:
         usage = response.usage_metadata
         print(
             f"Gemini Token Usage: Input (Prompt): {usage.prompt_token_count} | Output (Candidates): {usage.candidates_token_count} | Total: {usage.total_token_count}",
             file=sys.stderr,
         )
+
+    review_data = json.loads(response.text)
 
     review = ReviewResult(**review_data)
     review = filter_review_comments(review, text_files)
