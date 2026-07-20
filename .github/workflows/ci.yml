@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install
+
+      - name: Run lint and format checks
+        run: |
+          uvx codespell@latest -s
+          uvx ruff@latest check .
+          uvx ruff@latest format --check .
+
+      - name: Run unit tests
+        run: uv run pytest
