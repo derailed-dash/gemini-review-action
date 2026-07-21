@@ -28,7 +28,16 @@ To provide Gemini with project-wide awareness, the script traverses the workspac
 * **Sparse Context Mode (> 1.5 MB):**
   If the repository is large, the script generates a visual directory/file tree representation of the codebase using `generate_file_tree()`. It also reads the full contents of only the core documentation or manifest files matching `core_file_patterns` (like `*.md`, `package.json`, `go.mod`, etc.) using `is_core_file()`.
 
-### 3. Structured Output Schemas
+### 3. Gemini Context Caching Engine
+To drastically reduce API costs and latency for large codebase contexts, `gemini_pr_review.py` incorporates native **Gemini Context Caching**:
+
+* **Threshold Verification**: If the codebase context exceeds 100,000 characters (~32,768 tokens, Gemini's minimum caching requirement), context caching is automatically activated.
+* **Active Cache Lookup (`client.caches.list()`)**: Before creating a new cache, the script queries active server-side caches matching the repository display name (`repo-cache-{repo}`). If an unexpired cache handle exists (within the 1-hour TTL window), it reuses the active handle directly across multi-turn tool/skill calls and successive PR pushes.
+* **Cache Provisioning (`client.caches.create()`)**: If no active cache handle is found, the script provisions a new `CachedContent` resource containing the codebase context, `system_instruction`, and pre-parsed `tools`.
+* **Cost & Multi-Turn Optimisation**: Input tokens billed against the cached handle receive a **75% discount**. Furthermore, multi-turn tool interactions (such as Google Developer Knowledge MCP searches or skill lookups) reference the cached handle without re-billing the 250,000-token codebase context on subsequent turns.
+* **Resilient Fallback**: If cache creation or lookup fails, the script seamlessly falls back to direct context generation without interrupting the CI review pipeline.
+
+### 4. Structured Output Schemas
 Gemini is forced to return structured JSON adhering to the Pydantic schemas:
 * `InlineComment`:
   - `path`: File path.
@@ -42,7 +51,7 @@ Gemini is forced to return structured JSON adhering to the Pydantic schemas:
   - `general_feedback`: List of highlights or observations.
   - `comments`: List of `InlineComment` instances.
 
-### 4. Resilient Review Submissions
+### 5. Resilient Review Submissions
 Submitting reviews with line-specific comments via GitHub's API can be fragile (e.g. if the model specifies a line index that falls outside the diff range).
 * **Atomic Run:** The script first attempts to post the summary and all inline comments in a single transaction via `POST /repos/{owner}/{repo}/pulls/{number}/reviews`.
 * **Resilient Fallback:** If the atomic post fails (e.g. returns HTTP 422), the script catches the failure, posts the review summary comment, and attempts to publish individual comments one-by-one. This ensures valid comments are still delivered while preventing a CI checkout block.
@@ -51,7 +60,7 @@ Submitting reviews with line-specific comments via GitHub's API can be fragile (
 
 ## 🏷️ Issue Triage Script (`gemini_issue_triage.py`)
 
-The issue triage script automatically categorizes and labels new issues to streamline management.
+The issue triage script automatically categorises and labels new issues to streamline management.
 
 ### 1. Label Triage Retrieval
 * The script calls `get_available_labels()` to fetch all labels currently configured on the repository, handling pagination dynamically.
@@ -86,4 +95,9 @@ core_file_patterns = [
     "composer.json", "*.csproj", "*.sln", "Dockerfile", "docker-compose.yml",
     "gemini-review.toml", "action.yml"
 ]
+
+# Gemini Context Caching (Optional)
+enable_context_caching = true  # Enable native Gemini Context Caching for large repos (default: true)
+cache_ttl_seconds = 3600       # Cache TTL in seconds (default: 3600 / 1 hour)
 ```
+

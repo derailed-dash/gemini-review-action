@@ -48,7 +48,10 @@ class InlineComment(BaseModel):
     )
     code_suggestion: str | None = Field(
         None,
-        description="Optional drop-in code suggestion replacement. Must match the exact structure and indentation of the replaced code, formatted as a suggestion.",
+        description=(
+            "Optional drop-in code suggestion replacement. Must match the exact structure and indentation of the"
+            " replaced code, formatted as a suggestion."
+        ),
     )
 
 
@@ -59,9 +62,9 @@ class ReviewResult(BaseModel):
         description="A brief, high-level assessment of the Pull Request's objective and quality (2-3 sentences)."
     )
     general_feedback: list[str] = Field(
-        description="A list of general observations, positive highlights, or recurring patterns."
+        description="General feedback items, positive observations, or non-line-specific feedback."
     )
-    comments: list[InlineComment] = Field(description="List of targeted inline comments on the code changes.")
+    comments: list[InlineComment] = Field(description="Line-specific code review comments and suggestions.")
 
 
 def is_text_file(filename: str) -> bool:
@@ -133,7 +136,9 @@ def get_valid_changed_lines(patch: str) -> set[int]:
 
 
 def filter_review_comments(review: ReviewResult, text_files: list) -> ReviewResult:
-    """Filter inline comments to ensure they apply to valid lines in the diff, redirecting others to general feedback."""
+    """Filter inline comments to ensure they apply to valid lines in the diff,
+    redirecting others to general feedback.
+    """
     # Map file path -> set of valid line numbers
     file_patches = {f["filename"]: f.get("patch", "") for f in text_files}
     valid_lines_by_file = {filename: get_valid_changed_lines(patch) for filename, patch in file_patches.items()}
@@ -421,7 +426,8 @@ def load_skill_instructions(skill_id: str) -> str:
     """Retrieves the full instructions/rules for a specific skill.
 
     Args:
-        skill_id: The relative path or identifier of the skill (e.g. 'builtin:agent-aware-cli/SKILL.md' or 'git-workflow-and-versioning.md').
+        skill_id: The relative path or identifier of the skill (e.g. 'builtin:agent-aware-cli/SKILL.md' or
+            'git-workflow-and-versioning.md').
     """
     print(f"Tool Call: load_skill_instructions(skill_id='{skill_id}') invoked by agent.", file=sys.stderr)
     if skill_id.startswith("builtin:"):
@@ -488,7 +494,10 @@ def search_google_developer_knowledge(query: str) -> str:
     print(f"Tool Call: search_google_developer_knowledge(query='{query}') invoked by agent.", file=sys.stderr)
     headers = get_google_auth_headers()
     if not headers or ("X-Goog-Api-Key" not in headers and "Authorization" not in headers):
-        return "Error: No API key or Application Default Credentials found. Google Developer Knowledge Search is unavailable."
+        return (
+            "Error: No API key or Application Default Credentials found. Google Developer Knowledge Search is"
+            " unavailable."
+        )
 
     url = "https://developerknowledge.googleapis.com/mcp"
     payload = {
@@ -573,7 +582,10 @@ def load_system_instruction(repository: str | None, pr_number: int, config: dict
     """Load system instructions from Dazbo's gemini-review.toml prompt configuration."""
     prompt = config.get("prompt", "")
     if not prompt:
-        return f"You are a world-class code review agent. Analyze changes and output constructive feedback using {os.environ.get('GEMINI_LANGUAGE', 'English (UK)')} spelling."
+        return (
+            "You are a world-class code review agent. Analyze changes and output constructive feedback using"
+            f" {os.environ.get('GEMINI_LANGUAGE', 'English (UK)')} spelling."
+        )
 
     prompt = prompt.replace("!{echo $REPOSITORY}", repository or "unknown")
     prompt = prompt.replace("!{echo $PULL_REQUEST_NUMBER}", str(pr_number))
@@ -584,12 +596,10 @@ def load_system_instruction(repository: str | None, pr_number: int, config: dict
     return prompt
 
 
-def build_prompt(files: list, config: dict) -> str:
-    """Consolidate file patches and file contents into a single review context."""
+def build_pr_diff_prompt(files: list) -> str:
+    """Build the dynamic PR diff patch prompt for modified files."""
     prompt_parts = []
     prompt_parts.append("Below are the files and changes included in this Pull Request:\n")
-
-    pr_filenames = {f["filename"] for f in files}
 
     for f in files:
         filename = f["filename"]
@@ -610,9 +620,14 @@ def build_prompt(files: list, config: dict) -> str:
             prompt_parts.append(full_content)
         prompt_parts.append("=========================\n")
 
-    # Add Repository Context (Hybrid Mode)
-    # Default is 1.5 MB (~375K tokens), which safely fits in Gemini's 1M+ token window
-    # while leaving plenty of headroom for the PR diff/patch and structured outputs.
+    return "\n".join(prompt_parts)
+
+
+def build_codebase_context(files: list, config: dict) -> str:
+    """Build the static repository codebase context for caching."""
+    prompt_parts = []
+    pr_filenames = {f["filename"] for f in files}
+
     max_context_bytes = config.get("max_context_bytes", 1500 * 1024)
     if "GEMINI_MAX_CONTEXT_BYTES" in os.environ:
         try:
@@ -666,7 +681,8 @@ def build_prompt(files: list, config: dict) -> str:
     repo_files = get_all_repo_files()
     other_files = [f for f in repo_files if f not in pr_filenames]
     print(
-        f"Codebase context: found {len(repo_files)} total tracked files, {len(other_files)} other files (excluding PR diff files).",
+        f"Codebase context: found {len(repo_files)} total tracked files, {len(other_files)} other files"
+        " (excluding PR diff files).",
         file=sys.stderr,
     )
 
@@ -682,7 +698,8 @@ def build_prompt(files: list, config: dict) -> str:
                 continue
 
         print(
-            f"Codebase context: total size of other text files is {total_size} bytes (limit is {max_context_bytes} bytes).",
+            f"Codebase context: total size of other text files is {total_size} bytes"
+            f" (limit is {max_context_bytes} bytes).",
             file=sys.stderr,
         )
 
@@ -701,12 +718,14 @@ def build_prompt(files: list, config: dict) -> str:
             prompt_parts.append("=========================================\n")
         else:
             print(
-                "Codebase context: running in Sparse Context Mode (attaching file tree and core manifests/documentation).",
+                "Codebase context: running in Sparse Context Mode (attaching file tree and core"
+                " manifests/documentation).",
                 file=sys.stderr,
             )
             prompt_parts.append("=== Repository Context (Large Codebase) ===")
             prompt_parts.append(
-                "Because this codebase is large, we have included the project file structure and key configuration/documentation files for context:\n"
+                "Because this codebase is large, we have included the project file structure and key"
+                " configuration/documentation files for context:\n"
             )
 
             full_tree_files = list(pr_filenames.union(set(other_files)))
@@ -727,7 +746,8 @@ def build_prompt(files: list, config: dict) -> str:
                         core_files_included.append(f)
             if core_files_included:
                 print(
-                    f"Codebase context: attached {len(core_files_included)} core configuration/documentation files: {', '.join(core_files_included)}",
+                    f"Codebase context: attached {len(core_files_included)} core configuration/documentation files:"
+                    f" {', '.join(core_files_included)}",
                     file=sys.stderr,
                 )
             else:
@@ -736,6 +756,15 @@ def build_prompt(files: list, config: dict) -> str:
             prompt_parts.append("==========================================\n")
 
     return "\n".join(prompt_parts)
+
+
+def build_prompt(files: list, config: dict) -> str:
+    """Consolidate file patches and file contents into a single review context."""
+    pr_prompt = build_pr_diff_prompt(files)
+    codebase_ctx = build_codebase_context(files, config)
+    if codebase_ctx:
+        return f"{pr_prompt}\n\n{codebase_ctx}"
+    return pr_prompt
 
 
 def post_review(
@@ -782,7 +811,8 @@ def post_review(
             print(f"Posted comment {idx + 1}/{len(comments_payload)} successfully.", file=sys.stderr)
         else:
             print(
-                f"Error posting comment {idx + 1} on {c['path']} (line {c['line']}): {res_comment.status_code} - {res_comment.text}",
+                f"Error posting comment {idx + 1} on {c['path']} (line {c['line']}): {res_comment.status_code} -"
+                f" {res_comment.text}",
                 file=sys.stderr,
             )
 
@@ -897,36 +927,188 @@ def main():
     # Assemble tools list
     tools = [list_available_skills, load_skill_instructions]
     auth_headers = get_google_auth_headers()
-    has_dev_knowledge = bool(auth_headers and ("X-Goog-Api-Key" in auth_headers or "Authorization" in auth_headers))
+    disable_dev_k = os.environ.get("DISABLE_DEVELOPER_KNOWLEDGE", "false").lower() == "true"
+    has_dev_knowledge = bool(
+        not disable_dev_k and auth_headers and ("X-Goog-Api-Key" in auth_headers or "Authorization" in auth_headers)
+    )
     if has_dev_knowledge:
         print("Registering Google Developer Knowledge MCP tools...", file=sys.stderr)
         tools.extend([search_google_developer_knowledge, get_google_developer_documents])
 
     # Add tools info to system instruction
     system_instruction += "\n\n## Tools Availability:"
-    system_instruction += "\n- You have workspace skill tools: `list_available_skills` and `load_skill_instructions` to find and load local project guidelines."
+    system_instruction += (
+        "\n- You have workspace skill tools: `list_available_skills` and `load_skill_instructions` to find and load"
+        " local project guidelines."
+    )
     if has_dev_knowledge:
-        system_instruction += "\n- You have Google Developer Knowledge search tools: `search_google_developer_knowledge` and `get_google_developer_documents` to query official Google APIs, Google Cloud, Firebase, and other developer docs."
+        system_instruction += (
+            "\n- You have Google Developer Knowledge search tools: `search_google_developer_knowledge` and"
+            " `get_google_developer_documents` to query official Google APIs, Google Cloud, Firebase, and other"
+            " developer docs."
+        )
 
-    prompt_context = build_prompt(text_files, config)
+    pr_diff_prompt = build_pr_diff_prompt(text_files)
+    codebase_context = build_codebase_context(text_files, config)
+    full_prompt = f"{pr_diff_prompt}\n\n{codebase_context}" if codebase_context else pr_diff_prompt
 
-    print("Generating code review...", file=sys.stderr)
-    response = client.models.generate_content(
-        model=model_name,
-        contents=prompt_context,
-        config=types.GenerateContentConfig(
+    enable_caching = config.get("enable_context_caching", True)
+    cache_ttl_seconds = config.get("cache_ttl_seconds", 3600)
+    cache_ttl = f"{cache_ttl_seconds}s"
+
+    cached_content_name = None
+    contents_to_send = full_prompt
+    is_reused_cache = False
+
+    if enable_caching and hasattr(client, "caches") and codebase_context:
+        try:
+            # Gemini Context Caching requires minimum 32,768 tokens (approx 100,000+ characters)
+            if len(codebase_context) > 100000:
+                clean_repo = repository.replace("/", "-").replace("\\", "-") if repository else "repo"
+                display_name = f"repo-cache-{clean_repo}"
+
+                # Check if an active cache already exists for this repository display_name
+                existing_cache = None
+                try:
+                    active_caches = client.caches.list()
+                    for cache_item in active_caches:
+                        if getattr(cache_item, "display_name", None) == display_name:
+                            existing_cache = cache_item
+                            break
+                except Exception as list_err:
+                    print(f"Notice: Cache listing failed ({list_err}), creating fresh cache.", file=sys.stderr)
+
+                if existing_cache:
+                    cached_content_name = existing_cache.name
+                    contents_to_send = pr_diff_prompt
+                    is_reused_cache = True
+                    print(
+                        f"Reusing active Gemini context cache ({display_name}: {cached_content_name})...",
+                        file=sys.stderr,
+                    )
+                else:
+                    print(f"Creating Gemini context cache ({display_name})...", file=sys.stderr)
+                    parsed_tools = None
+                    if tools:
+                        try:
+                            parsed_cfg = client.models._parse_config(types.GenerateContentConfig(tools=tools))
+                            parsed_tools = parsed_cfg.tools
+                        except Exception:
+                            parsed_tools = None
+
+                    cache_obj = client.caches.create(
+                        model=model_name,
+                        config=types.CreateCachedContentConfig(
+                            contents=[codebase_context],
+                            display_name=display_name,
+                            system_instruction=system_instruction,
+                            tools=parsed_tools,
+                            ttl=cache_ttl,
+                        ),
+                    )
+                    cached_content_name = cache_obj.name
+                    contents_to_send = pr_diff_prompt
+                    is_reused_cache = False
+                    print(f"Context cache active: {cached_content_name}", file=sys.stderr)
+        except Exception as e:
+            print(
+                f"Warning: Context caching unavailable or skipped ({e}). Proceeding with direct context.",
+                file=sys.stderr,
+            )
+            cached_content_name = None
+            contents_to_send = full_prompt
+            is_reused_cache = False
+
+    if cached_content_name:
+        gen_config = types.GenerateContentConfig(
+            cached_content=cached_content_name,
+            response_mime_type="application/json",
+            response_schema=ReviewResult,
+        )
+    else:
+        gen_config = types.GenerateContentConfig(
             system_instruction=system_instruction,
             tools=tools,
             response_mime_type="application/json",
             response_schema=ReviewResult,
-        ),
+        )
+
+    print("Generating code review...", file=sys.stderr)
+
+    response = client.models.generate_content(
+        model=model_name,
+        contents=contents_to_send,
+        config=gen_config,
     )
 
     if response.usage_metadata:
         usage = response.usage_metadata
+        prompt_tokens = usage.prompt_token_count or 0
+        cached_tokens = getattr(usage, "cached_content_token_count", 0) or 0
+        candidates_tokens = usage.candidates_token_count or 0
+        total_tokens = usage.total_token_count or 0
+
+        fresh_tokens = max(0, prompt_tokens - cached_tokens)
+        cache_percentage = (cached_tokens / prompt_tokens * 100) if prompt_tokens > 0 else 0.0
+
+        cache_origin_str = "♻️ Reused (Cross-PR Push)" if is_reused_cache else "✨ Fresh (Newly Created)"
+        cache_overhead_str = "⚡ 0s (Reused active handle)" if is_reused_cache else "⚡ 1-Hour TTL Active"
+
+        print("\n📊 Gemini Token Usage & Cost Efficiency Report", file=sys.stderr)
         print(
-            f"Gemini Token Usage: Input (Prompt): {usage.prompt_token_count} | Output (Candidates): {usage.candidates_token_count} | Total: {usage.total_token_count}",
+            "┌──────────────────────────────────────┬──────────────┬───────────────────────────────┐", file=sys.stderr
+        )
+        print(
+            "│ Metric                               │ Token Count  │ Benefit / Efficiency          │", file=sys.stderr
+        )
+        print(
+            "├──────────────────────────────────────┼──────────────┼───────────────────────────────┤", file=sys.stderr
+        )
+        print(
+            f"│ Total Input (Prompt) Tokens          │ {prompt_tokens:>12,d} │ Base input context            │",
             file=sys.stderr,
+        )
+        if cached_tokens > 0:
+            print(
+                f"│ ├── Cached Context Tokens            │ {cached_tokens:>12,d} │ ⚡ {cache_percentage:>5.1f}% (75%"
+                " Rate Discount)  │",
+                file=sys.stderr,
+            )
+            print(
+                f"│ └── Un-cached Fresh Tokens           │ {fresh_tokens:>12,d} │ Diff & instructions only      │",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "│ └── Cached Context Tokens            │            0 │ Direct un-cached context      │",
+                file=sys.stderr,
+            )
+        print(
+            f"│ Output (Candidates) Tokens           │ {candidates_tokens:>12,d} │ Generated review content      │",
+            file=sys.stderr,
+        )
+        if cached_tokens > 0:
+            print(
+                "├──────────────────────────────────────┼──────────────┼───────────────────────────────┤",
+                file=sys.stderr,
+            )
+            print(f"│ Cache Lifecycle Origin               │            — │ {cache_origin_str:<29s} │", file=sys.stderr)
+            print(
+                f"│ Cache Provisioning Overhead          │            — │ {cache_overhead_str:<29s} │", file=sys.stderr
+            )
+            print(
+                "│ Intra-Run Multi-Turn Re-billing      │            — │ 🛡️ 0 Tokens Re-billed / Turn  │",
+                file=sys.stderr,
+            )
+        print(
+            "├──────────────────────────────────────┼──────────────┼───────────────────────────────┤", file=sys.stderr
+        )
+        print(
+            f"│ Total Session Tokens                 │ {total_tokens:>12,d} │ Total processed by Gemini     │",
+            file=sys.stderr,
+        )
+        print(
+            "└──────────────────────────────────────┴──────────────┴───────────────────────────────┘\n", file=sys.stderr
         )
 
     review_data = json.loads(response.text)

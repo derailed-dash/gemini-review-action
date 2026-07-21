@@ -34,7 +34,9 @@ class TriageResult(BaseModel):
     """Represents the structured issue triage results returned by the Gemini model."""
 
     selected_labels: list[str] = Field(
-        description="List of appropriate labels selected from the available labels list. Must match available labels exactly."
+        description=(
+            "List of appropriate labels selected from the available labels list. Must match available labels exactly."
+        )
     )
     reasoning: str = Field(description="A brief explanation of why these labels were selected (1-2 sentences).")
 
