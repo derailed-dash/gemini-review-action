@@ -534,10 +534,12 @@ def test_context_caching_logic(mocker):
         },
     )
 
-    # Mock git files to return large prompt context
-    large_patch = "a" * 120000
-    mocker.patch("gemini_pr_review.get_local_git_files", return_value=[{"filename": "large.py", "status": "modified", "patch": large_patch}])
-    mocker.patch("gemini_pr_review.get_all_repo_files", return_value=[])
+    mocker.patch(
+        "gemini_pr_review.get_local_git_files",
+        return_value=[{"filename": "large.py", "status": "modified", "patch": "diff patch"}],
+    )
+    mocker.patch("gemini_pr_review.get_all_repo_files", return_value=["other.py"])
+    mocker.patch("gemini_pr_review.get_file_content", return_value="a" * 120000)
 
     mock_client = mocker.Mock()
     mock_cache = mocker.Mock()
@@ -551,7 +553,12 @@ def test_context_caching_logic(mocker):
     mock_response = mocker.Mock()
 
     mock_response.text = '{"summary": "OK", "general_feedback": [], "comments": []}'
-    mock_response.usage_metadata = mocker.Mock(prompt_token_count=150000, candidates_token_count=100, total_token_count=150100, cached_content_token_count=145000)
+    mock_response.usage_metadata = mocker.Mock(
+        prompt_token_count=150000,
+        candidates_token_count=100,
+        total_token_count=150100,
+        cached_content_token_count=145000,
+    )
     mock_client.models.generate_content.return_value = mock_response
 
     mocker.patch("google.genai.Client", return_value=mock_client)
@@ -584,9 +591,12 @@ def test_context_caching_reuse_existing_cache(mocker):
         },
     )
 
-    large_patch = "a" * 120000
-    mocker.patch("gemini_pr_review.get_local_git_files", return_value=[{"filename": "large.py", "status": "modified", "patch": large_patch}])
-    mocker.patch("gemini_pr_review.get_all_repo_files", return_value=[])
+    mocker.patch(
+        "gemini_pr_review.get_local_git_files",
+        return_value=[{"filename": "large.py", "status": "modified", "patch": "diff patch"}],
+    )
+    mocker.patch("gemini_pr_review.get_all_repo_files", return_value=["other.py"])
+    mocker.patch("gemini_pr_review.get_file_content", return_value="a" * 120000)
 
     mock_client = mocker.Mock()
     existing_cache = mocker.Mock()
@@ -596,7 +606,12 @@ def test_context_caching_reuse_existing_cache(mocker):
 
     mock_response = mocker.Mock()
     mock_response.text = '{"summary": "OK", "general_feedback": [], "comments": []}'
-    mock_response.usage_metadata = mocker.Mock(prompt_token_count=150000, candidates_token_count=100, total_token_count=150100, cached_content_token_count=145000)
+    mock_response.usage_metadata = mocker.Mock(
+        prompt_token_count=150000,
+        candidates_token_count=100,
+        total_token_count=150100,
+        cached_content_token_count=145000,
+    )
     mock_client.models.generate_content.return_value = mock_response
 
     mocker.patch("google.genai.Client", return_value=mock_client)
@@ -608,5 +623,3 @@ def test_context_caching_reuse_existing_cache(mocker):
     assert not mock_client.caches.create.called
     gen_call_args = mock_client.models.generate_content.call_args
     assert gen_call_args.kwargs["config"].cached_content == "cachedContents/existing-cache-456"
-
-

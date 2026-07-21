@@ -584,12 +584,10 @@ def load_system_instruction(repository: str | None, pr_number: int, config: dict
     return prompt
 
 
-def build_prompt(files: list, config: dict) -> str:
-    """Consolidate file patches and file contents into a single review context."""
+def build_pr_diff_prompt(files: list) -> str:
+    """Build the dynamic PR diff patch prompt for modified files."""
     prompt_parts = []
     prompt_parts.append("Below are the files and changes included in this Pull Request:\n")
-
-    pr_filenames = {f["filename"] for f in files}
 
     for f in files:
         filename = f["filename"]
@@ -610,9 +608,14 @@ def build_prompt(files: list, config: dict) -> str:
             prompt_parts.append(full_content)
         prompt_parts.append("=========================\n")
 
-    # Add Repository Context (Hybrid Mode)
-    # Default is 1.5 MB (~375K tokens), which safely fits in Gemini's 1M+ token window
-    # while leaving plenty of headroom for the PR diff/patch and structured outputs.
+    return "\n".join(prompt_parts)
+
+
+def build_codebase_context(files: list, config: dict) -> str:
+    """Build the static repository codebase context for caching."""
+    prompt_parts = []
+    pr_filenames = {f["filename"] for f in files}
+
     max_context_bytes = config.get("max_context_bytes", 1500 * 1024)
     if "GEMINI_MAX_CONTEXT_BYTES" in os.environ:
         try:
@@ -736,6 +739,15 @@ def build_prompt(files: list, config: dict) -> str:
             prompt_parts.append("==========================================\n")
 
     return "\n".join(prompt_parts)
+
+
+def build_prompt(files: list, config: dict) -> str:
+    """Consolidate file patches and file contents into a single review context."""
+    pr_prompt = build_pr_diff_prompt(files)
+    codebase_ctx = build_codebase_context(files, config)
+    if codebase_ctx:
+        return f"{pr_prompt}\n\n{codebase_ctx}"
+    return pr_prompt
 
 
 def post_review(
@@ -898,11 +910,12 @@ def main():
     tools = [list_available_skills, load_skill_instructions]
     auth_headers = get_google_auth_headers()
     disable_dev_k = os.environ.get("DISABLE_DEVELOPER_KNOWLEDGE", "false").lower() == "true"
-    has_dev_knowledge = bool(not disable_dev_k and auth_headers and ("X-Goog-Api-Key" in auth_headers or "Authorization" in auth_headers))
+    has_dev_knowledge = bool(
+        not disable_dev_k and auth_headers and ("X-Goog-Api-Key" in auth_headers or "Authorization" in auth_headers)
+    )
     if has_dev_knowledge:
         print("Registering Google Developer Knowledge MCP tools...", file=sys.stderr)
         tools.extend([search_google_developer_knowledge, get_google_developer_documents])
-
 
     # Add tools info to system instruction
     system_instruction += "\n\n## Tools Availability:"
@@ -910,20 +923,22 @@ def main():
     if has_dev_knowledge:
         system_instruction += "\n- You have Google Developer Knowledge search tools: `search_google_developer_knowledge` and `get_google_developer_documents` to query official Google APIs, Google Cloud, Firebase, and other developer docs."
 
-    prompt_context = build_prompt(text_files, config)
+    pr_diff_prompt = build_pr_diff_prompt(text_files)
+    codebase_context = build_codebase_context(text_files, config)
+    full_prompt = f"{pr_diff_prompt}\n\n{codebase_context}" if codebase_context else pr_diff_prompt
 
     enable_caching = config.get("enable_context_caching", True)
     cache_ttl_seconds = config.get("cache_ttl_seconds", 3600)
     cache_ttl = f"{cache_ttl_seconds}s"
 
     cached_content_name = None
-    contents_to_send = prompt_context
+    contents_to_send = full_prompt
     is_reused_cache = False
 
-    if enable_caching and hasattr(client, "caches"):
+    if enable_caching and hasattr(client, "caches") and codebase_context:
         try:
             # Gemini Context Caching requires minimum 32,768 tokens (approx 100,000+ characters)
-            if len(prompt_context) > 100000:
+            if len(codebase_context) > 100000:
                 clean_repo = repository.replace("/", "-").replace("\\", "-") if repository else "repo"
                 display_name = f"repo-cache-{clean_repo}"
 
@@ -940,9 +955,12 @@ def main():
 
                 if existing_cache:
                     cached_content_name = existing_cache.name
-                    contents_to_send = "Please review the pull request diff based on the cached repository codebase context."
+                    contents_to_send = pr_diff_prompt
                     is_reused_cache = True
-                    print(f"Reusing active Gemini context cache ({display_name}: {cached_content_name})...", file=sys.stderr)
+                    print(
+                        f"Reusing active Gemini context cache ({display_name}: {cached_content_name})...",
+                        file=sys.stderr,
+                    )
                 else:
                     print(f"Creating Gemini context cache ({display_name})...", file=sys.stderr)
                     parsed_tools = None
@@ -956,7 +974,7 @@ def main():
                     cache_obj = client.caches.create(
                         model=model_name,
                         config=types.CreateCachedContentConfig(
-                            contents=[prompt_context],
+                            contents=[codebase_context],
                             display_name=display_name,
                             system_instruction=system_instruction,
                             tools=parsed_tools,
@@ -964,15 +982,17 @@ def main():
                         ),
                     )
                     cached_content_name = cache_obj.name
-                    contents_to_send = "Please review the pull request diff based on the cached repository codebase context."
+                    contents_to_send = pr_diff_prompt
                     is_reused_cache = False
                     print(f"Context cache active: {cached_content_name}", file=sys.stderr)
         except Exception as e:
-            print(f"Warning: Context caching unavailable or skipped ({e}). Proceeding with direct context.", file=sys.stderr)
+            print(
+                f"Warning: Context caching unavailable or skipped ({e}). Proceeding with direct context.",
+                file=sys.stderr,
+            )
             cached_content_name = None
-            contents_to_send = prompt_context
+            contents_to_send = full_prompt
             is_reused_cache = False
-
 
     if cached_content_name:
         gen_config = types.GenerateContentConfig(
@@ -996,7 +1016,6 @@ def main():
         config=gen_config,
     )
 
-
     if response.usage_metadata:
         usage = response.usage_metadata
         prompt_tokens = usage.prompt_token_count or 0
@@ -1011,28 +1030,60 @@ def main():
         cache_overhead_str = "⚡ 0s (Reused active handle)" if is_reused_cache else "⚡ 1-Hour TTL Active"
 
         print("\n📊 Gemini Token Usage & Cost Efficiency Report", file=sys.stderr)
-        print("┌──────────────────────────────────────┬──────────────┬───────────────────────────────┐", file=sys.stderr)
-        print("│ Metric                               │ Token Count  │ Benefit / Efficiency          │", file=sys.stderr)
-        print("├──────────────────────────────────────┼──────────────┼───────────────────────────────┤", file=sys.stderr)
-        print(f"│ Total Input (Prompt) Tokens          │ {prompt_tokens:>12,d} │ Base input context            │", file=sys.stderr)
+        print(
+            "┌──────────────────────────────────────┬──────────────┬───────────────────────────────┐", file=sys.stderr
+        )
+        print(
+            "│ Metric                               │ Token Count  │ Benefit / Efficiency          │", file=sys.stderr
+        )
+        print(
+            "├──────────────────────────────────────┼──────────────┼───────────────────────────────┤", file=sys.stderr
+        )
+        print(
+            f"│ Total Input (Prompt) Tokens          │ {prompt_tokens:>12,d} │ Base input context            │",
+            file=sys.stderr,
+        )
         if cached_tokens > 0:
-            print(f"│ ├── Cached Context Tokens            │ {cached_tokens:>12,d} │ ⚡ {cache_percentage:>5.1f}% (75% Rate Discount)  │", file=sys.stderr)
-            print(f"│ └── Un-cached Fresh Tokens           │ {fresh_tokens:>12,d} │ Diff & instructions only      │", file=sys.stderr)
+            print(
+                f"│ ├── Cached Context Tokens            │ {cached_tokens:>12,d} │ ⚡ {cache_percentage:>5.1f}% (75% Rate Discount)  │",
+                file=sys.stderr,
+            )
+            print(
+                f"│ └── Un-cached Fresh Tokens           │ {fresh_tokens:>12,d} │ Diff & instructions only      │",
+                file=sys.stderr,
+            )
         else:
-            print("│ └── Cached Context Tokens            │            0 │ Direct un-cached context      │", file=sys.stderr)
-        print(f"│ Output (Candidates) Tokens           │ {candidates_tokens:>12,d} │ Generated review content      │", file=sys.stderr)
+            print(
+                "│ └── Cached Context Tokens            │            0 │ Direct un-cached context      │",
+                file=sys.stderr,
+            )
+        print(
+            f"│ Output (Candidates) Tokens           │ {candidates_tokens:>12,d} │ Generated review content      │",
+            file=sys.stderr,
+        )
         if cached_tokens > 0:
-            print("├──────────────────────────────────────┼──────────────┼───────────────────────────────┤", file=sys.stderr)
+            print(
+                "├──────────────────────────────────────┼──────────────┼───────────────────────────────┤",
+                file=sys.stderr,
+            )
             print(f"│ Cache Lifecycle Origin               │            — │ {cache_origin_str:<29s} │", file=sys.stderr)
-            print(f"│ Cache Provisioning Overhead          │            — │ {cache_overhead_str:<29s} │", file=sys.stderr)
-            print("│ Intra-Run Multi-Turn Re-billing      │            — │ 🛡️ 0 Tokens Re-billed / Turn  │", file=sys.stderr)
-        print("├──────────────────────────────────────┼──────────────┼───────────────────────────────┤", file=sys.stderr)
-        print(f"│ Total Session Tokens                 │ {total_tokens:>12,d} │ Total processed by Gemini     │", file=sys.stderr)
-        print("└──────────────────────────────────────┴──────────────┴───────────────────────────────┘\n", file=sys.stderr)
-
-
-
-
+            print(
+                f"│ Cache Provisioning Overhead          │            — │ {cache_overhead_str:<29s} │", file=sys.stderr
+            )
+            print(
+                "│ Intra-Run Multi-Turn Re-billing      │            — │ 🛡️ 0 Tokens Re-billed / Turn  │",
+                file=sys.stderr,
+            )
+        print(
+            "├──────────────────────────────────────┼──────────────┼───────────────────────────────┤", file=sys.stderr
+        )
+        print(
+            f"│ Total Session Tokens                 │ {total_tokens:>12,d} │ Total processed by Gemini     │",
+            file=sys.stderr,
+        )
+        print(
+            "└──────────────────────────────────────┴──────────────┴───────────────────────────────┘\n", file=sys.stderr
+        )
 
     review_data = json.loads(response.text)
 

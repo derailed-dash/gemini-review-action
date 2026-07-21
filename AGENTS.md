@@ -13,7 +13,9 @@ This repository contains the codebase for the **Gemini Code Review & Issue Triag
 - **Formatting and Lints**: Always format and check code using `ruff` and `codespell` from the root of the project:
   ```bash
   uvx codespell@latest -s
+  uvx ruff@latest format .
   uvx ruff@latest check --fix .
+  uvx ruff@latest format --check .
   ```
 
 ## Security & Path Integrity
