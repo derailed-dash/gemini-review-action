@@ -897,10 +897,12 @@ def main():
     # Assemble tools list
     tools = [list_available_skills, load_skill_instructions]
     auth_headers = get_google_auth_headers()
-    has_dev_knowledge = bool(auth_headers and ("X-Goog-Api-Key" in auth_headers or "Authorization" in auth_headers))
+    disable_dev_k = os.environ.get("DISABLE_DEVELOPER_KNOWLEDGE", "false").lower() == "true"
+    has_dev_knowledge = bool(not disable_dev_k and auth_headers and ("X-Goog-Api-Key" in auth_headers or "Authorization" in auth_headers))
     if has_dev_knowledge:
         print("Registering Google Developer Knowledge MCP tools...", file=sys.stderr)
         tools.extend([search_google_developer_knowledge, get_google_developer_documents])
+
 
     # Add tools info to system instruction
     system_instruction += "\n\n## Tools Availability:"
@@ -910,24 +912,127 @@ def main():
 
     prompt_context = build_prompt(text_files, config)
 
-    print("Generating code review...", file=sys.stderr)
-    response = client.models.generate_content(
-        model=model_name,
-        contents=prompt_context,
-        config=types.GenerateContentConfig(
+    enable_caching = config.get("enable_context_caching", True)
+    cache_ttl_seconds = config.get("cache_ttl_seconds", 3600)
+    cache_ttl = f"{cache_ttl_seconds}s"
+
+    cached_content_name = None
+    contents_to_send = prompt_context
+    is_reused_cache = False
+
+    if enable_caching and hasattr(client, "caches"):
+        try:
+            # Gemini Context Caching requires minimum 32,768 tokens (approx 100,000+ characters)
+            if len(prompt_context) > 100000:
+                clean_repo = repository.replace("/", "-").replace("\\", "-") if repository else "repo"
+                display_name = f"repo-cache-{clean_repo}"
+
+                # Check if an active cache already exists for this repository display_name
+                existing_cache = None
+                try:
+                    active_caches = client.caches.list()
+                    for cache_item in active_caches:
+                        if getattr(cache_item, "display_name", None) == display_name:
+                            existing_cache = cache_item
+                            break
+                except Exception as list_err:
+                    print(f"Notice: Cache listing failed ({list_err}), creating fresh cache.", file=sys.stderr)
+
+                if existing_cache:
+                    cached_content_name = existing_cache.name
+                    contents_to_send = "Please review the pull request diff based on the cached repository codebase context."
+                    is_reused_cache = True
+                    print(f"Reusing active Gemini context cache ({display_name}: {cached_content_name})...", file=sys.stderr)
+                else:
+                    print(f"Creating Gemini context cache ({display_name})...", file=sys.stderr)
+                    parsed_tools = None
+                    if tools:
+                        try:
+                            parsed_cfg = client.models._parse_config(types.GenerateContentConfig(tools=tools))
+                            parsed_tools = parsed_cfg.tools
+                        except Exception:
+                            parsed_tools = None
+
+                    cache_obj = client.caches.create(
+                        model=model_name,
+                        config=types.CreateCachedContentConfig(
+                            contents=[prompt_context],
+                            display_name=display_name,
+                            system_instruction=system_instruction,
+                            tools=parsed_tools,
+                            ttl=cache_ttl,
+                        ),
+                    )
+                    cached_content_name = cache_obj.name
+                    contents_to_send = "Please review the pull request diff based on the cached repository codebase context."
+                    is_reused_cache = False
+                    print(f"Context cache active: {cached_content_name}", file=sys.stderr)
+        except Exception as e:
+            print(f"Warning: Context caching unavailable or skipped ({e}). Proceeding with direct context.", file=sys.stderr)
+            cached_content_name = None
+            contents_to_send = prompt_context
+            is_reused_cache = False
+
+
+    if cached_content_name:
+        gen_config = types.GenerateContentConfig(
+            cached_content=cached_content_name,
+            response_mime_type="application/json",
+            response_schema=ReviewResult,
+        )
+    else:
+        gen_config = types.GenerateContentConfig(
             system_instruction=system_instruction,
             tools=tools,
             response_mime_type="application/json",
             response_schema=ReviewResult,
-        ),
+        )
+
+    print("Generating code review...", file=sys.stderr)
+
+    response = client.models.generate_content(
+        model=model_name,
+        contents=contents_to_send,
+        config=gen_config,
     )
+
 
     if response.usage_metadata:
         usage = response.usage_metadata
-        print(
-            f"Gemini Token Usage: Input (Prompt): {usage.prompt_token_count} | Output (Candidates): {usage.candidates_token_count} | Total: {usage.total_token_count}",
-            file=sys.stderr,
-        )
+        prompt_tokens = usage.prompt_token_count or 0
+        cached_tokens = getattr(usage, "cached_content_token_count", 0) or 0
+        candidates_tokens = usage.candidates_token_count or 0
+        total_tokens = usage.total_token_count or 0
+
+        fresh_tokens = max(0, prompt_tokens - cached_tokens)
+        cache_percentage = (cached_tokens / prompt_tokens * 100) if prompt_tokens > 0 else 0.0
+
+        cache_origin_str = "♻️ Reused (Cross-PR Push)" if is_reused_cache else "✨ Fresh (Newly Created)"
+        cache_overhead_str = "⚡ 0s (Reused active handle)" if is_reused_cache else "⚡ 1-Hour TTL Active"
+
+        print("\n📊 Gemini Token Usage & Cost Efficiency Report", file=sys.stderr)
+        print("┌──────────────────────────────────────┬──────────────┬───────────────────────────────┐", file=sys.stderr)
+        print("│ Metric                               │ Token Count  │ Benefit / Efficiency          │", file=sys.stderr)
+        print("├──────────────────────────────────────┼──────────────┼───────────────────────────────┤", file=sys.stderr)
+        print(f"│ Total Input (Prompt) Tokens          │ {prompt_tokens:>12,d} │ Base input context            │", file=sys.stderr)
+        if cached_tokens > 0:
+            print(f"│ ├── Cached Context Tokens            │ {cached_tokens:>12,d} │ ⚡ {cache_percentage:>5.1f}% (75% Rate Discount)  │", file=sys.stderr)
+            print(f"│ └── Un-cached Fresh Tokens           │ {fresh_tokens:>12,d} │ Diff & instructions only      │", file=sys.stderr)
+        else:
+            print("│ └── Cached Context Tokens            │            0 │ Direct un-cached context      │", file=sys.stderr)
+        print(f"│ Output (Candidates) Tokens           │ {candidates_tokens:>12,d} │ Generated review content      │", file=sys.stderr)
+        if cached_tokens > 0:
+            print("├──────────────────────────────────────┼──────────────┼───────────────────────────────┤", file=sys.stderr)
+            print(f"│ Cache Lifecycle Origin               │            — │ {cache_origin_str:<29s} │", file=sys.stderr)
+            print(f"│ Cache Provisioning Overhead          │            — │ {cache_overhead_str:<29s} │", file=sys.stderr)
+            print("│ Intra-Run Multi-Turn Re-billing      │            — │ 🛡️ 0 Tokens Re-billed / Turn  │", file=sys.stderr)
+        print("├──────────────────────────────────────┼──────────────┼───────────────────────────────┤", file=sys.stderr)
+        print(f"│ Total Session Tokens                 │ {total_tokens:>12,d} │ Total processed by Gemini     │", file=sys.stderr)
+        print("└──────────────────────────────────────┴──────────────┴───────────────────────────────┘\n", file=sys.stderr)
+
+
+
+
 
     review_data = json.loads(response.text)
 

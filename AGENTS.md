@@ -28,6 +28,8 @@ This repository contains the codebase for the **Gemini Code Review & Issue Triag
 
 ## Local Execution & Testing Guidance
 
+If you are asked to run a review locally, be sure to present the actual review output back to the user, as well as your relevant conclusions following the review execution.
+
 To execute `gemini_pr_review.py` or `gemini_issue_triage.py` locally for testing without running in GitHub Actions:
 
 1. **Environment Variables**:
@@ -46,3 +48,9 @@ To execute `gemini_pr_review.py` or `gemini_issue_triage.py` locally for testing
    - Always run using the virtual environment interpreter (`.venv/bin/python`) or `uv run python`.
    - Set `WaitMsBeforeAsync: 10000` (10 seconds) on `run_command` calls to allow the LLM response generation and Developer Knowledge API lookup to complete synchronously within the turn.
 
+4. **Context Cache Testing & Verification**:
+   - `gemini_pr_review.py` automatically checks for active Gemini Context Caches matching `repo-cache-{repo}` via `client.caches.list()`.
+   - If an active cache exists within the TTL window (default 1h), it reuses the cache handle directly to eliminate cache creation overhead and maximize cost savings.
+   - When executing test scripts in automated or persistent terminals, avoid sending background signals (`SIGINT`) during active API generation calls.
+
+ALWAYS count exactly how many times you executed a review, to allow the user to cross reference invocations against costs and token usage.

@@ -518,3 +518,95 @@ def test_load_workspace_rules_success(mocker):
     rules = load_workspace_rules()
     assert "=== Rules from AGENTS.md ===" in rules
     assert "My Project Rules" in rules
+
+
+def test_context_caching_logic(mocker):
+    """Test that context caching creates a cache when prompt is large enough."""
+    import sys
+
+    from gemini_pr_review import main
+
+    mocker.patch.dict(
+        os.environ,
+        {
+            "GEMINI_API_KEY": "test-key",
+            "GITHUB_REPOSITORY": "test-owner/test-repo",
+        },
+    )
+
+    # Mock git files to return large prompt context
+    large_patch = "a" * 120000
+    mocker.patch("gemini_pr_review.get_local_git_files", return_value=[{"filename": "large.py", "status": "modified", "patch": large_patch}])
+    mocker.patch("gemini_pr_review.get_all_repo_files", return_value=[])
+
+    mock_client = mocker.Mock()
+    mock_cache = mocker.Mock()
+    mock_cache.name = "cachedContents/test-cache-123"
+    mock_client.caches.create.return_value = mock_cache
+
+    mock_parsed_cfg = mocker.Mock()
+    mock_parsed_cfg.tools = []
+    mock_client.models._parse_config.return_value = mock_parsed_cfg
+
+    mock_response = mocker.Mock()
+
+    mock_response.text = '{"summary": "OK", "general_feedback": [], "comments": []}'
+    mock_response.usage_metadata = mocker.Mock(prompt_token_count=150000, candidates_token_count=100, total_token_count=150100, cached_content_token_count=145000)
+    mock_client.models.generate_content.return_value = mock_response
+
+    mocker.patch("google.genai.Client", return_value=mock_client)
+    mocker.patch.object(sys, "argv", ["gemini_pr_review.py"])
+
+    # Run main in dry-run mode
+    main()
+
+    # Verify cache creation was invoked with display_name and ttl
+    assert mock_client.caches.create.called
+    call_args = mock_client.caches.create.call_args
+    assert "repo-cache-test-owner-test-repo" in call_args.kwargs["config"].display_name
+
+    # Verify generate_content received cached_content
+    gen_call_args = mock_client.models.generate_content.call_args
+    assert gen_call_args.kwargs["config"].cached_content == "cachedContents/test-cache-123"
+
+
+def test_context_caching_reuse_existing_cache(mocker):
+    """Test that existing active cache is reused without calling caches.create."""
+    import sys
+
+    from gemini_pr_review import main
+
+    mocker.patch.dict(
+        os.environ,
+        {
+            "GEMINI_API_KEY": "test-key",
+            "GITHUB_REPOSITORY": "test-owner/test-repo",
+        },
+    )
+
+    large_patch = "a" * 120000
+    mocker.patch("gemini_pr_review.get_local_git_files", return_value=[{"filename": "large.py", "status": "modified", "patch": large_patch}])
+    mocker.patch("gemini_pr_review.get_all_repo_files", return_value=[])
+
+    mock_client = mocker.Mock()
+    existing_cache = mocker.Mock()
+    existing_cache.name = "cachedContents/existing-cache-456"
+    existing_cache.display_name = "repo-cache-test-owner-test-repo"
+    mock_client.caches.list.return_value = [existing_cache]
+
+    mock_response = mocker.Mock()
+    mock_response.text = '{"summary": "OK", "general_feedback": [], "comments": []}'
+    mock_response.usage_metadata = mocker.Mock(prompt_token_count=150000, candidates_token_count=100, total_token_count=150100, cached_content_token_count=145000)
+    mock_client.models.generate_content.return_value = mock_response
+
+    mocker.patch("google.genai.Client", return_value=mock_client)
+    mocker.patch.object(sys, "argv", ["gemini_pr_review.py"])
+
+    main()
+
+    # Verify caches.create was NOT called since existing cache was found
+    assert not mock_client.caches.create.called
+    gen_call_args = mock_client.models.generate_content.call_args
+    assert gen_call_args.kwargs["config"].cached_content == "cachedContents/existing-cache-456"
+
+

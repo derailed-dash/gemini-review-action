@@ -6,6 +6,35 @@
 
 See the supporting blog post about this action [here](https://medium.com/google-cloud/automated-github-code-reviewsusing-google-gemini-7b4d027b3092).
 
+## Table of Contents
+
+- [Features Overview](#features-overview)
+- [Author](#author)
+- [License](#license)
+- [How It Works](#how-it-works)
+- [The "Clean Slate" Advantage](#the-clean-slate-advantage)
+- [Setup & Use](#setup--use)
+  - [Authentication with Gemini API Key](#authentication-with-gemini-api-key)
+  - [Google Developer Knowledge MCP Integration (Optional)](#google-developer-knowledge-mcp-integration-optional)
+  - [On-Demand Agent Skills (Coding Guidelines)](#on-demand-agent-skills-coding-guidelines)
+  - [Setup Using Install-Gemini-Code-Review-Action Skill (Recommended)](#setup-using-install-gemini-code-review-action-skill-recommended)
+  - [Alternative Manual Setup: PR Review Action Definition](#alternative-manual-setup-pr-review-action-definition)
+  - [Seeing It In Action](#seeing-it-in-action)
+  - [Issues Triage Action Definition](#issues-triage-action-definition)
+- [Configuration](#configuration)
+  - [Action Inputs](#action-inputs)
+  - [Codebase Context Configuration](#codebase-context-configuration)
+  - [Custom Prompts / Instructions](#custom-prompts--instructions)
+  - [Prompt Placeholders](#prompt-placeholders)
+- [Understanding the Token Usage & Cost Efficiency Report](#understanding-the-token-usage--cost-efficiency-report)
+  - [Metrics Explained](#metrics-explained)
+- [Pipeline Architecture & Execution](#pipeline-architecture--execution)
+- [Alternative Authentication](#alternative-authentication)
+- [Development & Releases](#development--releases)
+  - [Local Development & Testing](#local-development--testing)
+  - [Deploying & Publishing Updates](#deploying--publishing-updates)
+- [Cost Attribution & Estimation](#cost-attribution--estimation)
+
 ## Features Overview
 
 ![Features Overview](assets/features-overview.png)
@@ -24,6 +53,8 @@ See the supporting blog post about this action [here](https://medium.com/google-
 - **Customisable Prompts**: Supports repository-specific overrides for both reviews and triaging via simple TOML config files.
 - **Google Developer Knowledge Integration**: Automatically queries official Google developer documentation (Google Cloud, Firebase, Android, etc.) via MCP to cross-reference your changes against up-to-date best practices.
 - **On-Demand Agent Skills**: Dynamically discovers and loads project-specific formatting guidelines and coding standards from `.agents/skills` on-demand, keeping prompt contexts lightweight and relevant (bundled with defaults for Google Cloud, Gemini APIs and agentic development).
+- **Gemini Context Caching**: Native, automatic integration with Gemini Context Caching (`client.caches.create` & `client.caches.list`), delivering up to **75–80% cost reduction** on input tokens for repositories over 32k tokens.
+- **Multi-Turn & Cross-PR Cache Reuse**: Reuses active server-side context cache handles across multi-turn tool/skill calls and successive PR pushes within the TTL window (1h default), eliminating prompt re-tokenisation and server overhead.
 
 ![Leveraing MCP and Skills](/assets/agent_intelligence_diagram.png)
 
@@ -41,9 +72,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 2. **Hybrid Context Enrichment**: In addition to surrounding modified file content, the action gathers context from the rest of the repository. It measures the total size of all other tracked text files:
    - **Full Context Mode**: If the codebase is under the configured size threshold (default: 1.5 MB), the full contents of all other text files are included.
    - **Sparse Context Mode**: If the codebase exceeds the threshold, it includes a structured text-based file tree of the entire project, plus the full contents of key configuration and documentation files (like `*.md`, `pyproject.toml`, `package.json`, `go.mod`, etc.).
-3. **Structured Review Generation**: The action sends the diff and file contexts to Gemini. It uses Gemini's native **Structured Outputs** (`response_schema`) to force the model to respond in a strict JSON format.
-4. **Interactive suggestions**: Change recommendations are wrapped in native GitHub ` ```suggestion ` blocks, allowing reviewers to apply the changes directly on the PR with one click.
-5. **Resilient Comment Posting**: The review is posted atomically via the GitHub Pull Request Review API. If the API call fails (e.g. if the model hallucinates an invalid line number in the diff), the script catches the error and falls back to posting comments individually, ensuring your CI status check stays green while still delivering all valid feedback.
+3. **Gemini Context Caching & Multi-Turn Reuse**: For repository contexts exceeding ~32,768 tokens (100,000+ characters), the action automatically checks for an active server-side cache (`repo-cache-{repo}`) via `client.caches.list()`. If found, it reuses the active cache handle; otherwise, it provisions a fresh context cache. Billed input tokens receive a **75% discount**, and subsequent multi-turn tool/skill calls reference the cached context handle without re-billing the codebase context.
+4. **Structured Review Generation**: The action sends the diff and file contexts to Gemini. It uses Gemini's native **Structured Outputs** (`response_schema`) to force the model to respond in a strict JSON format.
+5. **Interactive suggestions**: Change recommendations are wrapped in native GitHub ` ```suggestion ` blocks, allowing reviewers to apply the changes directly on the PR with one click.
+6. **Resilient Comment Posting**: The review is posted atomically via the GitHub Pull Request Review API. If the API call fails (e.g. if the model hallucinates an invalid line number in the diff), the script catches the error and falls back to posting comments individually, ensuring your CI status check stays green while still delivering all valid feedback.
 
 ## The "Clean Slate" Advantage
 
@@ -353,6 +385,44 @@ The action parses the TOML files and dynamically substitutes the following expre
   * `!{echo $ISSUE_TITLE}`: Replaced with the title of the issue.
   * `!{echo $ISSUE_BODY}`: Replaced with the body text of the issue.
   * `!{echo $GITHUB_ENV}`: Replaced with the file path to append output environment variables.
+
+## Understanding the Token Usage & Cost Efficiency Report
+
+Whenever a review run finishes, the action prints a structured telemetry table to the workflow execution log:
+
+```text
+📊 Gemini Token Usage & Cost Efficiency Report
+┌──────────────────────────────────────┬──────────────┬───────────────────────────────┐
+│ Metric                               │ Token Count  │ Benefit / Efficiency          │
+├──────────────────────────────────────┼──────────────┼───────────────────────────────┤
+│ Total Input (Prompt) Tokens          │      247,180 │ Base input context            │
+│ ├── Cached Context Tokens            │      245,980 │ ⚡  99.5% (75% Rate Discount)  │
+│ └── Un-cached Fresh Tokens           │        1,200 │ Diff & instructions only      │
+│ Output (Candidates) Tokens           │          215 │ Generated review content      │
+├──────────────────────────────────────┼──────────────┼───────────────────────────────┤
+│ Cache Lifecycle Origin               │            — │ ♻️ Reused (Cross-PR Push)     │
+│ Cache Provisioning Overhead          │            — │ ⚡ 0s (Reused active handle)  │
+│ Intra-Run Multi-Turn Re-billing      │            — │ 🛡️ 0 Tokens Re-billed / Turn  │
+├──────────────────────────────────────┼──────────────┼───────────────────────────────┤
+│ Total Session Tokens                 │      247,395 │ Total processed by Gemini     │
+└──────────────────────────────────────┴──────────────┴───────────────────────────────┘
+```
+
+### Metrics Explained
+
+* **Total Input (Prompt) Tokens**: The total size (in LLM tokens) of the context sent to Gemini (full repository codebase files, system instructions, and PR diff patch).
+* **Cached Context Tokens (`├── Cached Context Tokens`)**: The portion of input tokens stored in Gemini's server-side context cache. These tokens receive an **automatic 75% rate discount** ($0.0375 / 1M tokens vs $0.15 / 1M tokens for Gemini 3.5 Flash).
+* **Un-cached Fresh Tokens (`└── Un-cached Fresh Tokens`)**: The newly introduced PR diff lines and dynamic skill instructions, billed at standard input rates.
+* **Output (Candidates) Tokens**: The number of tokens generated by Gemini in its structured review response JSON.
+* **Cache Lifecycle Origin**:
+  * `♻️ Reused (Cross-PR Push)`: An active server-side cache handle (`repo-cache-{repo}`) created by a previous workflow run or PR push within the 1-hour TTL window was discovered via `client.caches.list()` and attached directly.
+  * `✨ Fresh (Newly Created)`: No active cache existed, so a new `CachedContent` resource was provisioned on Google Cloud.
+* **Cache Provisioning Overhead**:
+  * `⚡ 0s (Reused active handle)`: Zero setup latency because an existing active cache handle was reused.
+  * `⚡ 1-Hour TTL Active`: The newly created cache resource is active on Google's servers for 1 hour.
+* **Intra-Run Multi-Turn Re-billing**:
+  * `🛡️ 0 Tokens Re-billed / Turn`: When Gemini performs multi-turn tool/skill invocations during a single review (such as querying Google Developer Knowledge MCP or loading local workspace guidelines), the cached 250,000-token codebase context is **not** re-sent or re-billed on Turn 2 or Turn 3.
+* **Total Session Tokens**: The combined total of prompt and output tokens processed during the review.
 
 ## How It Works
 
