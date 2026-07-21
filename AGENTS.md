@@ -31,11 +31,12 @@ This repository contains the codebase for the **Gemini Code Review & Issue Triag
 To execute `gemini_pr_review.py` or `gemini_issue_triage.py` locally for testing without running in GitHub Actions:
 
 1. **Environment Variables**:
-   Load `GEMINI_API_KEY` from the local `.env` file before invoking Python:
+   Load `GEMINI_API_KEY` dynamically from the local `.env` file before invoking Python (do NOT hardcode API key values):
    ```bash
-   export GEMINI_API_KEY=$(grep GEMINI_API_KEY .env | cut -d= -f2 | tr -d '"' | tr -d "'")
+   export GEMINI_API_KEY=$(grep '^GEMINI_API_KEY=' .env | cut -d= -f2- | tr -d '"' | tr -d "'")
    ```
-   If a .env is not available, ask the user for the key.
+   If a `.env` file is not available, ask the user for the key.
+
    
 2. **Git Diff Context for Local PR Reviews**:
    - `gemini_pr_review.py` relies on `git diff main...HEAD`. Untracked local files are not included in `git diff`.
