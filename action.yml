@@ -27,7 +27,7 @@ inputs:
   gemini_model:
     description: 'Gemini model to use'
     required: false
-    default: 'gemini-3.5-flash'
+    default: 'gemini-3.6-flash'
   command:
     description: 'Command to run (review, triage)'
     required: false
