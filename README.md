@@ -53,8 +53,8 @@ See the supporting blog post about this action [here](https://medium.com/google-
 - **Customisable Prompts**: Supports repository-specific overrides for both reviews and triaging via simple TOML config files.
 - **Google Developer Knowledge Integration**: Automatically queries official Google developer documentation (Google Cloud, Firebase, Android, etc.) via MCP to cross-reference your changes against up-to-date best practices.
 - **On-Demand Agent Skills**: Dynamically discovers and loads project-specific formatting guidelines and coding standards from `.agents/skills` on-demand, keeping prompt contexts lightweight and relevant (bundled with defaults for Google Cloud, Gemini APIs and agentic development).
-- **Gemini Context Caching**: Native, automatic integration with Gemini Context Caching (`client.caches.create` & `client.caches.list`), delivering up to **75–80% cost reduction** on input tokens for repositories over 32k tokens.
-- **Multi-Turn & Cross-PR Cache Reuse**: Reuses active server-side context cache handles across multi-turn tool/skill calls and successive PR pushes within the TTL window (1h default), eliminating prompt re-tokenisation and server overhead.
+- **Gemini Context Caching**: Native, automatic integration with Gemini Context Caching, delivering up to **75–80% cost reduction** on input tokens for repositories over 32k tokens.
+- **Multi-Turn & Cross-PR Cache Reuse**: Reuses active server-side context cache handles across multi-turn tool/skill calls and successive PR pushes within the TTL window (1h default), eliminating prompt re-tokenisation and server overhead. This is a huge efficiency and cost saving between successive reviews.
 
 ![Leveraing MCP and Skills](/assets/agent_intelligence_diagram.png)
 

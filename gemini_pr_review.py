@@ -48,7 +48,10 @@ class InlineComment(BaseModel):
     )
     code_suggestion: str | None = Field(
         None,
-        description="Optional drop-in code suggestion replacement. Must match the exact structure and indentation of the replaced code, formatted as a suggestion.",
+        description=(
+            "Optional drop-in code suggestion replacement. Must match the exact structure and indentation of the"
+            " replaced code, formatted as a suggestion."
+        ),
     )
 
 
@@ -59,9 +62,9 @@ class ReviewResult(BaseModel):
         description="A brief, high-level assessment of the Pull Request's objective and quality (2-3 sentences)."
     )
     general_feedback: list[str] = Field(
-        description="A list of general observations, positive highlights, or recurring patterns."
+        description="General feedback items, positive observations, or non-line-specific feedback."
     )
-    comments: list[InlineComment] = Field(description="List of targeted inline comments on the code changes.")
+    comments: list[InlineComment] = Field(description="Line-specific code review comments and suggestions.")
 
 
 def is_text_file(filename: str) -> bool:
@@ -133,7 +136,9 @@ def get_valid_changed_lines(patch: str) -> set[int]:
 
 
 def filter_review_comments(review: ReviewResult, text_files: list) -> ReviewResult:
-    """Filter inline comments to ensure they apply to valid lines in the diff, redirecting others to general feedback."""
+    """Filter inline comments to ensure they apply to valid lines in the diff,
+    redirecting others to general feedback.
+    """
     # Map file path -> set of valid line numbers
     file_patches = {f["filename"]: f.get("patch", "") for f in text_files}
     valid_lines_by_file = {filename: get_valid_changed_lines(patch) for filename, patch in file_patches.items()}
@@ -421,7 +426,8 @@ def load_skill_instructions(skill_id: str) -> str:
     """Retrieves the full instructions/rules for a specific skill.
 
     Args:
-        skill_id: The relative path or identifier of the skill (e.g. 'builtin:agent-aware-cli/SKILL.md' or 'git-workflow-and-versioning.md').
+        skill_id: The relative path or identifier of the skill (e.g. 'builtin:agent-aware-cli/SKILL.md' or
+            'git-workflow-and-versioning.md').
     """
     print(f"Tool Call: load_skill_instructions(skill_id='{skill_id}') invoked by agent.", file=sys.stderr)
     if skill_id.startswith("builtin:"):
@@ -488,7 +494,10 @@ def search_google_developer_knowledge(query: str) -> str:
     print(f"Tool Call: search_google_developer_knowledge(query='{query}') invoked by agent.", file=sys.stderr)
     headers = get_google_auth_headers()
     if not headers or ("X-Goog-Api-Key" not in headers and "Authorization" not in headers):
-        return "Error: No API key or Application Default Credentials found. Google Developer Knowledge Search is unavailable."
+        return (
+            "Error: No API key or Application Default Credentials found. Google Developer Knowledge Search is"
+            " unavailable."
+        )
 
     url = "https://developerknowledge.googleapis.com/mcp"
     payload = {
@@ -573,7 +582,10 @@ def load_system_instruction(repository: str | None, pr_number: int, config: dict
     """Load system instructions from Dazbo's gemini-review.toml prompt configuration."""
     prompt = config.get("prompt", "")
     if not prompt:
-        return f"You are a world-class code review agent. Analyze changes and output constructive feedback using {os.environ.get('GEMINI_LANGUAGE', 'English (UK)')} spelling."
+        return (
+            "You are a world-class code review agent. Analyze changes and output constructive feedback using"
+            f" {os.environ.get('GEMINI_LANGUAGE', 'English (UK)')} spelling."
+        )
 
     prompt = prompt.replace("!{echo $REPOSITORY}", repository or "unknown")
     prompt = prompt.replace("!{echo $PULL_REQUEST_NUMBER}", str(pr_number))
@@ -669,7 +681,8 @@ def build_codebase_context(files: list, config: dict) -> str:
     repo_files = get_all_repo_files()
     other_files = [f for f in repo_files if f not in pr_filenames]
     print(
-        f"Codebase context: found {len(repo_files)} total tracked files, {len(other_files)} other files (excluding PR diff files).",
+        f"Codebase context: found {len(repo_files)} total tracked files, {len(other_files)} other files"
+        " (excluding PR diff files).",
         file=sys.stderr,
     )
 
@@ -685,7 +698,8 @@ def build_codebase_context(files: list, config: dict) -> str:
                 continue
 
         print(
-            f"Codebase context: total size of other text files is {total_size} bytes (limit is {max_context_bytes} bytes).",
+            f"Codebase context: total size of other text files is {total_size} bytes"
+            f" (limit is {max_context_bytes} bytes).",
             file=sys.stderr,
         )
 
@@ -704,12 +718,14 @@ def build_codebase_context(files: list, config: dict) -> str:
             prompt_parts.append("=========================================\n")
         else:
             print(
-                "Codebase context: running in Sparse Context Mode (attaching file tree and core manifests/documentation).",
+                "Codebase context: running in Sparse Context Mode (attaching file tree and core"
+                " manifests/documentation).",
                 file=sys.stderr,
             )
             prompt_parts.append("=== Repository Context (Large Codebase) ===")
             prompt_parts.append(
-                "Because this codebase is large, we have included the project file structure and key configuration/documentation files for context:\n"
+                "Because this codebase is large, we have included the project file structure and key"
+                " configuration/documentation files for context:\n"
             )
 
             full_tree_files = list(pr_filenames.union(set(other_files)))
@@ -730,7 +746,8 @@ def build_codebase_context(files: list, config: dict) -> str:
                         core_files_included.append(f)
             if core_files_included:
                 print(
-                    f"Codebase context: attached {len(core_files_included)} core configuration/documentation files: {', '.join(core_files_included)}",
+                    f"Codebase context: attached {len(core_files_included)} core configuration/documentation files:"
+                    f" {', '.join(core_files_included)}",
                     file=sys.stderr,
                 )
             else:
@@ -794,7 +811,8 @@ def post_review(
             print(f"Posted comment {idx + 1}/{len(comments_payload)} successfully.", file=sys.stderr)
         else:
             print(
-                f"Error posting comment {idx + 1} on {c['path']} (line {c['line']}): {res_comment.status_code} - {res_comment.text}",
+                f"Error posting comment {idx + 1} on {c['path']} (line {c['line']}): {res_comment.status_code} -"
+                f" {res_comment.text}",
                 file=sys.stderr,
             )
 
@@ -919,9 +937,16 @@ def main():
 
     # Add tools info to system instruction
     system_instruction += "\n\n## Tools Availability:"
-    system_instruction += "\n- You have workspace skill tools: `list_available_skills` and `load_skill_instructions` to find and load local project guidelines."
+    system_instruction += (
+        "\n- You have workspace skill tools: `list_available_skills` and `load_skill_instructions` to find and load"
+        " local project guidelines."
+    )
     if has_dev_knowledge:
-        system_instruction += "\n- You have Google Developer Knowledge search tools: `search_google_developer_knowledge` and `get_google_developer_documents` to query official Google APIs, Google Cloud, Firebase, and other developer docs."
+        system_instruction += (
+            "\n- You have Google Developer Knowledge search tools: `search_google_developer_knowledge` and"
+            " `get_google_developer_documents` to query official Google APIs, Google Cloud, Firebase, and other"
+            " developer docs."
+        )
 
     pr_diff_prompt = build_pr_diff_prompt(text_files)
     codebase_context = build_codebase_context(text_files, config)
@@ -1045,7 +1070,8 @@ def main():
         )
         if cached_tokens > 0:
             print(
-                f"│ ├── Cached Context Tokens            │ {cached_tokens:>12,d} │ ⚡ {cache_percentage:>5.1f}% (75% Rate Discount)  │",
+                f"│ ├── Cached Context Tokens            │ {cached_tokens:>12,d} │ ⚡ {cache_percentage:>5.1f}% (75%"
+                " Rate Discount)  │",
                 file=sys.stderr,
             )
             print(
