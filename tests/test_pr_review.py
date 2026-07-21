@@ -531,6 +531,7 @@ def test_context_caching_logic(mocker):
         {
             "GEMINI_API_KEY": "test-key",
             "GITHUB_REPOSITORY": "test-owner/test-repo",
+            "GITHUB_EVENT_PATH": "",
         },
     )
 
@@ -588,6 +589,7 @@ def test_context_caching_reuse_existing_cache(mocker):
         {
             "GEMINI_API_KEY": "test-key",
             "GITHUB_REPOSITORY": "test-owner/test-repo",
+            "GITHUB_EVENT_PATH": "",
         },
     )
 
