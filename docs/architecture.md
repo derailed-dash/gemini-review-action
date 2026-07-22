@@ -32,10 +32,10 @@ To provide Gemini with project-wide awareness, the script traverses the workspac
 To drastically reduce API costs and latency for large codebase contexts, `gemini_pr_review.py` incorporates native **Gemini Context Caching**:
 
 * **Threshold Verification**: If the codebase context exceeds 100,000 characters (~32,768 tokens, Gemini's minimum caching requirement), context caching is automatically activated.
-* **Active Cache Lookup (`client.caches.list()`)**: Before creating a new cache, the script queries active server-side caches matching the repository display name (`repo-cache-{repo}`). If an unexpired cache handle exists (within the 1-hour TTL window), it reuses the active handle directly across multi-turn tool/skill calls and successive PR pushes.
-* **Cache Provisioning (`client.caches.create()`)**: If no active cache handle is found, the script provisions a new `CachedContent` resource containing the codebase context, `system_instruction`, and pre-parsed `tools`.
+* **Active Cache Lookup (`client.caches.list()`)**: Before creating a new cache, the script queries active server-side caches matching the model-scoped repository display name (`repo-cache-{repo}-{model}`). It validates that the cache's model matches the requested model, skipping any caches created under a different model version to avoid `INVALID_ARGUMENT` errors.
+* **Cache Provisioning (`client.caches.create()`)**: If no matching active cache handle for the current model is found, the script provisions a new `CachedContent` resource containing the codebase context, `system_instruction`, and pre-parsed `tools`.
 * **Cost & Multi-Turn Optimisation**: Input tokens billed against the cached handle receive a **75% discount**. Furthermore, multi-turn tool interactions (such as Google Developer Knowledge MCP searches or skill lookups) reference the cached handle without re-billing the 250,000-token codebase context on subsequent turns.
-* **Resilient Fallback**: If cache creation or lookup fails, the script seamlessly falls back to direct context generation without interrupting the CI review pipeline.
+* **Resilient Fallback**: If cache creation, lookup, or generation with cached content fails for any reason, the script seamlessly falls back to direct context generation without interrupting the CI review pipeline.
 
 ### 4. Structured Output Schemas
 Gemini is forced to return structured JSON adhering to the Pydantic schemas:
