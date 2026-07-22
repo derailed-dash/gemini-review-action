@@ -106,10 +106,13 @@ def is_text_file(filename: str) -> bool:
 
 
 def _normalize_model_name(model: str | None) -> str:
-    """Normalize model string by stripping leading 'models/' and converting to lowercase."""
+    """Normalise model string by stripping leading 'models/' or publisher prefixes and converting to lowercase."""
     if not model:
         return ""
-    return model.removeprefix("models/").strip().lower()
+    name = model.strip().lower()
+    if "models/" in name:
+        name = name.split("models/")[-1]
+    return name
 
 
 def get_valid_changed_lines(patch: str) -> set[int]:

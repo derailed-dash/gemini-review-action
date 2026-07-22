@@ -747,3 +747,15 @@ def test_context_caching_generate_content_fallback(mocker):
 
     assert first_call_args.kwargs["config"].cached_content == "cachedContents/invalid-cache-999"
     assert second_call_args.kwargs["config"].cached_content is None
+
+
+def test_normalize_model_name():
+    """Test model name normalisation across various SDK and Vertex AI format strings."""
+    from gemini_pr_review import _normalize_model_name
+
+    assert _normalize_model_name(None) == ""
+    assert _normalize_model_name("") == ""
+    assert _normalize_model_name("gemini-3.5-flash") == "gemini-3.5-flash"
+    assert _normalize_model_name("models/gemini-3.5-flash") == "gemini-3.5-flash"
+    assert _normalize_model_name("publishers/google/models/gemini-3.5-flash") == "gemini-3.5-flash"
+    assert _normalize_model_name("  MODELS/GEMINI-3.6-FLASH  ") == "gemini-3.6-flash"
