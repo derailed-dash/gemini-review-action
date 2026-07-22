@@ -105,6 +105,16 @@ def is_text_file(filename: str) -> bool:
     return True
 
 
+def _normalize_model_name(model: str | None) -> str:
+    """Normalise model string by stripping leading 'models/' or publisher prefixes and converting to lowercase."""
+    if not model:
+        return ""
+    name = model.strip().lower()
+    if "models/" in name:
+        name = name.split("models/")[-1]
+    return name
+
+
 def get_valid_changed_lines(patch: str) -> set[int]:
     """Parse the diff patch to find all line numbers in the new file (RIGHT side) that are part of the diff."""
     valid_lines = set()
@@ -965,14 +975,28 @@ def main():
             # Gemini Context Caching requires minimum 32,768 tokens (approx 100,000+ characters)
             if len(codebase_context) > 100000:
                 clean_repo = repository.replace("/", "-").replace("\\", "-") if repository else "repo"
-                display_name = f"repo-cache-{clean_repo}"
+                clean_model = _normalize_model_name(model_name).replace("/", "-").replace("\\", "-")
+                display_name = f"repo-cache-{clean_repo}-{clean_model}"
+                legacy_display_name = f"repo-cache-{clean_repo}"
 
-                # Check if an active cache already exists for this repository display_name
+                # Check if an active cache already exists matching display_name and model_name
                 existing_cache = None
                 try:
                     active_caches = client.caches.list()
                     for cache_item in active_caches:
-                        if getattr(cache_item, "display_name", None) == display_name:
+                        item_display_name = getattr(cache_item, "display_name", None)
+                        if item_display_name in (display_name, legacy_display_name):
+                            item_model = getattr(cache_item, "model", None)
+                            if isinstance(item_model, str) and _normalize_model_name(
+                                item_model
+                            ) != _normalize_model_name(model_name):
+                                print(
+                                    f"Notice: Found cache ({item_display_name}: {cache_item.name}) "
+                                    f"for a different model ('{item_model}', expected '{model_name}'). "
+                                    "Skipping cache reuse.",
+                                    file=sys.stderr,
+                                )
+                                continue
                             existing_cache = cache_item
                             break
                 except Exception as list_err:
@@ -982,8 +1006,9 @@ def main():
                     cached_content_name = existing_cache.name
                     contents_to_send = pr_diff_prompt
                     is_reused_cache = True
+                    active_display_name = getattr(existing_cache, "display_name", display_name)
                     print(
-                        f"Reusing active Gemini context cache ({display_name}: {cached_content_name})...",
+                        f"Reusing active Gemini context cache ({active_display_name}: {cached_content_name})...",
                         file=sys.stderr,
                     )
                 else:
@@ -1035,11 +1060,35 @@ def main():
 
     print("Generating code review...", file=sys.stderr)
 
-    response = client.models.generate_content(
-        model=model_name,
-        contents=contents_to_send,
-        config=gen_config,
-    )
+    try:
+        response = client.models.generate_content(
+            model=model_name,
+            contents=contents_to_send,
+            config=gen_config,
+        )
+    except Exception as gen_err:
+        if cached_content_name:
+            print(
+                f"Warning: generate_content with cached content failed ({gen_err}). "
+                "Falling back to direct context generation...",
+                file=sys.stderr,
+            )
+            is_reused_cache = False
+            cached_content_name = None
+            contents_to_send = full_prompt
+            gen_config = types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                tools=tools,
+                response_mime_type="application/json",
+                response_schema=ReviewResult,
+            )
+            response = client.models.generate_content(
+                model=model_name,
+                contents=contents_to_send,
+                config=gen_config,
+            )
+        else:
+            raise
 
     if response.usage_metadata:
         usage = response.usage_metadata
