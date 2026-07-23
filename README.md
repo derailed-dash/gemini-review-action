@@ -44,8 +44,8 @@ See the supporting blog post about this action [here](https://medium.com/google-
 
 - **AI-Powered Code Reviews**: Automated, constructive line-specific feedback on Pull Requests using Google Gemini models (Gemini 3.6 Flash by default).
 - **Automated Issue Triage**: Dynamically labels, prioritises, and triages incoming issues.
-- **PR Comment & Discussion Thread History**: Automatically retrieves inline review threads and general PR conversation comments with pagination, enabling Gemini to track issue resolution, respect developer justifications/disagreements, and avoid repeating resolved suggestions across commits.
-- **Tokenomics & Cost Telemetry Report**: Appends a collapsible cost efficiency and token usage table directly to every PR review comment on GitHub, accompanied by concise execution log telemetry on every run, breaking down prompt tokens, context cache savings, comment history tokens, fresh tokens, and candidate tokens.
+- **PR Comment & Discussion Thread History**: Automatically retrieves inline review threads and general PR conversation comments, enabling Gemini to track issue resolution, respect developer justifications/disagreements, and avoid repeating resolved suggestions across commits.
+- **Tokenomics & Cost Telemetry Report**: Appends a collapsible cost efficiency and token usage summary to each review.
 - **Drop-in Migration**: Fully compatible as a direct, drop-in replacement for the deprecated `run-gemini-cli` action.
 - **Structured Outputs**: Error-free JSON response formatting using Pydantic schema validation.
 - **Hybrid Codebase Context**: Automatically includes codebase context based on the overall size of the codebase. If the codebase isn't huge, the entire repo is loaded into context; but if it is huge, the agent reads the overall directory tree and judiciously includes a subset of the repo. (Note that it always reads markdown files, dependency files, packaging files, etc.)
@@ -56,6 +56,7 @@ See the supporting blog post about this action [here](https://medium.com/google-
 - **Modern SDK Execution**: Leverages the modern Google GenAI SDK (`google-genai`).
 - **Enterprise-Grade Security**: Authentication via either Google Gemini API Keys or Google Cloud Workload Identity Federation (WIF).
 - **Customisable Prompts**: Supports repository-specific overrides for both reviews and triaging via simple TOML config files.
+- **Reviewer Personas**: Customise the personality, tone, and review style of the agent with pre-built persona overlays (`straight`, `dazbo`, `palpatine`, `rick`).
 - **Google Developer Knowledge Integration**: Automatically queries official Google developer documentation (Google Cloud, Firebase, Android, etc.) via MCP to cross-reference your changes against up-to-date best practices.
 - **On-Demand Agent Skills**: Dynamically discovers and loads project-specific formatting guidelines and coding standards from `.agents/skills` on-demand, keeping prompt contexts lightweight and relevant (bundled with defaults for Google Cloud, Gemini APIs and agentic development).
 - **Gemini Context Caching**: Native, automatic integration with Gemini Context Caching, delivering up to **90% cost reduction** on input tokens for repositories over 32k tokens.
