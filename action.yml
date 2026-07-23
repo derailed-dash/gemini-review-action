@@ -40,6 +40,10 @@ inputs:
     description: 'Timeout for API requests in seconds'
     required: false
     default: '60'
+  include_comment_history:
+    description: 'Fetch and include prior PR review threads and conversation comments in prompt context'
+    required: false
+    default: 'true'
 
 runs:
   using: 'composite'
@@ -60,6 +64,7 @@ runs:
         GEMINI_MODEL: ${{ inputs.gemini_model }}
         GEMINI_LANGUAGE: ${{ inputs.language }}
         GEMINI_TIMEOUT: ${{ inputs.timeout }}
+        GEMINI_INCLUDE_COMMENT_HISTORY: ${{ inputs.include_comment_history }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_EVENT_PATH: ${{ github.event_path }}
         GITHUB_EVENT_NAME: ${{ github.event_name }}

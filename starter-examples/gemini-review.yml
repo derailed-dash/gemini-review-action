@@ -45,3 +45,4 @@ jobs:
           gemini_model: 'gemini-3.6-flash'
           language: 'English (UK)'           # Optional (e.g. English (UK), French, Spanish)
           # timeout: '60'                     # Optional API timeout in seconds
+          # include_comment_history: 'true'   # Optional: include prior PR comment history (default: true)

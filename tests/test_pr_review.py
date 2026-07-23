@@ -11,10 +11,13 @@ from gemini_pr_review import (
     InlineComment,
     ReviewResult,
     build_prompt,
+    count_text_tokens,
     filter_review_comments,
+    format_pr_comment_history,
     generate_file_tree,
     get_all_repo_files,
     get_google_auth_headers,
+    get_pr_comments,
     get_pr_files,
     get_valid_changed_lines,
     is_core_file,
@@ -759,3 +762,187 @@ def test_normalize_model_name():
     assert _normalize_model_name("models/gemini-3.5-flash") == "gemini-3.5-flash"
     assert _normalize_model_name("publishers/google/models/gemini-3.5-flash") == "gemini-3.5-flash"
     assert _normalize_model_name("  MODELS/GEMINI-3.6-FLASH  ") == "gemini-3.6-flash"
+
+
+def test_get_pr_comments(mocker):
+    """Test fetching PR review comments and issue comments from GitHub API."""
+    mock_get = mocker.patch("requests.get")
+
+    mock_review_response = mocker.Mock()
+    mock_review_response.status_code = 200
+    mock_review_response.json.return_value = [{"id": 101, "body": "Review comment"}]
+
+    mock_issue_response = mocker.Mock()
+    mock_issue_response.status_code = 200
+    mock_issue_response.json.return_value = [{"id": 201, "body": "Issue comment"}]
+
+    mock_get.side_effect = [mock_review_response, mock_issue_response]
+
+    review_comments, issue_comments = get_pr_comments("owner/repo", 42, {"Authorization": "token abc"}, timeout=10)
+
+    assert len(review_comments) == 1
+    assert review_comments[0]["id"] == 101
+    assert len(issue_comments) == 1
+    assert issue_comments[0]["id"] == 201
+    assert mock_get.call_count == 2
+
+
+def test_get_pr_comments_pagination(mocker):
+    """Test get_pr_comments paginating across multiple pages."""
+    mock_get = mocker.patch("requests.get")
+
+    page1_reviews = [{"id": i} for i in range(100)]
+    page2_reviews = [{"id": 101}]
+
+    res_review_p1 = mocker.Mock(status_code=200, json=lambda: page1_reviews)
+    res_review_p2 = mocker.Mock(status_code=200, json=lambda: page2_reviews)
+    res_issue_p1 = mocker.Mock(status_code=200, json=lambda: [{"id": 500}])
+
+    mock_get.side_effect = [res_review_p1, res_review_p2, res_issue_p1]
+
+    reviews, issues = get_pr_comments("owner/repo", 42, {}, timeout=10)
+
+    assert len(reviews) == 101
+    assert len(issues) == 1
+    assert mock_get.call_count == 3
+
+
+def test_get_pr_comments_error_handling(mocker):
+    """Test get_pr_comments handling API failure gracefully."""
+    mock_get = mocker.patch("requests.get")
+    mock_get.side_effect = Exception("Network timeout")
+
+    review_comments, issue_comments = get_pr_comments("owner/repo", 42, {}, timeout=10)
+
+    assert review_comments == []
+    assert issue_comments == []
+
+
+def test_format_pr_comment_history():
+    """Test thread grouping and string formatting of PR comments."""
+    review_comments = [
+        {
+            "id": 1,
+            "path": "src/main.py",
+            "line": 42,
+            "user": {"login": "gemini-bot"},
+            "body": "Consider adding error handling here.",
+        },
+        {
+            "id": 2,
+            "in_reply_to_id": 1,
+            "path": "src/main.py",
+            "line": 42,
+            "user": {"login": "dazbo"},
+            "body": "Error is handled by caller function.",
+        },
+    ]
+
+    issue_comments = [
+        {
+            "id": 10,
+            "user": {"login": "dazbo"},
+            "body": "PR updated with new tests.",
+            "created_at": "2026-07-23T12:00:00Z",
+        }
+    ]
+
+    formatted = format_pr_comment_history(review_comments, issue_comments)
+
+    assert "=== Prior PR Discussion & Review Threads ===" in formatted
+    assert "Thread on `src/main.py` (Line 42)" in formatted
+    assert "- [gemini-bot]: Consider adding error handling here." in formatted
+    assert "└─ [dazbo]: Error is handled by caller function." in formatted
+    assert "--- General PR Conversation Comments ---" in formatted
+    assert "• [dazbo] (2026-07-23): PR updated with new tests." in formatted
+
+
+def test_count_text_tokens(mocker):
+    """Test token counting helper function with SDK mock and fallback."""
+    mock_client = mocker.Mock()
+    mock_client.models.count_tokens.return_value = mocker.Mock(total_tokens=150)
+
+    # With SDK support
+    count = count_text_tokens(mock_client, "gemini-3.6-flash", "Hello world! " * 50)
+    assert count == 150
+
+    # Fallback heuristic when client is None
+    fallback_count = count_text_tokens(None, "gemini-3.6-flash", "Hello world!")
+    assert fallback_count == len("Hello world!") // 4
+
+
+def test_build_prompt_with_comment_history(mocker):
+    """Test build_prompt includes comment_history when provided."""
+    mocker.patch("gemini_pr_review.is_text_file", return_value=True)
+    mocker.patch("gemini_pr_review.get_file_content", return_value="def main(): pass")
+    mocker.patch("gemini_pr_review.build_codebase_context", return_value="")
+
+    files = [{"filename": "main.py", "status": "modified", "patch": "@@ -1 +1 @@\n+def main(): pass"}]
+    comment_history = "=== Prior PR Discussion & Review Threads ===\n[dazbo]: Handled upstream."
+
+    prompt = build_prompt(files, {}, comment_history=comment_history)
+
+    assert "=== File: main.py ===" in prompt
+    assert "=== Prior PR Discussion & Review Threads ===" in prompt
+    assert "[dazbo]: Handled upstream." in prompt
+
+
+def test_post_review_with_resolved_items(mocker):
+    """Test post_review formats resolved_items section into review body."""
+    mock_post = mocker.patch("requests.post")
+    mock_post.return_value = mocker.Mock(status_code=200)
+
+    review = ReviewResult(
+        summary="PR LGTM",
+        resolved_items=["Added null check in main.py", "Updated docstrings"],
+        general_feedback=["Good tests"],
+        comments=[],
+    )
+
+    post_review("owner/repo", 42, "head_sha", review, {"Authorization": "token abc"})
+
+    assert mock_post.call_count == 1
+    posted_payload = mock_post.call_args[1]["json"]
+    body = posted_payload["body"]
+
+    assert "## 📋 Review Summary" in body
+    assert "### ✅ Resolved Items from Prior Reviews" in body
+    assert "- Added null check in main.py" in body
+    assert "- Updated docstrings" in body
+    assert "## 🔍 General Feedback" in body
+
+
+def test_post_review_with_usage_metadata(mocker):
+    """Test post_review formats collapsible token usage details when usage_metadata is provided."""
+    mock_post = mocker.patch("requests.post")
+    mock_post.return_value = mocker.Mock(status_code=200)
+
+    review = ReviewResult(
+        summary="PR LGTM",
+        general_feedback=[],
+        comments=[],
+    )
+
+    usage_metadata = {
+        "prompt_tokens": 1000,
+        "cached_tokens": 800,
+        "fresh_tokens": 150,
+        "comment_history_tokens": 50,
+        "candidates_tokens": 100,
+        "total_tokens": 1100,
+        "cache_percentage": 80.0,
+    }
+
+    post_review("owner/repo", 42, "head_sha", review, {"Authorization": "token abc"}, usage_metadata=usage_metadata)
+
+    assert mock_post.call_count == 1
+    posted_payload = mock_post.call_args[1]["json"]
+    body = posted_payload["body"]
+
+    assert "<details>" in body
+    assert "<summary>📊 Token Usage & Cost Efficiency</summary>" in body
+    assert "| **Input Tokens (uncached)** | 150 |" in body
+    assert "| **Input Tokens (cached)** | 800 (⚡ 80.0% cached) |" in body
+    assert "| **PR Comments History Tokens** | 50 |" in body
+    assert "| **Output Tokens** | 100 |" in body
+    assert "| **Total Session Tokens** | **1,100** |" in body

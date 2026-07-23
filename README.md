@@ -4,6 +4,8 @@
 
 **Automated, Google Gemini-based Pull Request reviews and Issue Triaging for all your GitHub repositories and CI/CD pipelines.**
 
+![Automated PR Review Output Example](assets/review-output.png)
+
 See the supporting blog post about this action [here](https://medium.com/google-cloud/automated-github-code-reviewsusing-google-gemini-7b4d027b3092).
 
 ## Table of Contents
@@ -17,6 +19,7 @@ See the supporting blog post about this action [here](https://medium.com/google-
   - [Authentication with Gemini API Key](#authentication-with-gemini-api-key)
   - [Google Developer Knowledge MCP Integration (Optional)](#google-developer-knowledge-mcp-integration-optional)
   - [On-Demand Agent Skills (Coding Guidelines)](#on-demand-agent-skills-coding-guidelines)
+  - [PR Comment History & Discussion Thread Tracking](#pr-comment-history--discussion-thread-tracking)
   - [Setup Using Install-Gemini-Code-Review-Action Skill (Recommended)](#setup-using-install-gemini-code-review-action-skill-recommended)
   - [Alternative Manual Setup: PR Review Action Definition](#alternative-manual-setup-pr-review-action-definition)
   - [Seeing It In Action](#seeing-it-in-action)
@@ -41,6 +44,8 @@ See the supporting blog post about this action [here](https://medium.com/google-
 
 - **AI-Powered Code Reviews**: Automated, constructive line-specific feedback on Pull Requests using Google Gemini models (Gemini 3.6 Flash by default).
 - **Automated Issue Triage**: Dynamically labels, prioritises, and triages incoming issues.
+- **PR Comment & Discussion Thread History**: Automatically retrieves inline review threads and general PR conversation comments with pagination, enabling Gemini to track issue resolution, respect developer justifications/disagreements, and avoid repeating resolved suggestions across commits.
+- **Tokenomics & Cost Telemetry Report**: Prints a detailed cost efficiency and token usage table to the workflow execution log on every run, breaking down prompt tokens, context cache savings, comment history tokens, fresh tokens, and candidate tokens.
 - **Drop-in Migration**: Fully compatible as a direct, drop-in replacement for the deprecated `run-gemini-cli` action.
 - **Structured Outputs**: Error-free JSON response formatting using Pydantic schema validation.
 - **Hybrid Codebase Context**: Automatically includes codebase context based on the overall size of the codebase. If the codebase isn't huge, the entire repo is loaded into context; but if it is huge, the agent reads the overall directory tree and judiciously includes a subset of the repo. (Note that it always reads markdown files, dependency files, packaging files, etc.)
@@ -53,7 +58,7 @@ See the supporting blog post about this action [here](https://medium.com/google-
 - **Customisable Prompts**: Supports repository-specific overrides for both reviews and triaging via simple TOML config files.
 - **Google Developer Knowledge Integration**: Automatically queries official Google developer documentation (Google Cloud, Firebase, Android, etc.) via MCP to cross-reference your changes against up-to-date best practices.
 - **On-Demand Agent Skills**: Dynamically discovers and loads project-specific formatting guidelines and coding standards from `.agents/skills` on-demand, keeping prompt contexts lightweight and relevant (bundled with defaults for Google Cloud, Gemini APIs and agentic development).
-- **Gemini Context Caching**: Native, automatic integration with Gemini Context Caching, delivering up to **75–80% cost reduction** on input tokens for repositories over 32k tokens.
+- **Gemini Context Caching**: Native, automatic integration with Gemini Context Caching, delivering up to **90% cost reduction** on input tokens for repositories over 32k tokens.
 - **Multi-Turn & Cross-PR Cache Reuse**: Reuses active server-side context cache handles across multi-turn tool/skill calls and successive PR pushes within the TTL window (1h default), eliminating prompt re-tokenisation and server overhead. This is a huge efficiency and cost saving between successive reviews.
 
 ![Leveraing MCP and Skills](/assets/agent_intelligence_diagram.png)
@@ -72,7 +77,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 2. **Hybrid Context Enrichment**: In addition to surrounding modified file content, the action gathers context from the rest of the repository. It measures the total size of all other tracked text files:
    - **Full Context Mode**: If the codebase is under the configured size threshold (default: 1.5 MB), the full contents of all other text files are included.
    - **Sparse Context Mode**: If the codebase exceeds the threshold, it includes a structured text-based file tree of the entire project, plus the full contents of key configuration and documentation files (like `*.md`, `pyproject.toml`, `package.json`, `go.mod`, etc.).
-3. **Gemini Context Caching & Multi-Turn Reuse**: For repository contexts exceeding ~32,768 tokens (100,000+ characters), the action automatically checks for an active server-side cache (`repo-cache-{repo}`) via `client.caches.list()`. If found, it reuses the active cache handle; otherwise, it provisions a fresh context cache. Billed input tokens receive a **75% discount**, and subsequent multi-turn tool/skill calls reference the cached context handle without re-billing the codebase context.
+3. **Gemini Context Caching & Multi-Turn Reuse**: For repository contexts exceeding ~32,768 tokens (100,000+ characters), the action automatically checks for an active server-side cache (`repo-cache-{repo}`) via `client.caches.list()`. If found, it reuses the active cache handle; otherwise, it provisions a fresh context cache. Billed input tokens receive a **90% discount**, and subsequent multi-turn tool/skill calls reference the cached context handle without re-billing the codebase context.
 4. **Structured Review Generation**: The action sends the diff and file contexts to Gemini. It uses Gemini's native **Structured Outputs** (`response_schema`) to force the model to respond in a strict JSON format.
 5. **Interactive suggestions**: Change recommendations are wrapped in native GitHub ` ```suggestion ` blocks, allowing reviewers to apply the changes directly on the PR with one click.
 6. **Resilient Comment Posting**: The review is posted atomically via the GitHub Pull Request Review API. If the API call fails (e.g. if the model hallucinates an invalid line number in the diff), the script catches the error and falls back to posting comments individually, ensuring your CI status check stays green while still delivering all valid feedback.
@@ -137,6 +142,28 @@ To add project-specific coding standards or team rules that your PR reviewer sho
     Write your detailed rules here...
     ```
 4.  Commit and push these files. The PR review agent will automatically detect your project's custom guidelines and invoke them when reviewing relevant code changes.
+
+### PR Comment History & Discussion Thread Tracking
+
+When reviewing pull requests that have undergone multiple iterations or team discussions, Gemini automatically retrieves prior inline review threads (`pulls/{pr_number}/comments`) and general PR conversation comments (`issues/{pr_number}/comments`) using automatic pagination loops.
+
+#### How Discussion Tracking Works:
+1. **Thread Grouping:** Root review comments and developer replies are structured into conversational threads mapped to specific files and line numbers.
+2. **Developer Workflow Rules for Follow-Up Reviews:**
+   Gemini evaluates prior comment history against the incoming diff patch and enforces an opinionated developer workflow matrix:
+   - **a) Addressed / Resolved:** The developer applies the requested code fix. Gemini detects that the diff patch addresses the suggestion, omits the duplicate inline comment, and lists it under `### ✅ Resolved Items from Prior Reviews`.
+   - **b) Deferred:** The developer defers the work (e.g. by linking a follow-up issue or noting it in comments). Gemini respects the deferral and refrains from repeating the suggestion.
+   - **c) Disagreed / Ignored with Explanation:** The developer responds explaining why the suggested change was not made (e.g. architectural design choice or performance trade-off). Gemini respects the explanation and refrains from repeating the critique.
+   
+   > [!IMPORTANT]
+   > **No Silent Drops:** A PR suggestion is **never ignored without justification**. If the code remains unchanged AND the developer has provided **no explanation or reply**, or if the developer **agreed** in comment threads but has **not yet pushed the code fix**, Gemini will default to **re-flagging and restating** the unresolved suggestion in the follow-up review.
+
+3. **Resolved Items Reporting:** When Gemini identifies that previously raised feedback has been fixed in the latest push, it includes a dedicated section in the PR review summary:
+   ```markdown
+   ### ✅ Resolved Items from Prior Reviews
+   - Added exception handling in `src/main.py` (Line 45)
+   - Standardised type annotations in `utils.py` (Line 12)
+   ```
 
 ### Setup Using Install-Gemini-Code-Review-Action Skill (Recommended)
 
@@ -322,6 +349,7 @@ jobs:
 | `github_token` | Repository `GITHUB_TOKEN` (automatically provided by GitHub; no manual secret creation required). | **Yes** | N/A |
 | `gemini_model` | The Gemini model version to target. | No | `gemini-3.6-flash` |
 | `command` | The mode/command to run: `review` (for PR reviews) or `triage` (for issue triaging). | No | `review` |
+| `include_comment_history` | Whether to fetch prior inline review threads and conversation comments from GitHub. | No | `'true'` |
 | `language` | The language to use for the review comments (e.g. `English (UK)`, `English (US)`, `French`, `Spanish`). | No | `English (UK)` |
 | `timeout` | Timeout for API requests in seconds. | No | `60` |
 
@@ -388,40 +416,47 @@ The action parses the TOML files and dynamically substitutes the following expre
 
 ## Understanding the Token Usage & Cost Efficiency Report
 
-Whenever a review run finishes, the action prints a structured telemetry table to the workflow execution log:
+Whenever a review run finishes, the action provides token telemetry in two places:
+
+1. **Pull Request Review Output**: A collapsible `<details>` section appended directly to the bottom of the posted PR review comment on GitHub:
+
+   <details>
+   <summary>📊 Token Usage & Cost Efficiency</summary>
+
+   | Metric | Token Count |
+   | :--- | :---: |
+   | **Input Tokens (uncached)** | 14,414 |
+   | **Input Tokens (cached)** | 250,985 (⚡ 94.4% cached) |
+   | **PR Comments History Tokens** | 450 |
+   | **Output Tokens** | 210 |
+   | **Total Session Tokens** | **267,701** |
+
+   </details>
+
+2. **Workflow Execution Logs**: A detailed ASCII telemetry table printed to the runner logs:
 
 ```text
 📊 Gemini Token Usage & Cost Efficiency Report
-┌──────────────────────────────────────┬──────────────┬───────────────────────────────┐
-│ Metric                               │ Token Count  │ Benefit / Efficiency          │
-├──────────────────────────────────────┼──────────────┼───────────────────────────────┤
-│ Total Input (Prompt) Tokens          │      247,180 │ Base input context            │
-│ ├── Cached Context Tokens            │      245,980 │ ⚡  99.5% (75% Rate Discount)  │
-│ └── Un-cached Fresh Tokens           │        1,200 │ Diff & instructions only      │
-│ Output (Candidates) Tokens           │          215 │ Generated review content      │
-├──────────────────────────────────────┼──────────────┼───────────────────────────────┤
-│ Cache Lifecycle Origin               │            — │ ♻️ Reused (Cross-PR Push)     │
-│ Cache Provisioning Overhead          │            — │ ⚡ 0s (Reused active handle)  │
-│ Intra-Run Multi-Turn Re-billing      │            — │ 🛡️ 0 Tokens Re-billed / Turn  │
-├──────────────────────────────────────┼──────────────┼───────────────────────────────┤
-│ Total Session Tokens                 │      247,395 │ Total processed by Gemini     │
-└──────────────────────────────────────┴──────────────┴───────────────────────────────┘
+┌──────────────────────────────────┬──────────────┬───────────────────────────────┐
+│ Metric                           │ Token Count  │ Benefit / Efficiency          │
+├──────────────────────────────────┼──────────────┼───────────────────────────────┤
+│ Total Input (Prompt) Tokens      │      265,849 │ Base input context            │
+│ ├── Cached Context Tokens        │      250,985 │ ⚡ 94.4% (90% Rate Discount)  │
+│ ├── PR Comments History Tokens   │          450 │ Prior review threads context  │
+│ └── Un-cached Fresh Tokens       │       14,414 │ Diff & instructions only      │
+│ Output (Candidates) Tokens       │          210 │ Generated review content      │
+├──────────────────────────────────┼──────────────┼───────────────────────────────┤
+│ Total Session Tokens             │      267,701 │ Total processed by Gemini     │
+└──────────────────────────────────┴──────────────┴───────────────────────────────┘
 ```
 
 ### Metrics Explained
 
-* **Total Input (Prompt) Tokens**: The total size (in LLM tokens) of the context sent to Gemini (full repository codebase files, system instructions, and PR diff patch).
-* **Cached Context Tokens (`├── Cached Context Tokens`)**: The portion of input tokens stored in Gemini's server-side context cache. These tokens receive an **automatic 75% rate discount** ($0.375 / 1M tokens vs $1.50 / 1M tokens for Gemini 3.6 Flash).
+* **Total Input (Prompt) Tokens**: The total size (in LLM tokens) of the context sent to Gemini (full repository codebase files, system instructions, PR comment history, and PR diff patch).
+* **Cached Context Tokens (`├── Cached Context Tokens`)**: The portion of input tokens stored in Gemini's server-side context cache. Context caching applies **exclusively to input tokens**, providing an **automatic 90% rate discount** on cached input tokens.
+* **PR Comments History Tokens (`├── PR Comments History Tokens`)**: The exact token count consumed by historical inline review threads and conversation comments fetched via the GitHub API and included in the dynamic review context.
 * **Un-cached Fresh Tokens (`└── Un-cached Fresh Tokens`)**: The newly introduced PR diff lines and dynamic skill instructions, billed at standard input rates.
-* **Output (Candidates) Tokens**: The number of tokens generated by Gemini in its structured review response JSON.
-* **Cache Lifecycle Origin**:
-  * `♻️ Reused (Cross-PR Push)`: An active server-side cache handle (`repo-cache-{repo}`) created by a previous workflow run or PR push within the 1-hour TTL window was discovered via `client.caches.list()` and attached directly.
-  * `✨ Fresh (Newly Created)`: No active cache existed, so a new `CachedContent` resource was provisioned on Google Cloud.
-* **Cache Provisioning Overhead**:
-  * `⚡ 0s (Reused active handle)`: Zero setup latency because an existing active cache handle was reused.
-  * `⚡ 1-Hour TTL Active`: The newly created cache resource is active on Google's servers for 1 hour.
-* **Intra-Run Multi-Turn Re-billing**:
-  * `🛡️ 0 Tokens Re-billed / Turn`: When Gemini performs multi-turn tool/skill invocations during a single review (such as querying Google Developer Knowledge MCP or loading local workspace guidelines), the cached 250,000-token codebase context is **not** re-sent or re-billed on Turn 2 or Turn 3.
+* **Output (Candidates) Tokens**: The number of tokens generated by Gemini in its structured review response JSON. Context caching does not apply to output tokens, which are billed at standard model output rates.
 * **Total Session Tokens**: The combined total of prompt and output tokens processed during the review.
 
 ## How It Works

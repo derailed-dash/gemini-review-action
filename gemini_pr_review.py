@@ -23,6 +23,7 @@ import re
 import subprocess
 import sys
 import tomllib
+from typing import Any
 
 import requests
 from google import genai
@@ -60,6 +61,12 @@ class ReviewResult(BaseModel):
 
     summary: str = Field(
         description="A brief, high-level assessment of the Pull Request's objective and quality (2-3 sentences)."
+    )
+    resolved_items: list[str] = Field(
+        default_factory=list,
+        description=(
+            "List of previously raised review comments/threads that have been resolved or addressed in this PR update."
+        ),
     )
     general_feedback: list[str] = Field(
         description="General feedback items, positive observations, or non-line-specific feedback."
@@ -225,6 +232,154 @@ def get_pr_files(repository: str, pr_number: int, headers: dict, timeout: int = 
         files.extend(data)
         page += 1
     return files
+
+
+def get_pr_comments(
+    repository: str, pr_number: int, headers: dict, timeout: int = DEFAULT_TIMEOUT
+) -> tuple[list[dict], list[dict]]:
+    """Fetch inline review comments and general PR issue comments for a pull request using pagination."""
+    review_comments = []
+    issue_comments = []
+
+    if not repository or not pr_number:
+        return review_comments, issue_comments
+
+    # 1. Fetch inline review comments with pagination
+    page = 1
+    while True:
+        review_url = f"https://api.github.com/repos/{repository}/pulls/{pr_number}/comments?page={page}&per_page=100"
+        try:
+            res = requests.get(review_url, headers=headers, timeout=timeout)
+            if res.status_code != 200:
+                print(
+                    f"Warning: Failed to fetch PR review comments ({res.status_code}): {res.text}",
+                    file=sys.stderr,
+                )
+                break
+            data = res.json()
+            if not data or not isinstance(data, list):
+                break
+            review_comments.extend(data)
+            if len(data) < 100:
+                break
+            page += 1
+        except Exception as e:
+            print(f"Warning: Exception while fetching PR review comments: {e}", file=sys.stderr)
+            break
+
+    # 2. Fetch general issue/PR timeline comments with pagination
+    page = 1
+    while True:
+        issue_url = f"https://api.github.com/repos/{repository}/issues/{pr_number}/comments?page={page}&per_page=100"
+        try:
+            res = requests.get(issue_url, headers=headers, timeout=timeout)
+            if res.status_code != 200:
+                print(
+                    f"Warning: Failed to fetch PR issue comments ({res.status_code}): {res.text}",
+                    file=sys.stderr,
+                )
+                break
+            data = res.json()
+            if not data or not isinstance(data, list):
+                break
+            issue_comments.extend(data)
+            if len(data) < 100:
+                break
+            page += 1
+        except Exception as e:
+            print(f"Warning: Exception while fetching PR issue comments: {e}", file=sys.stderr)
+            break
+
+    return review_comments, issue_comments
+
+
+def format_pr_comment_history(review_comments: list[dict], issue_comments: list[dict]) -> str:
+    """Format inline review comments into structured threads, and general issue comments into conversation history."""
+    if not review_comments and not issue_comments:
+        return ""
+
+    prompt_parts = []
+    prompt_parts.append("=== Prior PR Discussion & Review Threads ===")
+    prompt_parts.append(
+        "Below are previous comments and review discussion threads from this Pull Request. "
+        "Review them to understand prior feedback and avoid repeating suggestions that have "
+        "already been addressed, resolved, or disagreed with:\n"
+    )
+
+    if review_comments:
+        prompt_parts.append("--- Inline Review Comment Threads ---")
+        comments_by_id = {c["id"]: c for c in review_comments if isinstance(c, dict) and "id" in c}
+
+        roots = []
+        replies_by_root = {}
+        for c in review_comments:
+            if not isinstance(c, dict):
+                continue
+            reply_to = c.get("in_reply_to_id")
+            if reply_to and reply_to in comments_by_id:
+                curr = reply_to
+                visited = set()
+                while curr in comments_by_id and comments_by_id[curr].get("in_reply_to_id") and curr not in visited:
+                    visited.add(curr)
+                    curr = comments_by_id[curr]["in_reply_to_id"]
+                root_id = curr
+                if root_id in comments_by_id:
+                    replies_by_root.setdefault(root_id, []).append(c)
+                else:
+                    roots.append(c)
+            else:
+                roots.append(c)
+
+        for root in roots:
+            root_id = root.get("id")
+            file_path = root.get("path", "unknown")
+            line = root.get("line") or root.get("original_line") or "N/A"
+            author = root.get("user", {}).get("login", "unknown") if isinstance(root.get("user"), dict) else "unknown"
+            body = root.get("body", "").strip()
+
+            prompt_parts.append(f"• Thread on `{file_path}` (Line {line}):")
+            prompt_parts.append(f"  - [{author}]: {body}")
+
+            thread_replies = replies_by_root.get(root_id, [])
+            for reply in thread_replies:
+                r_author = (
+                    reply.get("user", {}).get("login", "unknown") if isinstance(reply.get("user"), dict) else "unknown"
+                )
+                r_body = reply.get("body", "").strip()
+                prompt_parts.append(f"    └─ [{r_author}]: {r_body}")
+            prompt_parts.append("")
+
+    if issue_comments:
+        prompt_parts.append("--- General PR Conversation Comments ---")
+        for comment in issue_comments:
+            if not isinstance(comment, dict):
+                continue
+            author = (
+                comment.get("user", {}).get("login", "unknown") if isinstance(comment.get("user"), dict) else "unknown"
+            )
+            body = comment.get("body", "").strip()
+            created_at = comment.get("created_at", "")
+            date_str = f" ({created_at[:10]})" if len(created_at) >= 10 else ""
+            prompt_parts.append(f"• [{author}]{date_str}: {body}")
+        prompt_parts.append("")
+
+    prompt_parts.append("===========================================\n")
+    return "\n".join(prompt_parts)
+
+
+def count_text_tokens(client, model_name: str, text: str) -> int:
+    """Count or estimate the number of tokens in a text string."""
+    if not text:
+        return 0
+    if client and hasattr(client, "models") and hasattr(client.models, "count_tokens"):
+        try:
+            resp = client.models.count_tokens(model=model_name, contents=text)
+            if hasattr(resp, "total_tokens") and resp.total_tokens is not None:
+                return resp.total_tokens
+        except Exception:
+            pass
+    # Fallback heuristic (~4 chars per token)
+    return max(1, len(text) // 4)
 
 
 def get_local_git_files() -> list:
@@ -594,7 +749,10 @@ def load_system_instruction(repository: str | None, pr_number: int, config: dict
     if not prompt:
         return (
             "You are a world-class code review agent. Analyze changes and output constructive feedback using"
-            f" {os.environ.get('GEMINI_LANGUAGE', 'English (UK)')} spelling."
+            f" {os.environ.get('GEMINI_LANGUAGE', 'English (UK)')} spelling. Review any prior PR comment history."
+            " DO NOT repeat suggestions that have been addressed, deferred, or explicitly justified/disagreed with"
+            " by the developer. DO restate unresolved suggestions if the code remains unchanged without an explanation"
+            " or if the developer agreed with the fix but has not yet applied it."
         )
 
     prompt = prompt.replace("!{echo $REPOSITORY}", repository or "unknown")
@@ -768,17 +926,26 @@ def build_codebase_context(files: list, config: dict) -> str:
     return "\n".join(prompt_parts)
 
 
-def build_prompt(files: list, config: dict) -> str:
-    """Consolidate file patches and file contents into a single review context."""
+def build_prompt(files: list, config: dict, comment_history: str = "") -> str:
+    """Consolidate file patches, PR comment history, and file contents into a single review context."""
     pr_prompt = build_pr_diff_prompt(files)
+    parts = [pr_prompt]
+    if comment_history:
+        parts.append(comment_history)
     codebase_ctx = build_codebase_context(files, config)
     if codebase_ctx:
-        return f"{pr_prompt}\n\n{codebase_ctx}"
-    return pr_prompt
+        parts.append(codebase_ctx)
+    return "\n\n".join(parts)
 
 
 def post_review(
-    repository: str, pr_number: int, commit_id: str, review: ReviewResult, headers: dict, timeout: int = DEFAULT_TIMEOUT
+    repository: str,
+    pr_number: int,
+    commit_id: str,
+    review: ReviewResult,
+    headers: dict,
+    timeout: int = DEFAULT_TIMEOUT,
+    usage_metadata: dict[str, Any] | None = None,
 ) -> None:
     """Submit review comments atomically or fall back to individual comments if needed."""
     comments_payload = []
@@ -789,9 +956,47 @@ def post_review(
 
         comments_payload.append({"path": c.path, "line": c.line, "side": c.side, "body": "\n\n".join(body_parts)})
 
-    review_body = f"## 📋 Review Summary\n\n{review.summary}\n\n## 🔍 General Feedback\n\n" + "\n".join(
-        f"- {f}" for f in review.general_feedback
-    )
+    body_sections = [f"## 📋 Review Summary\n\n{review.summary}"]
+    if review.resolved_items:
+        resolved_str = "\n".join(f"- {r}" for r in review.resolved_items)
+        body_sections.append(f"### ✅ Resolved Items from Prior Reviews\n\n{resolved_str}")
+    if review.general_feedback:
+        feedback_str = "\n".join(f"- {f}" for f in review.general_feedback)
+        body_sections.append(f"## 🔍 General Feedback\n\n{feedback_str}")
+
+    if usage_metadata:
+        cached_tokens = usage_metadata.get("cached_tokens", 0)
+        fresh_tokens = usage_metadata.get("fresh_tokens", 0)
+        comment_history_tokens = usage_metadata.get("comment_history_tokens", 0)
+        candidates_tokens = usage_metadata.get("candidates_tokens", 0)
+        total_tokens = usage_metadata.get("total_tokens", 0)
+        cache_percentage = usage_metadata.get("cache_percentage", 0.0)
+
+        cache_str = f" (⚡ {cache_percentage:.1f}% cached)" if cached_tokens > 0 else ""
+
+        table_rows = [
+            f"| **Input Tokens (uncached)** | {fresh_tokens:,d} |",
+        ]
+        if cached_tokens > 0:
+            table_rows.append(f"| **Input Tokens (cached)** | {cached_tokens:,d}{cache_str} |")
+        if comment_history_tokens > 0:
+            table_rows.append(f"| **PR Comments History Tokens** | {comment_history_tokens:,d} |")
+        table_rows.extend(
+            [
+                f"| **Output Tokens** | {candidates_tokens:,d} |",
+                f"| **Total Session Tokens** | **{total_tokens:,d}** |",
+            ]
+        )
+
+        telemetry_md = (
+            "<details>\n"
+            "<summary>📊 Token Usage & Cost Efficiency</summary>\n\n"
+            "| Metric | Token Count |\n"
+            "| :--- | :---: |\n" + "\n".join(table_rows) + "\n\n</details>"
+        )
+        body_sections.append(telemetry_md)
+
+    review_body = "\n\n".join(body_sections)
 
     payload = {"body": review_body, "event": "COMMENT", "comments": comments_payload}
 
@@ -958,9 +1163,27 @@ def main():
             " developer docs."
         )
 
+    include_comments_env = os.environ.get("GEMINI_INCLUDE_COMMENT_HISTORY", "true").lower() in ("true", "1")
+    include_comments_config = config.get("include_comment_history", True)
+    should_include_comments = include_comments_env and include_comments_config
+
+    comment_history_str = ""
+    comment_history_tokens = 0
+    if should_include_comments and not is_dry_run and repository and pr_number:
+        print(f"Fetching prior PR comments for PR #{pr_number}...", file=sys.stderr)
+        review_comments, issue_comments = get_pr_comments(repository, pr_number, headers, timeout=timeout)
+        comment_history_str = format_pr_comment_history(review_comments, issue_comments)
+        if comment_history_str:
+            comment_history_tokens = count_text_tokens(client, model_name, comment_history_str)
+            print(
+                f"PR comment history included ({comment_history_tokens:,} tokens).",
+                file=sys.stderr,
+            )
+
     pr_diff_prompt = build_pr_diff_prompt(text_files)
+    dynamic_pr_prompt = f"{pr_diff_prompt}\n\n{comment_history_str}" if comment_history_str else pr_diff_prompt
     codebase_context = build_codebase_context(text_files, config)
-    full_prompt = f"{pr_diff_prompt}\n\n{codebase_context}" if codebase_context else pr_diff_prompt
+    full_prompt = f"{dynamic_pr_prompt}\n\n{codebase_context}" if codebase_context else dynamic_pr_prompt
 
     enable_caching = config.get("enable_context_caching", True)
     cache_ttl_seconds = config.get("cache_ttl_seconds", 3600)
@@ -968,7 +1191,6 @@ def main():
 
     cached_content_name = None
     contents_to_send = full_prompt
-    is_reused_cache = False
 
     if enable_caching and hasattr(client, "caches") and codebase_context:
         try:
@@ -1004,8 +1226,7 @@ def main():
 
                 if existing_cache:
                     cached_content_name = existing_cache.name
-                    contents_to_send = pr_diff_prompt
-                    is_reused_cache = True
+                    contents_to_send = dynamic_pr_prompt
                     active_display_name = getattr(existing_cache, "display_name", display_name)
                     print(
                         f"Reusing active Gemini context cache ({active_display_name}: {cached_content_name})...",
@@ -1032,8 +1253,7 @@ def main():
                         ),
                     )
                     cached_content_name = cache_obj.name
-                    contents_to_send = pr_diff_prompt
-                    is_reused_cache = False
+                    contents_to_send = dynamic_pr_prompt
                     print(f"Context cache active: {cached_content_name}", file=sys.stderr)
         except Exception as e:
             print(
@@ -1042,7 +1262,6 @@ def main():
             )
             cached_content_name = None
             contents_to_send = full_prompt
-            is_reused_cache = False
 
     if cached_content_name:
         gen_config = types.GenerateContentConfig(
@@ -1073,7 +1292,6 @@ def main():
                 "Falling back to direct context generation...",
                 file=sys.stderr,
             )
-            is_reused_cache = False
             cached_content_name = None
             contents_to_send = full_prompt
             gen_config = types.GenerateContentConfig(
@@ -1090,6 +1308,7 @@ def main():
         else:
             raise
 
+    usage_dict = None
     if response.usage_metadata:
         usage = response.usage_metadata
         prompt_tokens = usage.prompt_token_count or 0
@@ -1097,68 +1316,68 @@ def main():
         candidates_tokens = usage.candidates_token_count or 0
         total_tokens = usage.total_token_count or 0
 
-        fresh_tokens = max(0, prompt_tokens - cached_tokens)
+        fresh_tokens = max(0, prompt_tokens - cached_tokens - comment_history_tokens)
         cache_percentage = (cached_tokens / prompt_tokens * 100) if prompt_tokens > 0 else 0.0
 
-        cache_origin_str = "♻️ Reused (Cross-PR Push)" if is_reused_cache else "✨ Fresh (Newly Created)"
-        cache_overhead_str = "⚡ 0s (Reused active handle)" if is_reused_cache else "⚡ 1-Hour TTL Active"
+        usage_dict = {
+            "prompt_tokens": prompt_tokens,
+            "cached_tokens": cached_tokens,
+            "candidates_tokens": candidates_tokens,
+            "comment_history_tokens": comment_history_tokens,
+            "fresh_tokens": fresh_tokens,
+            "total_tokens": total_tokens,
+            "cache_percentage": cache_percentage,
+        }
 
         print("\n📊 Gemini Token Usage & Cost Efficiency Report", file=sys.stderr)
+        print("┌──────────────────────────────────┬──────────────┬───────────────────────────────┐", file=sys.stderr)
+        print("│ Metric                           │ Token Count  │ Benefit / Efficiency          │", file=sys.stderr)
+        print("├──────────────────────────────────┼──────────────┼───────────────────────────────┤", file=sys.stderr)
         print(
-            "┌──────────────────────────────────────┬──────────────┬───────────────────────────────┐", file=sys.stderr
-        )
-        print(
-            "│ Metric                               │ Token Count  │ Benefit / Efficiency          │", file=sys.stderr
-        )
-        print(
-            "├──────────────────────────────────────┼──────────────┼───────────────────────────────┤", file=sys.stderr
-        )
-        print(
-            f"│ Total Input (Prompt) Tokens          │ {prompt_tokens:>12,d} │ Base input context            │",
+            f"│ Total Input (Prompt) Tokens      │ {prompt_tokens:>12,d} │ Base input context            │",
             file=sys.stderr,
         )
         if cached_tokens > 0:
+            cache_rate_str = f"⚡ {cache_percentage:.1f}% (90% Rate Discount)"
             print(
-                f"│ ├── Cached Context Tokens            │ {cached_tokens:>12,d} │ ⚡ {cache_percentage:>5.1f}% (75%"
-                " Rate Discount)  │",
+                f"│ ├── Cached Context Tokens        │ {cached_tokens:>12,d} │ {cache_rate_str:<29s} │",
                 file=sys.stderr,
             )
+            if comment_history_tokens > 0:
+                print(
+                    "│ ├── PR Comments History Tokens   │"
+                    f" {comment_history_tokens:>12,d} │ Prior review threads context  │",
+                    file=sys.stderr,
+                )
             print(
-                f"│ └── Un-cached Fresh Tokens           │ {fresh_tokens:>12,d} │ Diff & instructions only      │",
+                f"│ └── Un-cached Fresh Tokens       │ {fresh_tokens:>12,d} │ Diff & instructions only      │",
                 file=sys.stderr,
             )
         else:
             print(
-                "│ └── Cached Context Tokens            │            0 │ Direct un-cached context      │",
+                "│ ├── Cached Context Tokens        │            0 │ Direct un-cached context      │",
+                file=sys.stderr,
+            )
+            if comment_history_tokens > 0:
+                print(
+                    "│ ├── PR Comments History Tokens   │"
+                    f" {comment_history_tokens:>12,d} │ Prior review threads context  │",
+                    file=sys.stderr,
+                )
+            print(
+                f"│ └── Un-cached Fresh Tokens       │ {fresh_tokens:>12,d} │ Diff & instructions only      │",
                 file=sys.stderr,
             )
         print(
-            f"│ Output (Candidates) Tokens           │ {candidates_tokens:>12,d} │ Generated review content      │",
+            f"│ Output (Candidates) Tokens       │ {candidates_tokens:>12,d} │ Generated review content      │",
             file=sys.stderr,
         )
-        if cached_tokens > 0:
-            print(
-                "├──────────────────────────────────────┼──────────────┼───────────────────────────────┤",
-                file=sys.stderr,
-            )
-            print(f"│ Cache Lifecycle Origin               │            — │ {cache_origin_str:<29s} │", file=sys.stderr)
-            print(
-                f"│ Cache Provisioning Overhead          │            — │ {cache_overhead_str:<29s} │", file=sys.stderr
-            )
-            print(
-                "│ Intra-Run Multi-Turn Re-billing      │            — │ 🛡️ 0 Tokens Re-billed / Turn  │",
-                file=sys.stderr,
-            )
+        print("├──────────────────────────────────┼──────────────┼───────────────────────────────┤", file=sys.stderr)
         print(
-            "├──────────────────────────────────────┼──────────────┼───────────────────────────────┤", file=sys.stderr
-        )
-        print(
-            f"│ Total Session Tokens                 │ {total_tokens:>12,d} │ Total processed by Gemini     │",
+            f"│ Total Session Tokens             │ {total_tokens:>12,d} │ Total processed by Gemini     │",
             file=sys.stderr,
         )
-        print(
-            "└──────────────────────────────────────┴──────────────┴───────────────────────────────┘\n", file=sys.stderr
-        )
+        print("└──────────────────────────────────┴──────────────┴───────────────────────────────┘\n", file=sys.stderr)
 
     review_data = json.loads(response.text)
 
@@ -1168,6 +1387,10 @@ def main():
     if is_dry_run:
         print("\n=== DRY RUN REVIEW SUMMARY ===", file=sys.stderr)
         print(f"Summary: {review.summary}")
+        if review.resolved_items:
+            print("\n=== RESOLVED ITEMS ===", file=sys.stderr)
+            for r in review.resolved_items:
+                print(f"✅ {r}")
         print("\n=== GENERAL FEEDBACK ===", file=sys.stderr)
         for gf in review.general_feedback:
             print(f"- {gf}")
@@ -1176,7 +1399,15 @@ def main():
             suggestion_str = f"\nSuggestion:\n{c.code_suggestion}" if c.code_suggestion else ""
             print(f"File: {c.path}:{c.line} ({c.side}) - Severity: {c.severity}\n{c.comment_text}{suggestion_str}\n")
     else:
-        post_review(repository, pr_number, head_sha, review, headers, timeout=timeout)
+        post_review(
+            repository,
+            pr_number,
+            head_sha,
+            review,
+            headers,
+            timeout=timeout,
+            usage_metadata=usage_dict,
+        )
 
 
 if __name__ == "__main__":
