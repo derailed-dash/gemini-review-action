@@ -45,7 +45,7 @@ See the supporting blog post about this action [here](https://medium.com/google-
 - **AI-Powered Code Reviews**: Automated, constructive line-specific feedback on Pull Requests using Google Gemini models (Gemini 3.6 Flash by default).
 - **Automated Issue Triage**: Dynamically labels, prioritises, and triages incoming issues.
 - **PR Comment & Discussion Thread History**: Automatically retrieves inline review threads and general PR conversation comments with pagination, enabling Gemini to track issue resolution, respect developer justifications/disagreements, and avoid repeating resolved suggestions across commits.
-- **Tokenomics & Cost Telemetry Report**: Prints a detailed cost efficiency and token usage table to the workflow execution log on every run, breaking down prompt tokens, context cache savings, comment history tokens, fresh tokens, and candidate tokens.
+- **Tokenomics & Cost Telemetry Report**: Appends a collapsible cost efficiency and token usage table directly to every PR review comment on GitHub, accompanied by concise execution log telemetry on every run, breaking down prompt tokens, context cache savings, comment history tokens, fresh tokens, and candidate tokens.
 - **Drop-in Migration**: Fully compatible as a direct, drop-in replacement for the deprecated `run-gemini-cli` action.
 - **Structured Outputs**: Error-free JSON response formatting using Pydantic schema validation.
 - **Hybrid Codebase Context**: Automatically includes codebase context based on the overall size of the codebase. If the codebase isn't huge, the entire repo is loaded into context; but if it is huge, the agent reads the overall directory tree and judiciously includes a subset of the repo. (Note that it always reads markdown files, dependency files, packaging files, etc.)
@@ -433,21 +433,10 @@ Whenever a review run finishes, the action provides token telemetry in two place
 
    </details>
 
-2. **Workflow Execution Logs**: A detailed ASCII telemetry table printed to the runner logs:
+2. **Workflow Execution Logs**: A concise single-line token summary log printed to the runner `stderr`:
 
 ```text
-📊 Gemini Token Usage & Cost Efficiency Report
-┌──────────────────────────────────┬──────────────┬───────────────────────────────┐
-│ Metric                           │ Token Count  │ Benefit / Efficiency          │
-├──────────────────────────────────┼──────────────┼───────────────────────────────┤
-│ Total Input (Prompt) Tokens      │      265,849 │ Base input context            │
-│ ├── Cached Context Tokens        │      250,985 │ ⚡ 94.4% (90% Rate Discount)  │
-│ ├── PR Comments History Tokens   │          450 │ Prior review threads context  │
-│ └── Un-cached Fresh Tokens       │       14,414 │ Diff & instructions only      │
-│ Output (Candidates) Tokens       │          210 │ Generated review content      │
-├──────────────────────────────────┼──────────────┼───────────────────────────────┤
-│ Total Session Tokens             │      267,701 │ Total processed by Gemini     │
-└──────────────────────────────────┴──────────────┴───────────────────────────────┘
+Token Usage: 14,414 input tokens (94.4% cached), 210 output tokens. Total: 267,701 tokens.
 ```
 
 ### Metrics Explained
@@ -558,12 +547,21 @@ Here is an overview of the directory tree and the purpose of each file:
 ├── .github/                 # GitHub workflows (used for dogfooding our own action)
 ├── assets/                  # Documentation assets (banners, images)
 ├── docs/                    # Technical documentation and architecture guides
+├── gemini_review/           # Modular review engine package
+│   ├── __init__.py          # Package exports & public API facade bindings
+│   ├── config.py            # Configuration loader and default settings
+│   ├── developer_knowledge.py # Google Developer Knowledge API integration
+│   ├── github.py            # GitHub REST API interactions & review submission
+│   ├── schemas.py           # Pydantic schemas (InlineComment, ReviewResult)
+│   ├── prompts.py           # Prompt builders and system instruction loader
+│   ├── skills.py            # Workspace skill discovery & instruction loader
+│   └── utils.py             # File filtering, diff parsing, token counter & git utils
 ├── starter-examples/        # Starter workflow files and default prompt templates
 ├── tests/                   # Unit tests
 ├── action.yml               # GitHub Action definition (inputs, environment, and steps)
 ├── CONTRIBUTING.md          # Collaboration guidelines for developers
 ├── gemini_issue_triage.py   # Python script to triage and label incoming issues
-├── gemini_pr_review.py      # Python script to review PRs
+├── gemini_pr_review.py      # Entrypoint script for PR reviews (re-exports gemini_review APIs)
 ├── pyproject.toml           # Python project config, dependencies
 └── README.md                # Project documentation, setup guide, and usage examples
 ```
