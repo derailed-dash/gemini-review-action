@@ -383,6 +383,10 @@ Available personas:
 
 ![Emperor Palpatine Persona Review Output](./assets/palpatine-review.png)
 
+**Example Output (Rick Sanchez Persona)**:
+
+![Rick Sanchez Persona Review Output](./assets/rick-review.png)
+
 **Configuring via workflow file (`gemini-review.yml`)**:
 ```yaml
 - uses: derailed-dash/gemini-review-action@v1
