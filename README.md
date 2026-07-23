@@ -239,6 +239,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gemini_model: 'gemini-3.6-flash'
           language: 'English (UK)'           # Optional (e.g. English (UK), French, Spanish)
+          # persona: 'straight'                # Optional: straight (default), dazbo, palpatine
 ```
 
 After adding the workflow to your repository, it should look something like this:
@@ -351,6 +352,7 @@ jobs:
 | `command` | The mode/command to run: `review` (for PR reviews) or `triage` (for issue triaging). | No | `review` |
 | `include_comment_history` | Whether to fetch prior inline review threads and conversation comments from GitHub. | No | `'true'` |
 | `language` | The language to use for the review comments (e.g. `English (UK)`, `English (US)`, `French`, `Spanish`). | No | `English (UK)` |
+| `persona` | Reviewer persona overlay (`straight`, `dazbo`, `palpatine`). | No | `straight` |
 | `timeout` | Timeout for API requests in seconds. | No | `60` |
 
 ### Codebase Context Configuration
@@ -365,6 +367,24 @@ You can configure these settings by adding the following keys to your custom `.g
 # Codebase Context Configuration (Optional)
 max_context_bytes = 1500000  # Threshold in bytes
 core_file_patterns = ["*.md", "pyproject.toml", "package.json", "go.mod", "Cargo.toml"]  # File patterns to always include
+```
+
+### Reviewer Personas
+
+You can customize the personality and feedback style of the reviewer agent using the `persona` action input in your workflow YAML file (e.g. `.github/workflows/gemini-review.yml`).
+
+Available personas:
+- **`straight` (Default)**: Standard, objective code reviewer with no persona overlay applied.
+- **`dazbo`**: Warm, approachable software engineer tone with clear technical explanations and mild cheekiness. If recommendations from previous review iterations are unaddressed or ignored without explanation, it exhibits increasing levels of dry humor, sarcasm, and mild exasperation!
+- **`palpatine`**: Emperor Palpatine (Star Wars) persona with grand imperial authority, dark side quotes ("*Do it.*", "*Unlimited power!*", "*I find your lack of compliance disturbing*"), and ruthless code perfectionism.
+
+**Configuring via workflow file (`gemini-review.yml`)**:
+```yaml
+- uses: derailed-dash/gemini-review-action@v1
+  with:
+    gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+    github_token: ${{ secrets.GITHUB_TOKEN }}
+    persona: 'dazbo'  # Options: straight (default), dazbo, palpatine
 ```
 
 ### Custom Prompts / Instructions

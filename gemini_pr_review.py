@@ -41,6 +41,7 @@ from gemini_review import (
     get_google_auth_headers,
     get_google_developer_documents,
     get_local_git_files,
+    get_persona_prompt,
     get_pr_comments,
     get_pr_files,
     get_valid_changed_lines,
@@ -53,6 +54,7 @@ from gemini_review import (
     load_workspace_rules,
     parse_skill_metadata,
     post_review,
+    resolve_persona_name,
     search_google_developer_knowledge,
 )
 
@@ -75,6 +77,7 @@ __all__ = [
     "get_google_auth_headers",
     "get_google_developer_documents",
     "get_local_git_files",
+    "get_persona_prompt",
     "get_pr_comments",
     "get_pr_files",
     "get_valid_changed_lines",
@@ -88,6 +91,7 @@ __all__ = [
     "main",
     "parse_skill_metadata",
     "post_review",
+    "resolve_persona_name",
     "search_google_developer_knowledge",
 ]
 

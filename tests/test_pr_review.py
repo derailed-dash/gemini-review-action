@@ -946,3 +946,85 @@ def test_post_review_with_usage_metadata(mocker):
     assert "| **PR Comments History Tokens** | 50 |" in body
     assert "| **Output Tokens** | 100 |" in body
     assert "| **Total Session Tokens** | **1,100** |" in body
+
+
+# --- Personas Feature Tests ---
+
+
+def test_get_persona_prompt_straight():
+    """Test get_persona_prompt returns empty string for straight/default/empty personas."""
+    from gemini_review import get_persona_prompt
+
+    assert get_persona_prompt(None) == ""
+    assert get_persona_prompt("") == ""
+    assert get_persona_prompt("straight") == ""
+    assert get_persona_prompt("Straight") == ""
+    assert get_persona_prompt("default") == ""
+    assert get_persona_prompt("none") == ""
+
+
+def test_get_persona_prompt_dazbo():
+    """Test get_persona_prompt returns Dazbo persona overlay prompt."""
+    from gemini_review import get_persona_prompt
+
+    prompt = get_persona_prompt("dazbo")
+    assert "## Persona Overlay: Dazbo" in prompt
+    assert "warm, approachable, fun, and mildly cheeky" in prompt.lower()
+    assert "exasperation" in prompt.lower()
+    assert "sarcasm" in prompt.lower()
+
+    # Case-insensitivity & whitespace handling
+    assert get_persona_prompt("  DAZBO  ") == prompt
+
+
+def test_get_persona_prompt_palpatine():
+    """Test get_persona_prompt returns Palpatine persona overlay prompt."""
+    from gemini_review import get_persona_prompt
+
+    prompt = get_persona_prompt("palpatine")
+    assert "## Persona Overlay: Emperor Palpatine" in prompt
+    assert "Execute Order 66" in prompt
+    assert "Unlimited power!" in prompt
+    assert "Dark Side" in prompt
+
+    # Case-insensitivity
+    assert get_persona_prompt("Palpatine") == prompt
+
+
+def test_get_persona_prompt_unknown(capsys):
+    """Test get_persona_prompt prints warning and falls back to straight for unknown personas."""
+    from gemini_review import get_persona_prompt
+
+    prompt = get_persona_prompt("invalid_persona")
+    assert prompt == ""
+
+    captured = capsys.readouterr()
+    assert "Warning: Unknown reviewer persona 'invalid_persona'" in captured.err
+
+
+def test_resolve_persona_name(mocker):
+    """Test resolve_persona_name environment and configuration precedence."""
+    from gemini_review import resolve_persona_name
+
+    # Default fallback
+    mocker.patch.dict(os.environ, {}, clear=True)
+    assert resolve_persona_name({}) == "straight"
+
+    # From config
+    assert resolve_persona_name({"persona": "dazbo"}) == "dazbo"
+
+    # Environment variable overrides config
+    mocker.patch.dict(os.environ, {"GEMINI_PERSONA": "palpatine"})
+    assert resolve_persona_name({"persona": "dazbo"}) == "palpatine"
+
+
+def test_load_system_instruction_with_persona(mocker):
+    """Test load_system_instruction appends persona prompt overlays correctly."""
+    from gemini_review import load_system_instruction
+
+    mocker.patch.dict(os.environ, {"GEMINI_PERSONA": "dazbo"})
+    config = {"prompt": "You are a review bot."}
+
+    instruction = load_system_instruction("owner/repo", 1, config)
+    assert "You are a review bot." in instruction
+    assert "## Persona Overlay: Dazbo" in instruction
