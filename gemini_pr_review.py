@@ -61,6 +61,12 @@ class ReviewResult(BaseModel):
     summary: str = Field(
         description="A brief, high-level assessment of the Pull Request's objective and quality (2-3 sentences)."
     )
+    resolved_items: list[str] = Field(
+        default_factory=list,
+        description=(
+            "List of previously raised review comments/threads that have been resolved or addressed in this PR update."
+        ),
+    )
     general_feedback: list[str] = Field(
         description="General feedback items, positive observations, or non-line-specific feedback."
     )
@@ -940,9 +946,15 @@ def post_review(
 
         comments_payload.append({"path": c.path, "line": c.line, "side": c.side, "body": "\n\n".join(body_parts)})
 
-    review_body = f"## 📋 Review Summary\n\n{review.summary}\n\n## 🔍 General Feedback\n\n" + "\n".join(
-        f"- {f}" for f in review.general_feedback
-    )
+    body_sections = [f"## 📋 Review Summary\n\n{review.summary}"]
+    if review.resolved_items:
+        resolved_str = "\n".join(f"- {r}" for r in review.resolved_items)
+        body_sections.append(f"### ✅ Resolved Items from Prior Review\n\n{resolved_str}")
+    if review.general_feedback:
+        feedback_str = "\n".join(f"- {f}" for f in review.general_feedback)
+        body_sections.append(f"## 🔍 General Feedback\n\n{feedback_str}")
+
+    review_body = "\n\n".join(body_sections)
 
     payload = {"body": review_body, "event": "COMMENT", "comments": comments_payload}
 
@@ -1353,6 +1365,10 @@ def main():
     if is_dry_run:
         print("\n=== DRY RUN REVIEW SUMMARY ===", file=sys.stderr)
         print(f"Summary: {review.summary}")
+        if review.resolved_items:
+            print("\n=== RESOLVED ITEMS ===", file=sys.stderr)
+            for r in review.resolved_items:
+                print(f"✅ {r}")
         print("\n=== GENERAL FEEDBACK ===", file=sys.stderr)
         for gf in review.general_feedback:
             print(f"- {gf}")

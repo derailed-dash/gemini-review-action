@@ -37,7 +37,13 @@ To drastically reduce API costs and latency for large codebase contexts, `gemini
 * **Cost & Multi-Turn Optimisation**: Input tokens billed against the cached handle receive a **75% discount**. Furthermore, multi-turn tool interactions (such as Google Developer Knowledge MCP searches or skill lookups) reference the cached handle without re-billing the 250,000-token codebase context on subsequent turns.
 * **Resilient Fallback**: If cache creation, lookup, or generation with cached content fails for any reason, the script seamlessly falls back to direct context generation without interrupting the CI review pipeline.
 
-### 4. Structured Output Schemas
+### 4. PR Comment & Discussion Thread History Engine
+When enabled via `include_comment_history: 'true'` (default), `gemini_pr_review.py` fetches complete historical discussion context from the GitHub API:
+* **Inline & Conversation Retrieval (`get_pr_comments()`)**: Fetches inline review comments (`pulls/{pr_number}/comments`) and general PR issue comments (`issues/{pr_number}/comments`) using `while True` pagination loops (`per_page=100`) to guarantee all historical comments are captured.
+* **Thread Structuring (`format_pr_comment_history()`)**: Groups comments into root comments and nested developer replies per file and line number, presenting clear conversational timelines to Gemini.
+* **Resolution Decision Matrix**: Instructs Gemini not to repeat suggestions that have been addressed in code, deferred, or explicitly justified by developers, while ensuring unresolved items without explanation or un-applied agreed fixes are re-flagged.
+
+### 5. Structured Output Schemas
 Gemini is forced to return structured JSON adhering to the Pydantic schemas:
 * `InlineComment`:
   - `path`: File path.
@@ -48,12 +54,13 @@ Gemini is forced to return structured JSON adhering to the Pydantic schemas:
   - `code_suggestion`: Optional drop-in suggestion replacement.
 * `ReviewResult`:
   - `summary`: High-level quality assessment.
+  - `resolved_items`: List of previously raised review comments/threads resolved in the current PR iteration.
   - `general_feedback`: List of highlights or observations.
   - `comments`: List of `InlineComment` instances.
 
-### 5. Resilient Review Submissions
+### 6. Resilient Review Submissions
 Submitting reviews with line-specific comments via GitHub's API can be fragile (e.g. if the model specifies a line index that falls outside the diff range).
-* **Atomic Run:** The script first attempts to post the summary and all inline comments in a single transaction via `POST /repos/{owner}/{repo}/pulls/{number}/reviews`.
+* **Atomic Run:** The script first attempts to post the summary, resolved items list (`### ✅ Resolved Items from Prior Review`), and all inline comments in a single transaction via `POST /repos/{owner}/{repo}/pulls/{number}/reviews`.
 * **Resilient Fallback:** If the atomic post fails (e.g. returns HTTP 422), the script catches the failure, posts the review summary comment, and attempts to publish individual comments one-by-one. This ensures valid comments are still delivered while preventing a CI checkout block.
 
 ---

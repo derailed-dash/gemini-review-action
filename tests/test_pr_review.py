@@ -885,3 +885,28 @@ def test_build_prompt_with_comment_history(mocker):
     assert "=== File: main.py ===" in prompt
     assert "=== Prior PR Discussion & Review Threads ===" in prompt
     assert "[dazbo]: Handled upstream." in prompt
+
+
+def test_post_review_with_resolved_items(mocker):
+    """Test post_review formats resolved_items section into review body."""
+    mock_post = mocker.patch("requests.post")
+    mock_post.return_value = mocker.Mock(status_code=200)
+
+    review = ReviewResult(
+        summary="PR LGTM",
+        resolved_items=["Added null check in main.py", "Updated docstrings"],
+        general_feedback=["Good tests"],
+        comments=[],
+    )
+
+    post_review("owner/repo", 42, "head_sha", review, {"Authorization": "token abc"})
+
+    assert mock_post.call_count == 1
+    posted_payload = mock_post.call_args[1]["json"]
+    body = posted_payload["body"]
+
+    assert "## 📋 Review Summary" in body
+    assert "### ✅ Resolved Items from Prior Review" in body
+    assert "- Added null check in main.py" in body
+    assert "- Updated docstrings" in body
+    assert "## 🔍 General Feedback" in body
