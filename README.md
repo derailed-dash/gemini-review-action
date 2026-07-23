@@ -377,6 +377,11 @@ Available personas:
 - **`straight` (Default)**: Standard, objective code reviewer with no persona overlay applied.
 - **`dazbo`**: Warm, approachable software engineer tone with clear technical explanations and mild cheekiness. If recommendations from previous review iterations are unaddressed or ignored without explanation, it exhibits increasing levels of dry humor, sarcasm, and mild exasperation!
 - **`palpatine`**: Emperor Palpatine (Star Wars) persona with grand imperial authority, dark side quotes ("*Do it.*", "*Unlimited power!*", "*I find your lack of compliance disturbing*"), demanding ruthless code perfectionism.
+- **`palpatine`**: Emperor Palpatine (Star Wars) persona with grand imperial authority, dark side quotes ("*Do it.*", "*Unlimited power!*", "*I find your lack of compliance disturbing*"), demanding ruthless code perfectionism.
+
+**Example Output (Emperor Palpatine Persona)**:
+
+![Emperor Palpatine Persona Review Output](./assets/palpatine-review.png)
 - **`rick`**: Rick Sanchez (Rick and Morty) persona — hyper-intelligent, cynical multiverse genius ("*burp*", "*Wubba Lubba Dub-Dub!*", "*Jerry-tier code*"). Demands galaxy-brain engineering perfection and treats sloppy bugs as pathetic Jerry-level amateur work!
 
 **Configuring via workflow file (`gemini-review.yml`)**:
