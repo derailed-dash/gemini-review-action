@@ -230,40 +230,58 @@ def get_pr_files(repository: str, pr_number: int, headers: dict, timeout: int = 
 def get_pr_comments(
     repository: str, pr_number: int, headers: dict, timeout: int = DEFAULT_TIMEOUT
 ) -> tuple[list[dict], list[dict]]:
-    """Fetch inline review comments and general PR issue comments for a pull request."""
+    """Fetch inline review comments and general PR issue comments for a pull request using pagination."""
     review_comments = []
     issue_comments = []
 
     if not repository or not pr_number:
         return review_comments, issue_comments
 
-    # 1. Fetch inline review comments
-    review_url = f"https://api.github.com/repos/{repository}/pulls/{pr_number}/comments?per_page=100"
-    try:
-        res = requests.get(review_url, headers=headers, timeout=timeout)
-        if res.status_code == 200:
-            review_comments = res.json()
-        else:
-            print(
-                f"Warning: Failed to fetch PR review comments ({res.status_code}): {res.text}",
-                file=sys.stderr,
-            )
-    except Exception as e:
-        print(f"Warning: Exception while fetching PR review comments: {e}", file=sys.stderr)
+    # 1. Fetch inline review comments with pagination
+    page = 1
+    while True:
+        review_url = f"https://api.github.com/repos/{repository}/pulls/{pr_number}/comments?page={page}&per_page=100"
+        try:
+            res = requests.get(review_url, headers=headers, timeout=timeout)
+            if res.status_code != 200:
+                print(
+                    f"Warning: Failed to fetch PR review comments ({res.status_code}): {res.text}",
+                    file=sys.stderr,
+                )
+                break
+            data = res.json()
+            if not data or not isinstance(data, list):
+                break
+            review_comments.extend(data)
+            if len(data) < 100:
+                break
+            page += 1
+        except Exception as e:
+            print(f"Warning: Exception while fetching PR review comments: {e}", file=sys.stderr)
+            break
 
-    # 2. Fetch general issue/PR timeline comments
-    issue_url = f"https://api.github.com/repos/{repository}/issues/{pr_number}/comments?per_page=100"
-    try:
-        res = requests.get(issue_url, headers=headers, timeout=timeout)
-        if res.status_code == 200:
-            issue_comments = res.json()
-        else:
-            print(
-                f"Warning: Failed to fetch PR issue comments ({res.status_code}): {res.text}",
-                file=sys.stderr,
-            )
-    except Exception as e:
-        print(f"Warning: Exception while fetching PR issue comments: {e}", file=sys.stderr)
+    # 2. Fetch general issue/PR timeline comments with pagination
+    page = 1
+    while True:
+        issue_url = f"https://api.github.com/repos/{repository}/issues/{pr_number}/comments?page={page}&per_page=100"
+        try:
+            res = requests.get(issue_url, headers=headers, timeout=timeout)
+            if res.status_code != 200:
+                print(
+                    f"Warning: Failed to fetch PR issue comments ({res.status_code}): {res.text}",
+                    file=sys.stderr,
+                )
+                break
+            data = res.json()
+            if not data or not isinstance(data, list):
+                break
+            issue_comments.extend(data)
+            if len(data) < 100:
+                break
+            page += 1
+        except Exception as e:
+            print(f"Warning: Exception while fetching PR issue comments: {e}", file=sys.stderr)
+            break
 
     return review_comments, issue_comments
 

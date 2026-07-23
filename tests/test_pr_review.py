@@ -787,6 +787,26 @@ def test_get_pr_comments(mocker):
     assert mock_get.call_count == 2
 
 
+def test_get_pr_comments_pagination(mocker):
+    """Test get_pr_comments paginating across multiple pages."""
+    mock_get = mocker.patch("requests.get")
+
+    page1_reviews = [{"id": i} for i in range(100)]
+    page2_reviews = [{"id": 101}]
+
+    res_review_p1 = mocker.Mock(status_code=200, json=lambda: page1_reviews)
+    res_review_p2 = mocker.Mock(status_code=200, json=lambda: page2_reviews)
+    res_issue_p1 = mocker.Mock(status_code=200, json=lambda: [{"id": 500}])
+
+    mock_get.side_effect = [res_review_p1, res_review_p2, res_issue_p1]
+
+    reviews, issues = get_pr_comments("owner/repo", 42, {}, timeout=10)
+
+    assert len(reviews) == 101
+    assert len(issues) == 1
+    assert mock_get.call_count == 3
+
+
 def test_get_pr_comments_error_handling(mocker):
     """Test get_pr_comments handling API failure gracefully."""
     mock_get = mocker.patch("requests.get")
