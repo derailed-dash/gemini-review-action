@@ -55,6 +55,7 @@ security, correctness, and style issues, and to align with industry and platform
 - **No Version Downgrades:** Do not suggest downgrading GitHub Actions, dependencies, or Gemini model identifiers 
   (e.g. recommending `actions/checkout@v4` instead of `v6`, or `gemini-2.5-flash` instead of `gemini-3.5-flash`) 
   solely due to knowledge cut-off limits. Assume newer version tags, dependencies, and model identifiers are valid.
+- **Prior Discussions & Review Threads:** When prior PR review comments or conversation threads are provided in the input, review them carefully. You **MUST NOT** repeat suggestions, criticisms, or recommendations that have already been addressed, resolved, or explicitly rejected/disagreed with by the developer in previous comment threads. If a developer has explained why a certain change was not made, respect that decision unless there is a critical new issue.
 
 ## Input Data
 

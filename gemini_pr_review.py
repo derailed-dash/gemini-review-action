@@ -227,6 +227,133 @@ def get_pr_files(repository: str, pr_number: int, headers: dict, timeout: int = 
     return files
 
 
+def get_pr_comments(
+    repository: str, pr_number: int, headers: dict, timeout: int = DEFAULT_TIMEOUT
+) -> tuple[list[dict], list[dict]]:
+    """Fetch inline review comments and general PR issue comments for a pull request."""
+    review_comments = []
+    issue_comments = []
+
+    if not repository or not pr_number:
+        return review_comments, issue_comments
+
+    # 1. Fetch inline review comments
+    review_url = f"https://api.github.com/repos/{repository}/pulls/{pr_number}/comments?per_page=100"
+    try:
+        res = requests.get(review_url, headers=headers, timeout=timeout)
+        if res.status_code == 200:
+            review_comments = res.json()
+        else:
+            print(
+                f"Warning: Failed to fetch PR review comments ({res.status_code}): {res.text}",
+                file=sys.stderr,
+            )
+    except Exception as e:
+        print(f"Warning: Exception while fetching PR review comments: {e}", file=sys.stderr)
+
+    # 2. Fetch general issue/PR timeline comments
+    issue_url = f"https://api.github.com/repos/{repository}/issues/{pr_number}/comments?per_page=100"
+    try:
+        res = requests.get(issue_url, headers=headers, timeout=timeout)
+        if res.status_code == 200:
+            issue_comments = res.json()
+        else:
+            print(
+                f"Warning: Failed to fetch PR issue comments ({res.status_code}): {res.text}",
+                file=sys.stderr,
+            )
+    except Exception as e:
+        print(f"Warning: Exception while fetching PR issue comments: {e}", file=sys.stderr)
+
+    return review_comments, issue_comments
+
+
+def format_pr_comment_history(review_comments: list[dict], issue_comments: list[dict]) -> str:
+    """Format inline review comments into structured threads, and general issue comments into conversation history."""
+    if not review_comments and not issue_comments:
+        return ""
+
+    prompt_parts = []
+    prompt_parts.append("=== Prior PR Discussion & Review Threads ===")
+    prompt_parts.append(
+        "Below are previous comments and review discussion threads from this Pull Request. "
+        "Review them to understand prior feedback and avoid repeating suggestions that have "
+        "already been addressed, resolved, or disagreed with:\n"
+    )
+
+    if review_comments:
+        prompt_parts.append("--- Inline Review Comment Threads ---")
+        comments_by_id = {c["id"]: c for c in review_comments if isinstance(c, dict) and "id" in c}
+
+        roots = []
+        replies_by_root = {}
+        for c in review_comments:
+            if not isinstance(c, dict):
+                continue
+            reply_to = c.get("in_reply_to_id")
+            if reply_to:
+                curr = reply_to
+                visited = set()
+                while curr in comments_by_id and comments_by_id[curr].get("in_reply_to_id") and curr not in visited:
+                    visited.add(curr)
+                    curr = comments_by_id[curr]["in_reply_to_id"]
+                root_id = curr
+                replies_by_root.setdefault(root_id, []).append(c)
+            else:
+                roots.append(c)
+
+        for root in roots:
+            root_id = root.get("id")
+            file_path = root.get("path", "unknown")
+            line = root.get("line") or root.get("original_line") or "N/A"
+            author = root.get("user", {}).get("login", "unknown") if isinstance(root.get("user"), dict) else "unknown"
+            body = root.get("body", "").strip()
+
+            prompt_parts.append(f"• Thread on `{file_path}` (Line {line}):")
+            prompt_parts.append(f"  - [{author}]: {body}")
+
+            thread_replies = replies_by_root.get(root_id, [])
+            for reply in thread_replies:
+                r_author = (
+                    reply.get("user", {}).get("login", "unknown") if isinstance(reply.get("user"), dict) else "unknown"
+                )
+                r_body = reply.get("body", "").strip()
+                prompt_parts.append(f"    └─ [{r_author}]: {r_body}")
+            prompt_parts.append("")
+
+    if issue_comments:
+        prompt_parts.append("--- General PR Conversation Comments ---")
+        for comment in issue_comments:
+            if not isinstance(comment, dict):
+                continue
+            author = (
+                comment.get("user", {}).get("login", "unknown") if isinstance(comment.get("user"), dict) else "unknown"
+            )
+            body = comment.get("body", "").strip()
+            created_at = comment.get("created_at", "")
+            date_str = f" ({created_at[:10]})" if len(created_at) >= 10 else ""
+            prompt_parts.append(f"• [{author}]{date_str}: {body}")
+        prompt_parts.append("")
+
+    prompt_parts.append("===========================================\n")
+    return "\n".join(prompt_parts)
+
+
+def count_text_tokens(client, model_name: str, text: str) -> int:
+    """Count or estimate the number of tokens in a text string."""
+    if not text:
+        return 0
+    if client and hasattr(client, "models") and hasattr(client.models, "count_tokens"):
+        try:
+            resp = client.models.count_tokens(model=model_name, contents=text)
+            if hasattr(resp, "total_tokens") and resp.total_tokens is not None:
+                return resp.total_tokens
+        except Exception:
+            pass
+    # Fallback heuristic (~4 chars per token)
+    return max(1, len(text) // 4)
+
+
 def get_local_git_files() -> list:
     """Developer fallback to gather file diffs from local git tree."""
     try:
@@ -594,7 +721,9 @@ def load_system_instruction(repository: str | None, pr_number: int, config: dict
     if not prompt:
         return (
             "You are a world-class code review agent. Analyze changes and output constructive feedback using"
-            f" {os.environ.get('GEMINI_LANGUAGE', 'English (UK)')} spelling."
+            f" {os.environ.get('GEMINI_LANGUAGE', 'English (UK)')} spelling. Review any prior PR comment history"
+            " and DO NOT repeat suggestions or feedback that have already been addressed, resolved, or disagreed with"
+            " by the developer."
         )
 
     prompt = prompt.replace("!{echo $REPOSITORY}", repository or "unknown")
@@ -768,13 +897,16 @@ def build_codebase_context(files: list, config: dict) -> str:
     return "\n".join(prompt_parts)
 
 
-def build_prompt(files: list, config: dict) -> str:
-    """Consolidate file patches and file contents into a single review context."""
+def build_prompt(files: list, config: dict, comment_history: str = "") -> str:
+    """Consolidate file patches, PR comment history, and file contents into a single review context."""
     pr_prompt = build_pr_diff_prompt(files)
+    parts = [pr_prompt]
+    if comment_history:
+        parts.append(comment_history)
     codebase_ctx = build_codebase_context(files, config)
     if codebase_ctx:
-        return f"{pr_prompt}\n\n{codebase_ctx}"
-    return pr_prompt
+        parts.append(codebase_ctx)
+    return "\n\n".join(parts)
 
 
 def post_review(
@@ -958,9 +1090,27 @@ def main():
             " developer docs."
         )
 
+    include_comments_env = os.environ.get("GEMINI_INCLUDE_COMMENT_HISTORY", "true").lower() in ("true", "1")
+    include_comments_config = config.get("include_comment_history", True)
+    should_include_comments = include_comments_env and include_comments_config
+
+    comment_history_str = ""
+    comment_history_tokens = 0
+    if should_include_comments and not is_dry_run and repository and pr_number:
+        print(f"Fetching prior PR comments for PR #{pr_number}...", file=sys.stderr)
+        review_comments, issue_comments = get_pr_comments(repository, pr_number, headers, timeout=timeout)
+        comment_history_str = format_pr_comment_history(review_comments, issue_comments)
+        if comment_history_str:
+            comment_history_tokens = count_text_tokens(client, model_name, comment_history_str)
+            print(
+                f"PR comment history included ({comment_history_tokens:,} tokens).",
+                file=sys.stderr,
+            )
+
     pr_diff_prompt = build_pr_diff_prompt(text_files)
+    dynamic_pr_prompt = f"{pr_diff_prompt}\n\n{comment_history_str}" if comment_history_str else pr_diff_prompt
     codebase_context = build_codebase_context(text_files, config)
-    full_prompt = f"{pr_diff_prompt}\n\n{codebase_context}" if codebase_context else pr_diff_prompt
+    full_prompt = f"{dynamic_pr_prompt}\n\n{codebase_context}" if codebase_context else dynamic_pr_prompt
 
     enable_caching = config.get("enable_context_caching", True)
     cache_ttl_seconds = config.get("cache_ttl_seconds", 3600)
@@ -1004,7 +1154,7 @@ def main():
 
                 if existing_cache:
                     cached_content_name = existing_cache.name
-                    contents_to_send = pr_diff_prompt
+                    contents_to_send = dynamic_pr_prompt
                     is_reused_cache = True
                     active_display_name = getattr(existing_cache, "display_name", display_name)
                     print(
@@ -1032,7 +1182,7 @@ def main():
                         ),
                     )
                     cached_content_name = cache_obj.name
-                    contents_to_send = pr_diff_prompt
+                    contents_to_send = dynamic_pr_prompt
                     is_reused_cache = False
                     print(f"Context cache active: {cached_content_name}", file=sys.stderr)
         except Exception as e:
@@ -1123,13 +1273,29 @@ def main():
                 " Rate Discount)  │",
                 file=sys.stderr,
             )
+            if comment_history_tokens > 0:
+                print(
+                    "│ ├── PR Comments History Tokens       │"
+                    f" {comment_history_tokens:>12,d} │ Prior review threads context  │",
+                    file=sys.stderr,
+                )
             print(
                 f"│ └── Un-cached Fresh Tokens           │ {fresh_tokens:>12,d} │ Diff & instructions only      │",
                 file=sys.stderr,
             )
         else:
             print(
-                "│ └── Cached Context Tokens            │            0 │ Direct un-cached context      │",
+                "│ ├── Cached Context Tokens            │            0 │ Direct un-cached context      │",
+                file=sys.stderr,
+            )
+            if comment_history_tokens > 0:
+                print(
+                    "│ ├── PR Comments History Tokens       │"
+                    f" {comment_history_tokens:>12,d} │ Prior review threads context  │",
+                    file=sys.stderr,
+                )
+            print(
+                f"│ └── Un-cached Fresh Tokens           │ {fresh_tokens:>12,d} │ Diff & instructions only      │",
                 file=sys.stderr,
             )
         print(
