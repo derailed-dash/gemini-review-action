@@ -4,6 +4,8 @@
 
 **Automated, Google Gemini-based Pull Request reviews and Issue Triaging for all your GitHub repositories and CI/CD pipelines.**
 
+![Automated PR Review Output Example](assets/review-output.png)
+
 See the supporting blog post about this action [here](https://medium.com/google-cloud/automated-github-code-reviewsusing-google-gemini-7b4d027b3092).
 
 ## Table of Contents
@@ -414,7 +416,24 @@ The action parses the TOML files and dynamically substitutes the following expre
 
 ## Understanding the Token Usage & Cost Efficiency Report
 
-Whenever a review run finishes, the action prints a structured telemetry table to the workflow execution log:
+Whenever a review run finishes, the action provides token telemetry in two places:
+
+1. **Pull Request Review Output**: A collapsible `<details>` section appended directly to the bottom of the posted PR review comment on GitHub:
+
+   <details>
+   <summary>📊 Token Usage & Cost Efficiency</summary>
+
+   | Metric | Token Count |
+   | :--- | :---: |
+   | **Input Tokens (uncached)** | 14,414 |
+   | **Input Tokens (cached)** | 250,985 (⚡ 94.4% cached) |
+   | **PR Comments History Tokens** | 450 |
+   | **Output Tokens** | 210 |
+   | **Total Session Tokens** | **267,701** |
+
+   </details>
+
+2. **Workflow Execution Logs**: A detailed ASCII telemetry table printed to the runner logs:
 
 ```text
 📊 Gemini Token Usage & Cost Efficiency Report
@@ -422,7 +441,7 @@ Whenever a review run finishes, the action prints a structured telemetry table t
 │ Metric                           │ Token Count  │ Benefit / Efficiency          │
 ├──────────────────────────────────┼──────────────┼───────────────────────────────┤
 │ Total Input (Prompt) Tokens      │      265,849 │ Base input context            │
-│ ├── Cached Context Tokens        │      250,985 │ ⚡ 94.4% (75% Rate Discount)  │
+│ ├── Cached Context Tokens        │      250,985 │ ⚡ 94.4% (90% Rate Discount)  │
 │ ├── PR Comments History Tokens   │          450 │ Prior review threads context  │
 │ └── Un-cached Fresh Tokens       │       14,414 │ Diff & instructions only      │
 │ Output (Candidates) Tokens       │          210 │ Generated review content      │
