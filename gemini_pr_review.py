@@ -739,9 +739,10 @@ def load_system_instruction(repository: str | None, pr_number: int, config: dict
     if not prompt:
         return (
             "You are a world-class code review agent. Analyze changes and output constructive feedback using"
-            f" {os.environ.get('GEMINI_LANGUAGE', 'English (UK)')} spelling. Review any prior PR comment history"
-            " and DO NOT repeat suggestions or feedback that have already been addressed, resolved, or disagreed with"
-            " by the developer."
+            f" {os.environ.get('GEMINI_LANGUAGE', 'English (UK)')} spelling. Review any prior PR comment history."
+            " DO NOT repeat suggestions that have been addressed, deferred, or explicitly justified/disagreed with"
+            " by the developer. DO restate unresolved suggestions if the code remains unchanged without an explanation"
+            " or if the developer agreed with the fix but has not yet applied it."
         )
 
     prompt = prompt.replace("!{echo $REPOSITORY}", repository or "unknown")
