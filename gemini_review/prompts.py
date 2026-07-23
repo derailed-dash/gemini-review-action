@@ -10,6 +10,8 @@ import sys
 from gemini_review.personas import get_persona_prompt, resolve_persona_name
 from gemini_review.utils import (
     _get_pr_review_func,
+    format_diff_patch_with_line_numbers,
+    format_file_content_with_line_numbers,
     generate_file_tree,
     get_all_repo_files,
     get_file_content,
@@ -50,6 +52,12 @@ def build_pr_diff_prompt(files: list) -> str:
     """Build the dynamic PR diff patch prompt for modified files."""
     fn_is_text_file = _get_pr_review_func("is_text_file", is_text_file)
     fn_get_file_content = _get_pr_review_func("get_file_content", get_file_content)
+    fn_format_diff_patch = _get_pr_review_func(
+        "format_diff_patch_with_line_numbers", format_diff_patch_with_line_numbers
+    )
+    fn_format_file_content = _get_pr_review_func(
+        "format_file_content_with_line_numbers", format_file_content_with_line_numbers
+    )
 
     prompt_parts = []
     prompt_parts.append("Below are the files and changes included in this Pull Request:\n")
@@ -67,10 +75,10 @@ def build_pr_diff_prompt(files: list) -> str:
         prompt_parts.append(f"=== File: {filename} ===")
         prompt_parts.append(f"Status: {status}")
         prompt_parts.append("--- Diff (Patch) ---")
-        prompt_parts.append(patch)
+        prompt_parts.append(fn_format_diff_patch(patch))
         if full_content:
             prompt_parts.append("--- Full Current File Content ---")
-            prompt_parts.append(full_content)
+            prompt_parts.append(fn_format_file_content(full_content))
         prompt_parts.append("=========================\n")
 
     return "\n".join(prompt_parts)

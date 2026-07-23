@@ -69,44 +69,117 @@ def _normalize_model_name(model: str | None) -> str:
     return name
 
 
-def get_valid_changed_lines(patch: str) -> set[int]:
-    """Parse the diff patch to find all line numbers in the new file (RIGHT side) that are part of the diff."""
-    valid_lines = set()
-    if not patch:
-        return valid_lines
+def format_file_content_with_line_numbers(content: str) -> str:
+    """Format full file content with 1-based line number prefixes."""
+    if not content:
+        return ""
+    lines = content.splitlines()
+    width = max(len(str(len(lines))), 4)
+    return "\n".join(f"{idx:{width}d} | {line}" for idx, line in enumerate(lines, start=1))
 
-    current_line = 0
+
+def format_diff_patch_with_line_numbers(patch: str) -> str:
+    """Annotate unified diff patch lines with their corresponding line numbers."""
+    if not patch:
+        return ""
+
+    annotated_lines = []
+    current_old = 0
+    current_new = 0
+
+    for line in patch.splitlines():
+        if line.startswith("@@"):
+            annotated_lines.append(line)
+            try:
+                parts = line.split()
+                old_info = parts[1].lstrip("-")
+                new_info = parts[2].lstrip("+")
+                current_old = int(old_info.split(",")[0])
+                current_new = int(new_info.split(",")[0])
+            except Exception:
+                current_old = 0
+                current_new = 0
+        elif current_new == 0 and current_old == 0:
+            annotated_lines.append(line)
+        elif line.startswith("+"):
+            if current_new > 0:
+                annotated_lines.append(f"{current_new:5d} + | {line[1:]}")
+                current_new += 1
+            else:
+                annotated_lines.append(line)
+        elif line.startswith("-"):
+            if current_old > 0:
+                annotated_lines.append(f"{current_old:5d} - | {line[1:]}")
+                current_old += 1
+            else:
+                annotated_lines.append(line)
+        elif line.startswith(" ") or line == "":
+            raw_text = line[1:] if line.startswith(" ") else ""
+            if current_new > 0:
+                annotated_lines.append(f"{current_new:5d}   | {raw_text}")
+                current_new += 1
+                current_old += 1
+            else:
+                annotated_lines.append(line)
+        else:
+            annotated_lines.append(line)
+
+    return "\n".join(annotated_lines)
+
+
+def get_valid_diff_lines(patch: str) -> tuple[set[int], set[int]]:
+    """Parse the diff patch to find all valid line numbers for RIGHT side (new file) and LEFT side (old file)."""
+    valid_right = set()
+    valid_left = set()
+    if not patch:
+        return valid_right, valid_left
+
+    current_old = 0
+    current_new = 0
     for line in patch.splitlines():
         if line.startswith("@@"):
             try:
-                # Header format: @@ -old_start,old_count +new_start,new_count @@
                 parts = line.split()
+                old_info = parts[1].lstrip("-")
                 new_info = parts[2].lstrip("+")
-                if "," in new_info:
-                    start_line, _ = new_info.split(",")
-                else:
-                    start_line = new_info
-                current_line = int(start_line)
+                current_old = int(old_info.split(",")[0])
+                current_new = int(new_info.split(",")[0])
             except Exception:
-                current_line = 0
-        elif line.startswith("+") or line.startswith(" ") or line == "":
-            if current_line > 0:
-                valid_lines.add(current_line)
-                current_line += 1
+                current_old = 0
+                current_new = 0
+        elif line.startswith("+"):
+            if current_new > 0:
+                valid_right.add(current_new)
+                current_new += 1
         elif line.startswith("-"):
-            # Deleted lines do not advance line numbers in the new file (RIGHT side)
-            pass
-    return valid_lines
+            if current_old > 0:
+                valid_left.add(current_old)
+                current_old += 1
+        elif line.startswith(" ") or line == "":
+            if current_new > 0:
+                valid_right.add(current_new)
+                current_new += 1
+            if current_old > 0:
+                valid_left.add(current_old)
+                current_old += 1
+    return valid_right, valid_left
+
+
+def get_valid_changed_lines(patch: str) -> set[int]:
+    """Parse the diff patch to find all line numbers in the new file (RIGHT side) that are part of the diff."""
+    valid_right, _ = get_valid_diff_lines(patch)
+    return valid_right
 
 
 def filter_review_comments(review: ReviewResult, text_files: list) -> ReviewResult:
     """Filter inline comments to ensure they apply to valid lines in the diff,
-    redirecting others to general feedback.
+    redirecting others to general feedback. Sanitises multi-line start_line bounds.
     """
-    fn_get_valid_changed_lines = _get_pr_review_func("get_valid_changed_lines", get_valid_changed_lines)
-    # Map file path -> set of valid line numbers
+    fn_get_valid_diff_lines = _get_pr_review_func("get_valid_diff_lines", get_valid_diff_lines)
+
+    # Map file path -> tuple of valid line number sets (RIGHT, LEFT)
     file_patches = {f["filename"]: f.get("patch", "") for f in text_files}
-    valid_lines_by_file = {filename: fn_get_valid_changed_lines(patch) for filename, patch in file_patches.items()}
+    valid_lines_by_file = {filename: fn_get_valid_diff_lines(patch) for filename, patch in file_patches.items()}
 
     filtered_comments = []
     redirected_feedback = []
@@ -132,8 +205,22 @@ def filter_review_comments(review: ReviewResult, text_files: list) -> ReviewResu
             redirected_feedback.append(feedback_item)
             continue
 
-        valid_lines = valid_lines_by_file[matched_file]
-        if comment.line in valid_lines:
+        valid_right, valid_left = valid_lines_by_file[matched_file]
+        is_left = comment.side and comment.side.upper() == "LEFT"
+        valid_set = valid_left if is_left else valid_right
+
+        # Validate start_line range if present
+        if comment.start_line is not None:
+            if comment.start_line > comment.line:
+                # Swap inverted range bounds
+                comment.start_line, comment.line = comment.line, comment.start_line
+            elif comment.start_line == comment.line:
+                comment.start_line = None
+
+            if comment.start_line is not None and comment.start_line not in valid_set:
+                comment.start_line = None
+
+        if comment.line in valid_set:
             comment.path = matched_file
             filtered_comments.append(comment)
         else:
@@ -142,7 +229,12 @@ def filter_review_comments(review: ReviewResult, text_files: list) -> ReviewResu
             )
             print(warning_msg, file=sys.stderr)
 
-            feedback_item = f"**{comment.path}** (Line {comment.line}): {comment.severity} {comment.comment_text}"
+            line_str = (
+                f"Lines {comment.start_line}-{comment.line}"
+                if comment.start_line is not None
+                else f"Line {comment.line}"
+            )
+            feedback_item = f"**{comment.path}** ({line_str}): {comment.severity} {comment.comment_text}"
             if comment.code_suggestion:
                 feedback_item += f"\n  ```suggestion\n  {comment.code_suggestion}\n  ```"
             redirected_feedback.append(feedback_item)

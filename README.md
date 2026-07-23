@@ -378,6 +378,10 @@ Available personas:
 - **`dazbo`**: Warm, approachable software engineer tone with clear technical explanations and mild cheekiness. If recommendations from previous review iterations are unaddressed or ignored without explanation, it exhibits increasing levels of dry humor, sarcasm, and mild exasperation!
 - **`palpatine`**: Emperor Palpatine (Star Wars) persona with grand imperial authority, dark side quotes ("*Do it.*", "*Unlimited power!*", "*I find your lack of compliance disturbing*"), and ruthless code perfectionism.
 
+**Example Output (Emperor Palpatine Persona)**:
+
+![Emperor Palpatine Persona Review Output](./assets/palpatine-review.png)
+
 **Configuring via workflow file (`gemini-review.yml`)**:
 ```yaml
 - uses: derailed-dash/gemini-review-action@v1
