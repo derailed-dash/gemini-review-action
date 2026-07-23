@@ -217,6 +217,9 @@ def filter_review_comments(review: ReviewResult, text_files: list) -> ReviewResu
             elif comment.start_line == comment.line:
                 comment.start_line = None
 
+            if comment.start_line is not None and comment.start_line not in valid_set:
+                comment.start_line = None
+
         if comment.line in valid_set:
             comment.path = matched_file
             filtered_comments.append(comment)

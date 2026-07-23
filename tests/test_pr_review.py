@@ -1088,11 +1088,11 @@ def test_filter_review_comments_multiline_and_left_side():
         ),
         InlineComment(
             path="src/main.py",
-            start_line=22,
+            start_line=5,
             line=20,
             side="RIGHT",
-            severity="🟡",
-            comment_text="Inverted range bounds",
+            severity="🟠",
+            comment_text="start_line outside diff hunk",
         ),
     ]
 
@@ -1108,9 +1108,9 @@ def test_filter_review_comments_multiline_and_left_side():
     assert filtered.comments[1].side == "LEFT"
     assert filtered.comments[1].line == 11
 
-    # 3. Inverted range bounds swapped (22, 20 -> 20, 22) and line 22 is valid
-    assert filtered.comments[2].start_line == 20
-    assert filtered.comments[2].line == 22
+    # 3. start_line outside diff hunk (5 not in {20, 21, 22}) resets start_line to None
+    assert filtered.comments[2].start_line is None
+    assert filtered.comments[2].line == 20
 
 
 def test_post_review_multiline_payload(mocker):
