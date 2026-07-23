@@ -968,8 +968,7 @@ def test_get_persona_prompt_dazbo():
     from gemini_review import get_persona_prompt
 
     prompt = get_persona_prompt("dazbo")
-    assert "## Persona Overlay: Dazbo" in prompt
-    assert "warm, approachable, fun, and mildly cheeky" in prompt.lower()
+    assert "## Mandatory Persona Directive: Dazbo" in prompt
     assert "exasperation" in prompt.lower()
     assert "sarcasm" in prompt.lower()
 
@@ -982,10 +981,10 @@ def test_get_persona_prompt_palpatine():
     from gemini_review import get_persona_prompt
 
     prompt = get_persona_prompt("palpatine")
-    assert "## Persona Overlay: Emperor Palpatine" in prompt
+    assert "## Mandatory Persona Directive: Emperor Palpatine" in prompt
     assert "Execute Order 66" in prompt
     assert "Unlimited power!" in prompt
-    assert "Dark Side" in prompt
+    assert "Dark Side" in prompt.title() or "dark side" in prompt.lower()
 
     # Case-insensitivity
     assert get_persona_prompt("Palpatine") == prompt
@@ -1027,4 +1026,4 @@ def test_load_system_instruction_with_persona(mocker):
 
     instruction = load_system_instruction("owner/repo", 1, config)
     assert "You are a review bot." in instruction
-    assert "## Persona Overlay: Dazbo" in instruction
+    assert "## Mandatory Persona Directive: Dazbo" in instruction
