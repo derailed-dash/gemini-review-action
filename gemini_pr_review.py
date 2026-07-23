@@ -23,6 +23,7 @@ import re
 import subprocess
 import sys
 import tomllib
+from typing import Any
 
 import requests
 from google import genai
@@ -938,7 +939,13 @@ def build_prompt(files: list, config: dict, comment_history: str = "") -> str:
 
 
 def post_review(
-    repository: str, pr_number: int, commit_id: str, review: ReviewResult, headers: dict, timeout: int = DEFAULT_TIMEOUT
+    repository: str,
+    pr_number: int,
+    commit_id: str,
+    review: ReviewResult,
+    headers: dict,
+    timeout: int = DEFAULT_TIMEOUT,
+    usage_metadata: dict[str, Any] | None = None,
 ) -> None:
     """Submit review comments atomically or fall back to individual comments if needed."""
     comments_payload = []
@@ -952,10 +959,42 @@ def post_review(
     body_sections = [f"## 📋 Review Summary\n\n{review.summary}"]
     if review.resolved_items:
         resolved_str = "\n".join(f"- {r}" for r in review.resolved_items)
-        body_sections.append(f"### ✅ Resolved Items from Prior Review\n\n{resolved_str}")
+        body_sections.append(f"### ✅ Resolved Items from Prior Reviews\n\n{resolved_str}")
     if review.general_feedback:
         feedback_str = "\n".join(f"- {f}" for f in review.general_feedback)
         body_sections.append(f"## 🔍 General Feedback\n\n{feedback_str}")
+
+    if usage_metadata:
+        cached_tokens = usage_metadata.get("cached_tokens", 0)
+        fresh_tokens = usage_metadata.get("fresh_tokens", 0)
+        comment_history_tokens = usage_metadata.get("comment_history_tokens", 0)
+        candidates_tokens = usage_metadata.get("candidates_tokens", 0)
+        total_tokens = usage_metadata.get("total_tokens", 0)
+        cache_percentage = usage_metadata.get("cache_percentage", 0.0)
+
+        cache_str = f" (⚡ {cache_percentage:.1f}% cached)" if cached_tokens > 0 else ""
+
+        table_rows = [
+            f"| **Input Tokens (uncached)** | {fresh_tokens:,d} |",
+        ]
+        if cached_tokens > 0:
+            table_rows.append(f"| **Input Tokens (cached)** | {cached_tokens:,d}{cache_str} |")
+        if comment_history_tokens > 0:
+            table_rows.append(f"| **PR Comments History Tokens** | {comment_history_tokens:,d} |")
+        table_rows.extend(
+            [
+                f"| **Output Tokens** | {candidates_tokens:,d} |",
+                f"| **Total Session Tokens** | **{total_tokens:,d}** |",
+            ]
+        )
+
+        telemetry_md = (
+            "<details>\n"
+            "<summary>📊 Token Usage & Cost Efficiency</summary>\n\n"
+            "| Metric | Token Count |\n"
+            "| :--- | :---: |\n" + "\n".join(table_rows) + "\n\n</details>"
+        )
+        body_sections.append(telemetry_md)
 
     review_body = "\n\n".join(body_sections)
 
@@ -1152,7 +1191,6 @@ def main():
 
     cached_content_name = None
     contents_to_send = full_prompt
-    is_reused_cache = False
 
     if enable_caching and hasattr(client, "caches") and codebase_context:
         try:
@@ -1189,7 +1227,6 @@ def main():
                 if existing_cache:
                     cached_content_name = existing_cache.name
                     contents_to_send = dynamic_pr_prompt
-                    is_reused_cache = True
                     active_display_name = getattr(existing_cache, "display_name", display_name)
                     print(
                         f"Reusing active Gemini context cache ({active_display_name}: {cached_content_name})...",
@@ -1217,7 +1254,6 @@ def main():
                     )
                     cached_content_name = cache_obj.name
                     contents_to_send = dynamic_pr_prompt
-                    is_reused_cache = False
                     print(f"Context cache active: {cached_content_name}", file=sys.stderr)
         except Exception as e:
             print(
@@ -1226,7 +1262,6 @@ def main():
             )
             cached_content_name = None
             contents_to_send = full_prompt
-            is_reused_cache = False
 
     if cached_content_name:
         gen_config = types.GenerateContentConfig(
@@ -1257,7 +1292,6 @@ def main():
                 "Falling back to direct context generation...",
                 file=sys.stderr,
             )
-            is_reused_cache = False
             cached_content_name = None
             contents_to_send = full_prompt
             gen_config = types.GenerateContentConfig(
@@ -1274,6 +1308,7 @@ def main():
         else:
             raise
 
+    usage_dict = None
     if response.usage_metadata:
         usage = response.usage_metadata
         prompt_tokens = usage.prompt_token_count or 0
@@ -1284,81 +1319,65 @@ def main():
         fresh_tokens = max(0, prompt_tokens - cached_tokens - comment_history_tokens)
         cache_percentage = (cached_tokens / prompt_tokens * 100) if prompt_tokens > 0 else 0.0
 
-        cache_origin_str = "♻️ Reused (Cross-PR Push)" if is_reused_cache else "✨ Fresh (Newly Created)"
-        cache_overhead_str = "⚡ 0s (Reused active handle)" if is_reused_cache else "⚡ 1-Hour TTL Active"
+        usage_dict = {
+            "prompt_tokens": prompt_tokens,
+            "cached_tokens": cached_tokens,
+            "candidates_tokens": candidates_tokens,
+            "comment_history_tokens": comment_history_tokens,
+            "fresh_tokens": fresh_tokens,
+            "total_tokens": total_tokens,
+            "cache_percentage": cache_percentage,
+        }
 
         print("\n📊 Gemini Token Usage & Cost Efficiency Report", file=sys.stderr)
+        print("┌──────────────────────────────────┬──────────────┬───────────────────────────────┐", file=sys.stderr)
+        print("│ Metric                           │ Token Count  │ Benefit / Efficiency          │", file=sys.stderr)
+        print("├──────────────────────────────────┼──────────────┼───────────────────────────────┤", file=sys.stderr)
         print(
-            "┌──────────────────────────────────────┬──────────────┬───────────────────────────────┐", file=sys.stderr
-        )
-        print(
-            "│ Metric                               │ Token Count  │ Benefit / Efficiency          │", file=sys.stderr
-        )
-        print(
-            "├──────────────────────────────────────┼──────────────┼───────────────────────────────┤", file=sys.stderr
-        )
-        print(
-            f"│ Total Input (Prompt) Tokens          │ {prompt_tokens:>12,d} │ Base input context            │",
+            f"│ Total Input (Prompt) Tokens      │ {prompt_tokens:>12,d} │ Base input context            │",
             file=sys.stderr,
         )
         if cached_tokens > 0:
+            cache_rate_str = f"⚡ {cache_percentage:.1f}% (90% Rate Discount)"
             print(
-                f"│ ├── Cached Context Tokens            │ {cached_tokens:>12,d} │ ⚡ {cache_percentage:>5.1f}% (75%"
-                " Rate Discount)  │",
+                f"│ ├── Cached Context Tokens        │ {cached_tokens:>12,d} │ {cache_rate_str:<29s} │",
                 file=sys.stderr,
             )
             if comment_history_tokens > 0:
                 print(
-                    "│ ├── PR Comments History Tokens       │"
+                    "│ ├── PR Comments History Tokens   │"
                     f" {comment_history_tokens:>12,d} │ Prior review threads context  │",
                     file=sys.stderr,
                 )
             print(
-                f"│ └── Un-cached Fresh Tokens           │ {fresh_tokens:>12,d} │ Diff & instructions only      │",
+                f"│ └── Un-cached Fresh Tokens       │ {fresh_tokens:>12,d} │ Diff & instructions only      │",
                 file=sys.stderr,
             )
         else:
             print(
-                "│ ├── Cached Context Tokens            │            0 │ Direct un-cached context      │",
+                "│ ├── Cached Context Tokens        │            0 │ Direct un-cached context      │",
                 file=sys.stderr,
             )
             if comment_history_tokens > 0:
                 print(
-                    "│ ├── PR Comments History Tokens       │"
+                    "│ ├── PR Comments History Tokens   │"
                     f" {comment_history_tokens:>12,d} │ Prior review threads context  │",
                     file=sys.stderr,
                 )
             print(
-                f"│ └── Un-cached Fresh Tokens           │ {fresh_tokens:>12,d} │ Diff & instructions only      │",
+                f"│ └── Un-cached Fresh Tokens       │ {fresh_tokens:>12,d} │ Diff & instructions only      │",
                 file=sys.stderr,
             )
         print(
-            f"│ Output (Candidates) Tokens           │ {candidates_tokens:>12,d} │ Generated review content      │",
+            f"│ Output (Candidates) Tokens       │ {candidates_tokens:>12,d} │ Generated review content      │",
             file=sys.stderr,
         )
-        if cached_tokens > 0:
-            print(
-                "├──────────────────────────────────────┼──────────────┼───────────────────────────────┤",
-                file=sys.stderr,
-            )
-            print(f"│ Cache Lifecycle Origin               │            — │ {cache_origin_str:<29s} │", file=sys.stderr)
-            print(
-                f"│ Cache Provisioning Overhead          │            — │ {cache_overhead_str:<29s} │", file=sys.stderr
-            )
-            print(
-                "│ Intra-Run Multi-Turn Re-billing      │            — │ 🛡️ 0 Tokens Re-billed / Turn  │",
-                file=sys.stderr,
-            )
+        print("├──────────────────────────────────┼──────────────┼───────────────────────────────┤", file=sys.stderr)
         print(
-            "├──────────────────────────────────────┼──────────────┼───────────────────────────────┤", file=sys.stderr
-        )
-        print(
-            f"│ Total Session Tokens                 │ {total_tokens:>12,d} │ Total processed by Gemini     │",
+            f"│ Total Session Tokens             │ {total_tokens:>12,d} │ Total processed by Gemini     │",
             file=sys.stderr,
         )
-        print(
-            "└──────────────────────────────────────┴──────────────┴───────────────────────────────┘\n", file=sys.stderr
-        )
+        print("└──────────────────────────────────┴──────────────┴───────────────────────────────┘\n", file=sys.stderr)
 
     review_data = json.loads(response.text)
 
@@ -1380,7 +1399,15 @@ def main():
             suggestion_str = f"\nSuggestion:\n{c.code_suggestion}" if c.code_suggestion else ""
             print(f"File: {c.path}:{c.line} ({c.side}) - Severity: {c.severity}\n{c.comment_text}{suggestion_str}\n")
     else:
-        post_review(repository, pr_number, head_sha, review, headers, timeout=timeout)
+        post_review(
+            repository,
+            pr_number,
+            head_sha,
+            review,
+            headers,
+            timeout=timeout,
+            usage_metadata=usage_dict,
+        )
 
 
 if __name__ == "__main__":

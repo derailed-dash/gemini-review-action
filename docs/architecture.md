@@ -34,7 +34,7 @@ To drastically reduce API costs and latency for large codebase contexts, `gemini
 * **Threshold Verification**: If the codebase context exceeds 100,000 characters (~32,768 tokens, Gemini's minimum caching requirement), context caching is automatically activated.
 * **Active Cache Lookup (`client.caches.list()`)**: Before creating a new cache, the script queries active server-side caches matching the model-scoped repository display name (`repo-cache-{repo}-{model}`). It validates that the cache's model matches the requested model, skipping any caches created under a different model version to avoid `INVALID_ARGUMENT` errors.
 * **Cache Provisioning (`client.caches.create()`)**: If no matching active cache handle for the current model is found, the script provisions a new `CachedContent` resource containing the codebase context, `system_instruction`, and pre-parsed `tools`.
-* **Cost & Multi-Turn Optimisation**: Input tokens billed against the cached handle receive a **75% discount**. Furthermore, multi-turn tool interactions (such as Google Developer Knowledge MCP searches or skill lookups) reference the cached handle without re-billing the 250,000-token codebase context on subsequent turns.
+* **Cost & Multi-Turn Optimisation**: Input tokens billed against the cached handle receive a **90% discount**. Furthermore, multi-turn tool interactions (such as Google Developer Knowledge MCP searches or skill lookups) reference the cached handle without re-billing the 250,000-token codebase context on subsequent turns.
 * **Resilient Fallback**: If cache creation, lookup, or generation with cached content fails for any reason, the script seamlessly falls back to direct context generation without interrupting the CI review pipeline.
 
 ### 4. PR Comment & Discussion Thread History Engine
@@ -60,7 +60,7 @@ Gemini is forced to return structured JSON adhering to the Pydantic schemas:
 
 ### 6. Resilient Review Submissions
 Submitting reviews with line-specific comments via GitHub's API can be fragile (e.g. if the model specifies a line index that falls outside the diff range).
-* **Atomic Run:** The script first attempts to post the summary, resolved items list (`### ✅ Resolved Items from Prior Review`), and all inline comments in a single transaction via `POST /repos/{owner}/{repo}/pulls/{number}/reviews`.
+* **Atomic Run:** The script first attempts to post the summary, resolved items list (`### ✅ Resolved Items from Prior Reviews`), and all inline comments in a single transaction via `POST /repos/{owner}/{repo}/pulls/{number}/reviews`.
 * **Resilient Fallback:** If the atomic post fails (e.g. returns HTTP 422), the script catches the failure, posts the review summary comment, and attempts to publish individual comments one-by-one. This ensures valid comments are still delivered while preventing a CI checkout block.
 
 ---

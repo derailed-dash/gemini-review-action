@@ -906,7 +906,43 @@ def test_post_review_with_resolved_items(mocker):
     body = posted_payload["body"]
 
     assert "## 📋 Review Summary" in body
-    assert "### ✅ Resolved Items from Prior Review" in body
+    assert "### ✅ Resolved Items from Prior Reviews" in body
     assert "- Added null check in main.py" in body
     assert "- Updated docstrings" in body
     assert "## 🔍 General Feedback" in body
+
+
+def test_post_review_with_usage_metadata(mocker):
+    """Test post_review formats collapsible token usage details when usage_metadata is provided."""
+    mock_post = mocker.patch("requests.post")
+    mock_post.return_value = mocker.Mock(status_code=200)
+
+    review = ReviewResult(
+        summary="PR LGTM",
+        general_feedback=[],
+        comments=[],
+    )
+
+    usage_metadata = {
+        "prompt_tokens": 1000,
+        "cached_tokens": 800,
+        "fresh_tokens": 150,
+        "comment_history_tokens": 50,
+        "candidates_tokens": 100,
+        "total_tokens": 1100,
+        "cache_percentage": 80.0,
+    }
+
+    post_review("owner/repo", 42, "head_sha", review, {"Authorization": "token abc"}, usage_metadata=usage_metadata)
+
+    assert mock_post.call_count == 1
+    posted_payload = mock_post.call_args[1]["json"]
+    body = posted_payload["body"]
+
+    assert "<details>" in body
+    assert "<summary>📊 Token Usage & Cost Efficiency</summary>" in body
+    assert "| **Input Tokens (uncached)** | 150 |" in body
+    assert "| **Input Tokens (cached)** | 800 (⚡ 80.0% cached) |" in body
+    assert "| **PR Comments History Tokens** | 50 |" in body
+    assert "| **Output Tokens** | 100 |" in body
+    assert "| **Total Session Tokens** | **1,100** |" in body
