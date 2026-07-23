@@ -147,9 +147,15 @@ When reviewing pull requests that have undergone multiple iterations or team dis
 
 #### How Discussion Tracking Works:
 1. **Thread Grouping:** Root review comments and developer replies are structured into conversational threads mapped to specific files and line numbers.
-2. **Resolution Decision Matrix:** Gemini evaluates prior comment history against the incoming diff patch and enforces a developer-friendly decision matrix:
-   - **Do NOT repeat** a suggestion if it has been **addressed/resolved** in the diff, **deferred** (e.g. via follow-up issue), or explicitly **justified/disagreed with** by the developer.
-   - **DO restate/re-flag** an unresolved suggestion if the code remains unchanged without explanation, or if the developer agreed with the fix but has not yet applied it.
+2. **Developer Workflow Rules for Follow-Up Reviews:**
+   Gemini evaluates prior comment history against the incoming diff patch and enforces an opinionated developer workflow matrix:
+   - **a) Addressed / Resolved:** The developer applies the requested code fix. Gemini detects that the diff patch addresses the suggestion, omits the duplicate inline comment, and lists it under `### ✅ Resolved Items from Prior Review`.
+   - **b) Deferred:** The developer defers the work (e.g. by linking a follow-up issue or noting it in comments). Gemini respects the deferral and refrains from repeating the suggestion.
+   - **c) Disagreed / Ignored with Explanation:** The developer responds explaining why the suggested change was not made (e.g. architectural design choice or performance trade-off). Gemini respects the explanation and refrains from repeating the critique.
+   
+   > [!IMPORTANT]
+   > **No Silent Drops:** A PR suggestion is **never ignored without justification**. If the code remains unchanged AND the developer has provided **no explanation or reply**, or if the developer **agreed** in comment threads but has **not yet pushed the code fix**, Gemini will default to **re-flagging and restating** the unresolved suggestion in the follow-up review.
+
 3. **Resolved Items Reporting:** When Gemini identifies that previously raised feedback has been fixed in the latest push, it includes a dedicated section in the PR review summary:
    ```markdown
    ### ✅ Resolved Items from Prior Review
@@ -416,7 +422,7 @@ Whenever a review run finishes, the action prints a structured telemetry table t
 │ Metric                               │ Token Count  │ Benefit / Efficiency          │
 ├──────────────────────────────────────┼──────────────┼───────────────────────────────┤
 │ Total Input (Prompt) Tokens          │      265,849 │ Base input context            │
-│ ├── Cached Context Tokens            │      250,985 │ ⚡  94.4% (75% Rate Discount)  │
+│ ├── Cached Context Tokens            │      250,985 │ ⚡  94.4% (75% Rate Discount) │
 │ ├── PR Comments History Tokens       │          450 │ Prior review threads context  │
 │ └── Un-cached Fresh Tokens           │       14,414 │ Diff & instructions only      │
 │ Output (Candidates) Tokens           │          210 │ Generated review content      │
