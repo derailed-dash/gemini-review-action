@@ -315,14 +315,17 @@ def format_pr_comment_history(review_comments: list[dict], issue_comments: list[
             if not isinstance(c, dict):
                 continue
             reply_to = c.get("in_reply_to_id")
-            if reply_to:
+            if reply_to and reply_to in comments_by_id:
                 curr = reply_to
                 visited = set()
                 while curr in comments_by_id and comments_by_id[curr].get("in_reply_to_id") and curr not in visited:
                     visited.add(curr)
                     curr = comments_by_id[curr]["in_reply_to_id"]
                 root_id = curr
-                replies_by_root.setdefault(root_id, []).append(c)
+                if root_id in comments_by_id:
+                    replies_by_root.setdefault(root_id, []).append(c)
+                else:
+                    roots.append(c)
             else:
                 roots.append(c)
 
@@ -1278,7 +1281,7 @@ def main():
         candidates_tokens = usage.candidates_token_count or 0
         total_tokens = usage.total_token_count or 0
 
-        fresh_tokens = max(0, prompt_tokens - cached_tokens)
+        fresh_tokens = max(0, prompt_tokens - cached_tokens - comment_history_tokens)
         cache_percentage = (cached_tokens / prompt_tokens * 100) if prompt_tokens > 0 else 0.0
 
         cache_origin_str = "♻️ Reused (Cross-PR Push)" if is_reused_cache else "✨ Fresh (Newly Created)"
