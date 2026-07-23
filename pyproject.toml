@@ -17,6 +17,7 @@ dev = [
 [tool.ruff]
 line-length = 120
 target-version = "py313"
+exclude = ["starter-examples/skills"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
