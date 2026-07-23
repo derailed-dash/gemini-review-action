@@ -371,7 +371,7 @@ core_file_patterns = ["*.md", "pyproject.toml", "package.json", "go.mod", "Cargo
 
 ### Reviewer Personas
 
-You can customize the personality and feedback style of the reviewer agent using the `persona` action input in your workflow YAML file (e.g. `.github/workflows/gemini-review.yml`).
+You can customise the personality and feedback style of the reviewer agent using the `persona` action input in your workflow YAML file (e.g. `.github/workflows/gemini-review.yml`).
 
 Available personas:
 - **`straight` (Default)**: Standard, objective code reviewer with no persona overlay applied.

@@ -61,8 +61,8 @@ def test_load_system_instruction(mocker):
         "prompt": "Review repo !{echo $REPOSITORY} PR #!{echo $PULL_REQUEST_NUMBER} in !{echo $LANGUAGE}."
     }
 
-    # Mock environment variable for language
-    mocker.patch.dict(os.environ, {"GEMINI_LANGUAGE": "English (US)"})
+    # Mock environment variable for language and persona
+    mocker.patch.dict(os.environ, {"GEMINI_LANGUAGE": "English (US)", "GEMINI_PERSONA": "straight"})
 
     result = load_system_instruction("derailed-dash/gemini-review-action", 42, mock_toml_content)
     assert result == "Review repo derailed-dash/gemini-review-action PR #42 in English (US)."

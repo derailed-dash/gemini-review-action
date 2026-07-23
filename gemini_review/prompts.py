@@ -38,6 +38,7 @@ def load_system_instruction(repository: str | None, pr_number: int, config: dict
         base_prompt = prompt.replace("!{echo $LANGUAGE}", language)
 
     persona_name = resolve_persona_name(config)
+    print(f"Reviewer persona: '{persona_name}'", file=sys.stderr)
     persona_prompt = get_persona_prompt(persona_name)
     if persona_prompt:
         base_prompt = f"{base_prompt}\n\n{persona_prompt}"
