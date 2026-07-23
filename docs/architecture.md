@@ -12,6 +12,21 @@ The action runs as a native GitHub Composite Action (`action.yml`) that boots a 
 
 ---
 
+## Code Base Organisation & Package Architecture
+
+The code review action is organized into a modular Python package (`gemini_review/`) separating domain responsibilities, with `gemini_pr_review.py` serving as the top-level execution entrypoint and backward-compatible API facade:
+
+* **`gemini_review/schemas.py`**: Pydantic schemas defining structured outputs (`InlineComment`, `ReviewResult`).
+* **`gemini_review/config.py`**: Configuration loader for `gemini-review.toml` and timeout defaults.
+* **`gemini_review/utils.py`**: Binary file exclusion, diff patch line parsing, token counting, repo file listing, and rule loaders.
+* **`gemini_review/github.py`**: GitHub REST API client functions for PR files, comment threads, and review postings.
+* **`gemini_review/skills.py`**: Agent skill metadata parser and instruction loader for workspace and built-in skills.
+* **`gemini_review/developer_knowledge.py`**: MCP/RPC integration to search and fetch official Google developer documentation.
+* **`gemini_review/prompts.py`**: Dynamic PR diff prompt construction, full/sparse codebase context generation, and prompt assembly.
+* **`gemini_pr_review.py`**: Main CLI entrypoint script that re-exports all `gemini_review` package APIs and runs the primary review loop.
+
+---
+
 ## 🔎 Pull Request Review Script (`gemini_pr_review.py`)
 
 The PR review workflow is designed to retrieve PR details, collect local codebase context, build a structured prompt, and atomically submit line-specific reviews back to GitHub.
