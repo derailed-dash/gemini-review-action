@@ -268,8 +268,8 @@ def main():
             if len(codebase_context) > 100000:
                 clean_repo = repository.replace("/", "-").replace("\\", "-") if repository else "repo"
                 clean_model = _normalize_model_name(model_name).replace("/", "-").replace("\\", "-")
-                display_name = f"repo-cache-{clean_repo}-{clean_model}"
-                legacy_display_name = f"repo-cache-{clean_repo}"
+                clean_persona = resolve_persona_name(config).lower().replace("/", "-").replace("\\", "-")
+                display_name = f"repo-cache-{clean_repo}-{clean_model}-{clean_persona}"
 
                 # Check if an active cache already exists matching display_name and model_name
                 existing_cache = None
@@ -277,7 +277,7 @@ def main():
                     active_caches = client.caches.list()
                     for cache_item in active_caches:
                         item_display_name = getattr(cache_item, "display_name", None)
-                        if item_display_name in (display_name, legacy_display_name):
+                        if item_display_name == display_name:
                             item_model = getattr(cache_item, "model", None)
                             if isinstance(item_model, str) and _normalize_model_name(
                                 item_model

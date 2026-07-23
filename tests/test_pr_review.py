@@ -596,7 +596,9 @@ def test_context_caching_reuse_existing_cache(mocker):
             "GEMINI_API_KEY": "test-key",
             "GITHUB_REPOSITORY": "test-owner/test-repo",
             "GITHUB_EVENT_PATH": "",
+            "GEMINI_PERSONA": "straight",
         },
+        clear=True,
     )
 
     mocker.patch(
@@ -609,7 +611,8 @@ def test_context_caching_reuse_existing_cache(mocker):
     mock_client = mocker.Mock()
     existing_cache = mocker.Mock()
     existing_cache.name = "cachedContents/existing-cache-456"
-    existing_cache.display_name = "repo-cache-test-owner-test-repo"
+    existing_cache.display_name = "repo-cache-test-owner-test-repo-gemini-3.6-flash-straight"
+    existing_cache.model = "gemini-3.6-flash"
     mock_client.caches.list.return_value = [existing_cache]
 
     mock_response = mocker.Mock()
@@ -697,6 +700,68 @@ def test_context_caching_model_mismatch_skips_cache(mocker):
     assert gen_call_args.kwargs["config"].cached_content == "cachedContents/new-model-cache-101"
 
 
+def test_context_caching_persona_mismatch_skips_cache(mocker):
+    """Test that an active cache for a different persona is skipped and a fresh persona cache created."""
+    import sys
+
+    from gemini_pr_review import main
+
+    mocker.patch.dict(
+        os.environ,
+        {
+            "GEMINI_API_KEY": "test-key",
+            "GEMINI_MODEL": "gemini-3.6-flash",
+            "GEMINI_PERSONA": "rick",
+            "GITHUB_REPOSITORY": "test-owner/test-repo",
+            "GITHUB_EVENT_PATH": "",
+        },
+        clear=True,
+    )
+
+    mocker.patch(
+        "gemini_pr_review.get_local_git_files",
+        return_value=[{"filename": "large.py", "status": "modified", "patch": "diff patch"}],
+    )
+    mocker.patch("gemini_pr_review.get_all_repo_files", return_value=["other.py"])
+    mocker.patch("gemini_pr_review.get_file_content", return_value="a" * 120000)
+
+    mock_client = mocker.Mock()
+    mock_client.models._parse_config.return_value.tools = None
+    existing_cache = mocker.Mock()
+    existing_cache.name = "cachedContents/old-dazbo-cache-123"
+    existing_cache.display_name = "repo-cache-test-owner-test-repo-gemini-3.6-flash-dazbo"
+    existing_cache.model = "gemini-3.6-flash"
+    mock_client.caches.list.return_value = [existing_cache]
+
+    mock_new_cache = mocker.Mock()
+    mock_new_cache.name = "cachedContents/new-rick-cache-789"
+    mock_client.caches.create.return_value = mock_new_cache
+
+    mock_response = mocker.Mock()
+    mock_response.text = '{"summary": "Wubba Lubba Dub-Dub!", "general_feedback": [], "comments": []}'
+    mock_response.usage_metadata = mocker.Mock(
+        prompt_token_count=150000,
+        candidates_token_count=100,
+        total_token_count=150100,
+        cached_content_token_count=0,
+    )
+    mock_client.models.generate_content.return_value = mock_response
+
+    mocker.patch("google.genai.Client", return_value=mock_client)
+    mocker.patch.object(sys, "argv", ["gemini_pr_review.py"])
+
+    main()
+
+    # Verify caches.create WAS called because old cache persona (dazbo) did not match new persona (rick)
+    assert mock_client.caches.create.called
+    create_call_args = mock_client.caches.create.call_args
+    assert create_call_args.kwargs["config"].display_name == "repo-cache-test-owner-test-repo-gemini-3.6-flash-rick"
+
+    # Verify generate_content received the newly created rick cache handle
+    gen_call_args = mock_client.models.generate_content.call_args
+    assert gen_call_args.kwargs["config"].cached_content == "cachedContents/new-rick-cache-789"
+
+
 def test_context_caching_generate_content_fallback(mocker):
     """Test that if generate_content with cached_content fails, it falls back to direct context."""
     import sys
@@ -709,7 +774,9 @@ def test_context_caching_generate_content_fallback(mocker):
             "GEMINI_API_KEY": "test-key",
             "GITHUB_REPOSITORY": "test-owner/test-repo",
             "GITHUB_EVENT_PATH": "",
+            "GEMINI_PERSONA": "straight",
         },
+        clear=True,
     )
 
     mocker.patch(
@@ -722,7 +789,7 @@ def test_context_caching_generate_content_fallback(mocker):
     mock_client = mocker.Mock()
     existing_cache = mocker.Mock()
     existing_cache.name = "cachedContents/invalid-cache-999"
-    existing_cache.display_name = "repo-cache-test-owner-test-repo"
+    existing_cache.display_name = "repo-cache-test-owner-test-repo-gemini-3.6-flash-straight"
     existing_cache.model = "gemini-3.6-flash"
     mock_client.caches.list.return_value = [existing_cache]
 
@@ -991,6 +1058,20 @@ def test_get_persona_prompt_palpatine():
 
     # Case-insensitivity
     assert get_persona_prompt("Palpatine") == prompt
+
+
+def test_get_persona_prompt_rick():
+    """Test get_persona_prompt returns Rick Sanchez persona overlay prompt."""
+    from gemini_review import get_persona_prompt
+
+    prompt = get_persona_prompt("rick")
+    assert "## Mandatory Persona Directive: Rick Sanchez" in prompt
+    assert "Wubba Lubba Dub-Dub!" in prompt
+    assert "Jerry-tier" in prompt or "Jerry-level" in prompt
+
+    # Case-insensitivity & alias handling
+    assert get_persona_prompt("Rick") == prompt
+    assert get_persona_prompt("rick_sanchez") == prompt
 
 
 def test_get_persona_prompt_unknown(capsys):
