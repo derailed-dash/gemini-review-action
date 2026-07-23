@@ -993,6 +993,20 @@ def test_get_persona_prompt_palpatine():
     assert get_persona_prompt("Palpatine") == prompt
 
 
+def test_get_persona_prompt_rick():
+    """Test get_persona_prompt returns Rick Sanchez persona overlay prompt."""
+    from gemini_review import get_persona_prompt
+
+    prompt = get_persona_prompt("rick")
+    assert "## Mandatory Persona Directive: Rick Sanchez" in prompt
+    assert "Wubba Lubba Dub-Dub!" in prompt
+    assert "Jerry-tier" in prompt or "Jerry-level" in prompt
+
+    # Case-insensitivity & alias handling
+    assert get_persona_prompt("Rick") == prompt
+    assert get_persona_prompt("rick_sanchez") == prompt
+
+
 def test_get_persona_prompt_unknown(capsys):
     """Test get_persona_prompt prints warning and falls back to straight for unknown personas."""
     from gemini_review import get_persona_prompt

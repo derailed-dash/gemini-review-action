@@ -45,7 +45,7 @@ inputs:
     required: false
     default: 'true'
   persona:
-    description: 'Persona overlay for reviewer (straight, dazbo, palpatine)'
+    description: 'Persona overlay for reviewer (straight, dazbo, palpatine, rick)'
     required: false
     default: 'straight'
 

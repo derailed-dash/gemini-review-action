@@ -352,7 +352,7 @@ jobs:
 | `command` | The mode/command to run: `review` (for PR reviews) or `triage` (for issue triaging). | No | `review` |
 | `include_comment_history` | Whether to fetch prior inline review threads and conversation comments from GitHub. | No | `'true'` |
 | `language` | The language to use for the review comments (e.g. `English (UK)`, `English (US)`, `French`, `Spanish`). | No | `English (UK)` |
-| `persona` | Reviewer persona overlay (`straight`, `dazbo`, `palpatine`). | No | `straight` |
+| `persona` | Reviewer persona overlay (`straight`, `dazbo`, `palpatine`, `rick`). | No | `straight` |
 | `timeout` | Timeout for API requests in seconds. | No | `60` |
 
 ### Codebase Context Configuration
@@ -376,11 +376,8 @@ You can customise the personality and feedback style of the reviewer agent using
 Available personas:
 - **`straight` (Default)**: Standard, objective code reviewer with no persona overlay applied.
 - **`dazbo`**: Warm, approachable software engineer tone with clear technical explanations and mild cheekiness. If recommendations from previous review iterations are unaddressed or ignored without explanation, it exhibits increasing levels of dry humor, sarcasm, and mild exasperation!
-- **`palpatine`**: Emperor Palpatine (Star Wars) persona with grand imperial authority, dark side quotes ("*Do it.*", "*Unlimited power!*", "*I find your lack of compliance disturbing*"), and ruthless code perfectionism.
-
-**Example Output (Emperor Palpatine Persona)**:
-
-![Emperor Palpatine Persona Review Output](./assets/palpatine-review.png)
+- **`palpatine`**: Emperor Palpatine (Star Wars) persona with grand imperial authority, dark side quotes ("*Do it.*", "*Unlimited power!*", "*I find your lack of compliance disturbing*"), demanding ruthless code perfectionism.
+- **`rick`**: Rick Sanchez (Rick and Morty) persona — hyper-intelligent, cynical multiverse genius ("*burp*", "*Wubba Lubba Dub-Dub!*", "*Jerry-tier code*"). Demands galaxy-brain engineering perfection and treats sloppy bugs as pathetic Jerry-level amateur work!
 
 **Configuring via workflow file (`gemini-review.yml`)**:
 ```yaml
@@ -388,7 +385,7 @@ Available personas:
   with:
     gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
     github_token: ${{ secrets.GITHUB_TOKEN }}
-    persona: 'dazbo'  # Options: straight (default), dazbo, palpatine
+    persona: 'rick'  # Options: straight (default), dazbo, palpatine, rick
 ```
 
 ### Custom Prompts / Instructions

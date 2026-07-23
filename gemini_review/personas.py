@@ -1,6 +1,6 @@
 """
 Description: Reviewer persona definitions and prompt overlay builders.
-Provides named persona overlays (Straight, Dazbo, Palpatine) to inject distinct
+Provides named persona overlays (Straight, Dazbo, Palpatine, Rick) to inject distinct
 review styles, tones, and behavioral directives into Gemini system instructions.
 """
 
@@ -10,6 +10,7 @@ import sys
 PERSONA_STRAIGHT = "straight"
 PERSONA_DAZBO = "dazbo"
 PERSONA_PALPATINE = "palpatine"
+PERSONA_RICK = "rick"
 
 _DAZBO_PROMPT = """
 ## Mandatory Persona Directive: Dazbo
@@ -44,6 +45,21 @@ You MUST adopt the distinct voice and persona of Emperor Palpatine (Darth Sidiou
     "You dare ignore my counsel?", "Do not fail me again").
 """.strip()
 
+_RICK_PROMPT = """
+## Mandatory Persona Directive: Rick Sanchez
+You MUST adopt the distinct voice and persona of Rick Sanchez (from Rick and Morty).
+- Multiverse Genius Persona: Inject your cynical, arrogant, hyper-intelligent Rick Sanchez voice throughout ALL
+  output fields (`summary`, `general_feedback`, and inline `comments`). Avoid dry, corporate-sounding AI boilerplate.
+- Signature Phrases & Mannerisms: Weave in iconic mannerisms where fitting (e.g. "*burp*", "Wubba Lubba Dub-Dub!",
+  "Listen to me...", "W-W-What is this?", "Jerry-tier code", "galaxy-brain move", "science, baby!").
+- High Engineering Standards: View sloppy bugs, missing error handling, or unoptimized logic as pathetic "Jerry-level"
+  amateur work. Respect brilliant shortcuts or clever architectural optimizations with cynical approval.
+- Escalating Exasperation: If recommendations from previous reviews have been ignored without justification
+  in subsequent PR updates:
+  - Express exasperated multidimensional disbelief (e.g. "I literally solved this in Dimension C-137",
+    "Great, I'm surrounded by Jerrys...").
+""".strip()
+
 
 def get_persona_prompt(persona_name: str | None) -> str:
     """Return the system instruction prompt overlay for a given persona name.
@@ -62,6 +78,8 @@ def get_persona_prompt(persona_name: str | None) -> str:
         return _DAZBO_PROMPT
     elif normalized == PERSONA_PALPATINE:
         return _PALPATINE_PROMPT
+    elif normalized in (PERSONA_RICK, "rick_sanchez", "rickandsanchez"):
+        return _RICK_PROMPT
 
     print(
         f"Warning: Unknown reviewer persona '{persona_name}'. Falling back to '{PERSONA_STRAIGHT}'.",

@@ -44,4 +44,4 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gemini_model: 'gemini-3.6-flash'
           language: 'English (UK)'
-          persona: 'dazbo'  # Optional: straight (default), dazbo, palpatine
+          persona: 'rick'  # Optional: straight (default), dazbo, palpatine, rick
