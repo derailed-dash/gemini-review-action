@@ -44,6 +44,10 @@ inputs:
     description: 'Fetch and include prior PR review threads and conversation comments in prompt context'
     required: false
     default: 'true'
+  persona:
+    description: 'Persona overlay for reviewer (straight, dazbo, palpatine)'
+    required: false
+    default: 'straight'
 
 runs:
   using: 'composite'
@@ -65,6 +69,7 @@ runs:
         GEMINI_LANGUAGE: ${{ inputs.language }}
         GEMINI_TIMEOUT: ${{ inputs.timeout }}
         GEMINI_INCLUDE_COMMENT_HISTORY: ${{ inputs.include_comment_history }}
+        GEMINI_PERSONA: ${{ inputs.persona }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_EVENT_PATH: ${{ github.event_path }}
         GITHUB_EVENT_NAME: ${{ github.event_name }}

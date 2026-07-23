@@ -7,6 +7,7 @@ and merges discussion thread history for Gemini model prompts.
 import os
 import sys
 
+from gemini_review.personas import get_persona_prompt, resolve_persona_name
 from gemini_review.utils import (
     _get_pr_review_func,
     generate_file_tree,
@@ -18,24 +19,31 @@ from gemini_review.utils import (
 
 
 def load_system_instruction(repository: str | None, pr_number: int, config: dict) -> str:
-    """Load system instructions from Dazbo's gemini-review.toml prompt configuration."""
+    """Load system instructions from Dazbo's gemini-review.toml prompt configuration and apply reviewer persona."""
     prompt = config.get("prompt", "")
     if not prompt:
-        return (
+        base_prompt = (
             "You are a world-class code review agent. Analyze changes and output constructive feedback using"
             f" {os.environ.get('GEMINI_LANGUAGE', 'English (UK)')} spelling. Review any prior PR comment history."
             " DO NOT repeat suggestions that have been addressed, deferred, or explicitly justified/disagreed with"
             " by the developer. DO restate unresolved suggestions if the code remains unchanged without an explanation"
             " or if the developer agreed with the fix but has not yet applied it."
         )
+    else:
+        prompt = prompt.replace("!{echo $REPOSITORY}", repository or "unknown")
+        prompt = prompt.replace("!{echo $PULL_REQUEST_NUMBER}", str(pr_number))
+        prompt = prompt.replace("!{echo $ADDITIONAL_CONTEXT}", "")
 
-    prompt = prompt.replace("!{echo $REPOSITORY}", repository or "unknown")
-    prompt = prompt.replace("!{echo $PULL_REQUEST_NUMBER}", str(pr_number))
-    prompt = prompt.replace("!{echo $ADDITIONAL_CONTEXT}", "")
+        language = os.environ.get("GEMINI_LANGUAGE", "English (UK)")
+        base_prompt = prompt.replace("!{echo $LANGUAGE}", language)
 
-    language = os.environ.get("GEMINI_LANGUAGE", "English (UK)")
-    prompt = prompt.replace("!{echo $LANGUAGE}", language)
-    return prompt
+    persona_name = resolve_persona_name(config)
+    print(f"Reviewer persona: '{persona_name}'", file=sys.stderr)
+    persona_prompt = get_persona_prompt(persona_name)
+    if persona_prompt:
+        base_prompt = f"{base_prompt}\n\n{persona_prompt}"
+
+    return base_prompt
 
 
 def build_pr_diff_prompt(files: list) -> str:

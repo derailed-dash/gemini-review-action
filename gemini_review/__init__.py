@@ -16,6 +16,10 @@ from .github import (
     get_pr_files,
     post_review,
 )
+from .personas import (
+    get_persona_prompt,
+    resolve_persona_name,
+)
 from .prompts import (
     build_codebase_context,
     build_pr_diff_prompt,
@@ -59,6 +63,7 @@ __all__ = [
     "get_google_auth_headers",
     "get_google_developer_documents",
     "get_local_git_files",
+    "get_persona_prompt",
     "get_pr_comments",
     "get_pr_files",
     "get_valid_changed_lines",
@@ -71,5 +76,6 @@ __all__ = [
     "load_workspace_rules",
     "parse_skill_metadata",
     "post_review",
+    "resolve_persona_name",
     "search_google_developer_knowledge",
 ]
