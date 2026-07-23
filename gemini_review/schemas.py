@@ -11,7 +11,16 @@ class InlineComment(BaseModel):
 
     path: str = Field(description="The relative file path being reviewed.")
     line: int = Field(
-        description="The line number in the RIGHT (new/modified) version of the file where the comment applies."
+        description=(
+            "The line number in the RIGHT (new/modified) or LEFT (deleted) version of the file where the comment"
+            " applies. If start_line is specified, line is the end line number of the multi-line range."
+        )
+    )
+    start_line: int | None = Field(
+        default=None,
+        description=(
+            "Optional start line number for multi-line comments. If provided, must be <= line and in the same file."
+        ),
     )
     side: str = Field(
         default="RIGHT", description="Must be 'RIGHT' for additions/modifications or 'LEFT' for deletions."
@@ -23,8 +32,8 @@ class InlineComment(BaseModel):
     code_suggestion: str | None = Field(
         None,
         description=(
-            "Optional drop-in code suggestion replacement. Must match the exact structure and indentation of the"
-            " replaced code, formatted as a suggestion."
+            "Optional drop-in replacement code. Must match the exact code structure and indentation of the replaced"
+            " line(s) WITHOUT line number prefixes or markdown fences."
         ),
     )
 

@@ -180,7 +180,12 @@ def post_review(
         if c.code_suggestion:
             body_parts.append(f"```suggestion\n{c.code_suggestion}\n```")
 
-        comments_payload.append({"path": c.path, "line": c.line, "side": c.side, "body": "\n\n".join(body_parts)})
+        comment_dict = {"path": c.path, "line": c.line, "side": c.side, "body": "\n\n".join(body_parts)}
+        if getattr(c, "start_line", None) and c.start_line < c.line:
+            comment_dict["start_line"] = c.start_line
+            comment_dict["start_side"] = c.side
+
+        comments_payload.append(comment_dict)
 
     body_sections = [f"## 📋 Review Summary\n\n{review.summary}"]
     if review.resolved_items:
@@ -247,6 +252,9 @@ def post_review(
     comments_url = f"https://api.github.com/repos/{repository}/pulls/{pr_number}/comments"
     for idx, c in enumerate(comments_payload):
         c_payload = {"body": c["body"], "commit_id": commit_id, "path": c["path"], "line": c["line"], "side": c["side"]}
+        if "start_line" in c:
+            c_payload["start_line"] = c["start_line"]
+            c_payload["start_side"] = c["start_side"]
         res_comment = requests.post(comments_url, headers=headers, json=c_payload, timeout=timeout)
         if res_comment.status_code in (200, 201):
             print(f"Posted comment {idx + 1}/{len(comments_payload)} successfully.", file=sys.stderr)

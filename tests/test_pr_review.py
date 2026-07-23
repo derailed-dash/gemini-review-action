@@ -13,6 +13,8 @@ from gemini_pr_review import (
     build_prompt,
     count_text_tokens,
     filter_review_comments,
+    format_diff_patch_with_line_numbers,
+    format_file_content_with_line_numbers,
     format_pr_comment_history,
     generate_file_tree,
     get_all_repo_files,
@@ -20,6 +22,7 @@ from gemini_pr_review import (
     get_pr_comments,
     get_pr_files,
     get_valid_changed_lines,
+    get_valid_diff_lines,
     is_core_file,
     is_text_file,
     list_available_skills,
@@ -1027,3 +1030,116 @@ def test_load_system_instruction_with_persona(mocker):
     instruction = load_system_instruction("owner/repo", 1, config)
     assert "You are a review bot." in instruction
     assert "## Mandatory Persona Directive: Dazbo" in instruction
+
+
+# --- Line Number Formatting & Multi-Line Comment Tests ---
+
+
+def test_format_file_content_with_line_numbers():
+    content = "first line\nsecond line\nthird line"
+    formatted = format_file_content_with_line_numbers(content)
+    lines = formatted.splitlines()
+    assert len(lines) == 3
+    assert "   1 | first line" in lines[0]
+    assert "   2 | second line" in lines[1]
+    assert "   3 | third line" in lines[2]
+
+
+def test_format_diff_patch_with_line_numbers():
+    patch = "@@ -10,3 +20,4 @@\n context line\n-old line\n+new line 1\n+new line 2\n"
+    formatted = format_diff_patch_with_line_numbers(patch)
+    assert "@@ -10,3 +20,4 @@" in formatted
+    assert "   20   | context line" in formatted
+    assert "   11 - | old line" in formatted
+    assert "   21 + | new line 1" in formatted
+    assert "   22 + | new line 2" in formatted
+
+
+def test_get_valid_diff_lines():
+    patch = "@@ -10,3 +20,4 @@\n context line\n-old line\n+new line 1\n+new line 2\n"
+    right_lines, left_lines = get_valid_diff_lines(patch)
+    assert right_lines == {20, 21, 22}
+    assert left_lines == {10, 11}
+
+
+def test_filter_review_comments_multiline_and_left_side():
+    text_files = [
+        {
+            "filename": "src/main.py",
+            "patch": "@@ -10,3 +20,4 @@\n context line\n-old line\n+new line 1\n+new line 2\n",
+        }
+    ]
+
+    comments = [
+        InlineComment(
+            path="src/main.py",
+            start_line=20,
+            line=22,
+            side="RIGHT",
+            severity="🟢",
+            comment_text="Valid multi-line comment",
+        ),
+        InlineComment(
+            path="src/main.py",
+            line=11,
+            side="LEFT",
+            severity="🔴",
+            comment_text="Valid left side deletion comment",
+        ),
+        InlineComment(
+            path="src/main.py",
+            start_line=22,
+            line=20,
+            side="RIGHT",
+            severity="🟡",
+            comment_text="Inverted range bounds",
+        ),
+    ]
+
+    review = ReviewResult(summary="Test", general_feedback=[], comments=comments)
+    filtered = filter_review_comments(review, text_files)
+
+    assert len(filtered.comments) == 3
+    # 1. Multi-line comment retained
+    assert filtered.comments[0].start_line == 20
+    assert filtered.comments[0].line == 22
+
+    # 2. LEFT side comment retained
+    assert filtered.comments[1].side == "LEFT"
+    assert filtered.comments[1].line == 11
+
+    # 3. Inverted range bounds swapped (22, 20 -> 20, 22) and line 22 is valid
+    assert filtered.comments[2].start_line == 20
+    assert filtered.comments[2].line == 22
+
+
+def test_post_review_multiline_payload(mocker):
+    mock_post = mocker.patch("requests.post")
+    mock_res = mocker.Mock()
+    mock_res.status_code = 200
+    mock_post.return_value = mock_res
+
+    review = ReviewResult(
+        summary="Looks good",
+        general_feedback=[],
+        comments=[
+            InlineComment(
+                path="main.py",
+                start_line=10,
+                line=15,
+                side="RIGHT",
+                severity="🟢",
+                comment_text="Multi-line refactor",
+                code_suggestion="new_code()",
+            )
+        ],
+    )
+
+    post_review("owner/repo", 1, "sha", review, {"Authorization": "token test"})
+
+    mock_post.assert_called_once()
+    payload = mock_post.call_args[1]["json"]
+    assert len(payload["comments"]) == 1
+    assert payload["comments"][0]["start_line"] == 10
+    assert payload["comments"][0]["start_side"] == "RIGHT"
+    assert payload["comments"][0]["line"] == 15
