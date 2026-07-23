@@ -1,2 +1,3 @@
 [codespell]
 skip = ./starter-examples/skills
+ignore-words-list = wit
