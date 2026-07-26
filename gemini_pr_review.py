@@ -50,6 +50,7 @@ from gemini_review import (
     get_valid_changed_lines,
     get_valid_diff_lines,
     is_core_file,
+    is_inline_suggestion_commit,
     is_text_file,
     list_available_skills,
     load_config,
@@ -91,6 +92,7 @@ __all__ = [
     "get_valid_changed_lines",
     "get_valid_diff_lines",
     "is_core_file",
+    "is_inline_suggestion_commit",
     "is_text_file",
     "list_available_skills",
     "load_config",
@@ -145,6 +147,16 @@ def main():
         if event_name == "pull_request":
             pr_number = event_payload["pull_request"]["number"]
             head_sha = event_payload["pull_request"]["head"]["sha"]
+
+            skip_suggestions = os.environ.get("GEMINI_SKIP_INLINE_SUGGESTIONS", "true").lower() in ("true", "1")
+
+            if skip_suggestions and is_inline_suggestion_commit(repository, head_sha, headers, timeout=timeout):
+                print(
+                    f"Head commit {head_sha[:7]} was created by accepting an inline suggestion via GitHub UI. "
+                    "Skipping automated re-review to avoid unnecessary review noise.",
+                    file=sys.stderr,
+                )
+                sys.exit(0)
         elif event_name == "issue_comment":
             comment_body = event_payload["comment"]["body"].strip()
             if not comment_body.startswith("/gemini-review"):

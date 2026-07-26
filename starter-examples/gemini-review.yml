@@ -49,3 +49,4 @@ jobs:
           # persona: 'straight'                # Optional: straight (default), dazbo, palpatine, rick
           # timeout: '60'                     # Optional API timeout in seconds
           # include_comment_history: 'true'   # Optional: include prior PR comment history (default: true)
+          # skip_inline_suggestions: 'true'   # Optional: skip re-reviews on commits created via GitHub UI inline fixes (default: true)

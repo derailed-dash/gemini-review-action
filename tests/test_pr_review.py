@@ -25,6 +25,7 @@ from gemini_pr_review import (
     get_valid_changed_lines,
     get_valid_diff_lines,
     is_core_file,
+    is_inline_suggestion_commit,
     is_text_file,
     list_available_skills,
     load_config,
@@ -71,7 +72,8 @@ def test_load_system_instruction(mocker):
     mocker.patch.dict(os.environ, {"GEMINI_LANGUAGE": "English (US)", "GEMINI_PERSONA": "straight"})
 
     result = load_system_instruction("derailed-dash/gemini-review-action", 42, mock_toml_content)
-    assert result == "Review repo derailed-dash/gemini-review-action PR #42 in English (US)."
+    assert "Review repo derailed-dash/gemini-review-action PR #42 in English (US)." in result
+    assert "IMPORTANT FOR INLINE CODE SUGGESTIONS" in result
 
 
 def test_is_core_file():
@@ -322,6 +324,35 @@ def test_filter_review_comments():
     assert any("Line 5" in item for item in filtered_review.general_feedback[2:])
     assert any("print('suggested')" in item for item in filtered_review.general_feedback[2:])
     assert any("invalid_file.py" in item for item in filtered_review.general_feedback[2:])
+
+
+def test_filter_review_comments_auto_correct_suggestion_range(mocker):
+    mock_file_content = "Line 1\n### Heading Line 95\n- Item Line 96\nLine 97\n"
+    mocker.patch("gemini_review.utils.get_file_content", return_value=mock_file_content)
+
+    text_files = [
+        {
+            "filename": "SKILL.md",
+            "patch": "@@ -1,4 +1,4 @@\n Line 1\n+### Heading Line 95\n+- Item Line 96\n Line 97\n",
+        }
+    ]
+
+    comment = InlineComment(
+        path="SKILL.md",
+        line=2,
+        start_line=None,
+        side="RIGHT",
+        severity="🟡",
+        comment_text="Insert blank line after heading",
+        code_suggestion="### Heading Line 95\n\n- Item Line 96",
+    )
+
+    review = ReviewResult(summary="Summary", general_feedback=[], comments=[comment])
+    filtered = filter_review_comments(review, text_files)
+
+    assert len(filtered.comments) == 1
+    assert filtered.comments[0].start_line == 2
+    assert filtered.comments[0].line == 3
 
 
 def test_get_google_auth_headers_api_key(mocker):
@@ -1302,3 +1333,35 @@ def test_post_commit_status(mocker):
     assert kwargs["json"]["state"] == "success"
     assert kwargs["json"]["description"] == "All good"
     assert kwargs["json"]["context"] == "Dazbo's Gemini Code Review / review (pull_request)"
+
+
+def test_is_inline_suggestion_commit_true(mocker):
+    mock_get = mocker.patch("requests.get")
+    mock_res = mocker.Mock()
+    mock_res.status_code = 200
+    mock_res.json.return_value = {
+        "committer": {"login": "web-flow"},
+        "commit": {
+            "committer": {"email": "noreply@github.com"},
+            "message": "Update SKILL.md\n\nCo-authored-by: github-actions[bot] <bot@users.noreply.github.com>",
+        },
+    }
+    mock_get.return_value = mock_res
+
+    assert is_inline_suggestion_commit("owner/repo", "sha123", {"Authorization": "token test"}) is True
+
+
+def test_is_inline_suggestion_commit_false(mocker):
+    mock_get = mocker.patch("requests.get")
+    mock_res = mocker.Mock()
+    mock_res.status_code = 200
+    mock_res.json.return_value = {
+        "committer": {"login": "derailed-dash"},
+        "commit": {
+            "committer": {"email": "dazbo@example.com"},
+            "message": "Manual developer commit",
+        },
+    }
+    mock_get.return_value = mock_res
+
+    assert is_inline_suggestion_commit("owner/repo", "sha123", {"Authorization": "token test"}) is False

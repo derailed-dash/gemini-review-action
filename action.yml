@@ -48,6 +48,10 @@ inputs:
     description: 'Persona overlay for reviewer (straight, dazbo, palpatine, rick)'
     required: false
     default: 'straight'
+  skip_inline_suggestions:
+    description: 'Skip automated re-reviews when a commit is created by accepting an inline suggestion via GitHub UI'
+    required: false
+    default: 'true'
 
 runs:
   using: 'composite'
@@ -70,6 +74,7 @@ runs:
         GEMINI_TIMEOUT: ${{ inputs.timeout }}
         GEMINI_INCLUDE_COMMENT_HISTORY: ${{ inputs.include_comment_history }}
         GEMINI_PERSONA: ${{ inputs.persona }}
+        GEMINI_SKIP_INLINE_SUGGESTIONS: ${{ inputs.skip_inline_suggestions }}
         GITHUB_REPOSITORY: ${{ github.repository }}
         GITHUB_EVENT_PATH: ${{ github.event_path }}
         GITHUB_EVENT_NAME: ${{ github.event_name }}

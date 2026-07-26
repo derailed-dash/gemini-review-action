@@ -20,6 +20,8 @@ class InlineComment(BaseModel):
         default=None,
         description=(
             "Optional start line number for multi-line comments. If provided, must be <= line and in the same file."
+            " IMPORTANT: Whenever code_suggestion replaces or includes multiple lines of existing code, start_line MUST"
+            " be provided so that [start_line, line] covers ALL original lines being replaced."
         ),
     )
     side: str = Field(
@@ -33,7 +35,11 @@ class InlineComment(BaseModel):
         None,
         description=(
             "Optional drop-in replacement code. Must match the exact code structure and indentation of the replaced"
-            " line(s) WITHOUT line number prefixes or markdown fences."
+            " line(s) WITHOUT line number prefixes or markdown fences. CRITICAL: code_suggestion must correspond"
+            " EXACTLY to the target line range [start_line..line]. If start_line is omitted (single-line comment),"
+            " code_suggestion MUST only modify or replace that single line. If code_suggestion replaces multiple"
+            " existing lines, start_line MUST be set to the first line and line to the last line of the replaced"
+            " range to prevent GitHub line duplication."
         ),
     )
 

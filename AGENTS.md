@@ -6,6 +6,11 @@ This repository contains the codebase for the **Gemini Code Review & Issue Triag
 
 - **English UK**: Use English UK spelling in all code comments, user-facing output, and documentation (e.g. "customise", "normalise", "standardise").
 
+## Action Input Parameters vs TOML Configuration
+
+- **Input Parameters in Workflow YAML**: All operational configuration parameters (such as `skip_inline_suggestions`, `include_comment_history`, `language`, `persona`, `timeout`) MUST be configured via action input parameters in `action.yml`, workflow `.yml` files, and environment variables (`GEMINI_*`).
+- **TOML Configuration Scope**: `gemini-review.toml` is strictly reserved for prompt text templates and custom system prompt overrides. Operational configuration parameters must NOT be placed in `gemini-review.toml`.
+
 ## Python Guidelines
 
 - **Python Version**: Target Python >=3.13.
