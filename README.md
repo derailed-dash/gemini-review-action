@@ -691,39 +691,46 @@ To make the new version officially available, update the changelog, and ensure i
 6. Write a summary of changes in the description box, or click **Generate release notes** to automatically construct them from your commit logs.
 7. Click **Publish release**.
 
-#### Example: Releasing Version `v1.3.1`
+#### Example: Releasing Version `v1.4.5`
 
-Here is a full example of checking tag status, bumping the version, and releasing version `v1.3.1`:
+Here is a full example of checking tag status, bumping the version, pushing tags, and ensuring the Marketplace listing is updated:
 
 1. **Check current tag status:**
    Find the closest tag and see how many commits the branch is ahead by:
    ```bash
    git describe --tags
-   # Example output: v1.3.0-4-gb824f0f (4 commits ahead of v1.3.0)
+   # Example output: v1.4.4-3-g1223a88 (3 commits ahead of v1.4.4)
    ```
 
 2. **Bump the version in pyproject.toml and synchronise the lockfile:**
-   Ensure the version is set to `1.3.1` in `pyproject.toml`, then run:
+   Ensure the version is set to `1.4.5` in `pyproject.toml`, then run:
    ```bash
-   uv sync
-   git commit -am "chore(release): bump version to v1.3.1"
+   uv lock
+   git commit -am "chore(release): bump version to v1.4.5"
    git push origin main
    ```
 
-3. **Create the minor/patch tag and move the major version tag locally:**
+3. **Create the patch tag and update the floating major version tag locally:**
    ```bash
-   git tag -fa v1.3.1 -m "Release version v1.3.1"
-   git tag -fa v1 -m "Update v1 tag to point to v1.3.1"
+   git tag -fa v1.4.5 -m "Release v1.4.5: Line Range Accuracy, Re-Review Suppression & Input Parameter Standards"
+   git tag -fa v1 -m "Release v1"
    ```
 
 4. **Push tags to remote (using `--force` to update the existing `v1` tag on GitHub):**
    ```bash
-   git push origin v1.3.1
+   git push origin v1.4.5 --force
    git push origin v1 --force
    ```
 
-5. **Publish the Release:**
-   Follow Step 4 to publish the release on GitHub.
+5. **Publish & Sync to GitHub Marketplace:**
+   - **Option A (GitHub Web UI)**: Go to **Releases** > **Draft a new release** (or edit `v1.4.5`), ensure **☑️ Publish this Action to the GitHub Marketplace** is checked, select category (`Code review` / `Code quality`), and click **Publish release** (or **Update release**).
+   - **Option B (GitHub CLI)**: Create the release via `gh release create`:
+     ```bash
+     gh release create v1.4.5 -t "v1.4.5: Line Range Accuracy, Re-Review Suppression & Input Parameter Standards" -F release_notes.md
+     ```
+   
+   > [!IMPORTANT]
+   > **Marketplace Metadata Synchronization:** Whenever metadata in `action.yml` (such as `name`, `description`, or inputs) is modified, you MUST update/re-save the GitHub Release for the current tag. This forces GitHub Marketplace to re-read `action.yml` and immediately update the listing title, keywords, and search index.
 
 ## Cost Attribution & Estimation
 
