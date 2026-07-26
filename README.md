@@ -242,7 +242,10 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gemini_model: 'gemini-3.6-flash'
           language: 'English (UK)'           # Optional (e.g. English (UK), French, Spanish)
-          # persona: 'straight'                # Optional: straight (default), dazbo, palpatine
+          # persona: 'straight'                # Optional: straight (default), dazbo, palpatine, rick
+          # timeout: '60'                     # Optional API timeout in seconds
+          # include_comment_history: 'true'   # Optional: include prior PR comment history (default: true)
+          # skip_inline_suggestions: 'true'   # Optional: skip re-reviews on commits created via GitHub UI inline fixes (default: true)
 ```
 
 After adding the workflow to your repository, it should look something like this:
@@ -356,6 +359,7 @@ jobs:
 | `include_comment_history` | Whether to fetch prior inline review threads and conversation comments from GitHub. | No | `'true'` |
 | `language` | The language to use for the review comments (e.g. `English (UK)`, `English (US)`, `French`, `Spanish`). | No | `English (UK)` |
 | `persona` | Reviewer persona overlay (`straight`, `dazbo`, `palpatine`, `rick`). | No | `straight` |
+| `skip_inline_suggestions` | Whether to skip automated re-reviews when a commit is created by accepting an inline suggestion via GitHub UI. | No | `'true'` |
 | `timeout` | Timeout for API requests in seconds. | No | `60` |
 
 ### Codebase Context Configuration
@@ -409,6 +413,9 @@ You can customize or completely override the prompt instructions given to the re
 
 * **To override the Code Review prompt:** Create a file at `.github/commands/gemini-review.toml` in your calling repository.
 * **To override the Issue Triage prompt:** Create a file at `.github/commands/gemini-triage.toml` in your calling repository.
+
+> [!NOTE]
+> **Parameter Configuration Scope:** All operational configuration parameters (such as `skip_inline_suggestions`, `include_comment_history`, `persona`, `language`, `timeout`) MUST be configured via Action inputs in your workflow `.yml` file. The `gemini-review.toml` file is strictly reserved for prompt text templates and custom prompt overrides.
 
 Your custom TOML file must contain a `prompt` key enclosing your system instructions in markdown format:
 
