@@ -21,17 +21,27 @@ from gemini_review.utils import (
 
 
 def load_system_instruction(repository: str | None, pr_number: int, config: dict) -> str:
-    """Load system instructions from Dazbo's gemini-review.toml prompt configuration and apply reviewer persona."""
+    """Load system instructions for Gemini code & technical reviews.
+
+    Sets base_prompt to either the custom prompt template from gemini-review.toml
+    (with variable substitutions) OR the default fallback prompt if no custom prompt
+    is defined. In both cases, the configured reviewer persona prompt (e.g. 'straight',
+    'thorough') is appended to base_prompt afterwards.
+    """
     prompt = config.get("prompt", "")
     if not prompt:
+        # Fallback base prompt if gemini-review.toml does not define a custom prompt key
         base_prompt = (
-            "You are a world-class code review agent. Analyze changes and output constructive feedback using"
-            f" {os.environ.get('GEMINI_LANGUAGE', 'English (UK)')} spelling. Review any prior PR comment history."
-            " DO NOT repeat suggestions that have been addressed, deferred, or explicitly justified/disagreed with"
-            " by the developer. DO restate unresolved suggestions if the code remains unchanged without an explanation"
-            " or if the developer agreed with the fix but has not yet applied it."
+            "You are a world-class software engineering and technical review agent. Analyze changes across code,"
+            " documentation, architecture, and configuration to output comprehensive, constructive feedback using"
+            f" {os.environ.get('GEMINI_LANGUAGE', 'English (UK)')} spelling. Evaluate documentation updates for clarity"
+            " and alignment with code changes. Review any prior PR comment history. DO NOT repeat suggestions that have"
+            " been addressed, deferred, or explicitly justified/disagreed with by the developer. DO restate unresolved"
+            " suggestions if the code remains unchanged without an explanation or if the developer agreed with the fix"
+            " but has not yet applied it."
         )
     else:
+        # Custom prompt from gemini-review.toml: perform dynamic template variable substitutions
         prompt = prompt.replace("!{echo $REPOSITORY}", repository or "unknown")
         prompt = prompt.replace("!{echo $PULL_REQUEST_NUMBER}", str(pr_number))
         prompt = prompt.replace("!{echo $ADDITIONAL_CONTEXT}", "")
@@ -39,6 +49,7 @@ def load_system_instruction(repository: str | None, pr_number: int, config: dict
         language = os.environ.get("GEMINI_LANGUAGE", "English (UK)")
         base_prompt = prompt.replace("!{echo $LANGUAGE}", language)
 
+    # Append reviewer persona prompt (e.g. 'straight', 'thorough') to base_prompt in either case
     persona_name = resolve_persona_name(config)
     print(f"Reviewer persona: '{persona_name}'", file=sys.stderr)
     persona_prompt = get_persona_prompt(persona_name)

@@ -363,3 +363,41 @@ def count_text_tokens(client, model_name: str, text: str) -> int:
             pass
     # Fallback heuristic (~4 chars per token)
     return max(1, len(text) // 4)
+
+
+def extract_response_text_or_raise(response: Any) -> str:
+    """Extract text content from a Gemini model response or raise RuntimeError with detailed diagnostics.
+
+    Inspects candidates, finish reasons, block reasons, and function call attempts when response.text is None.
+    """
+    text = getattr(response, "text", None)
+    if text:
+        return text
+
+    diag_lines = ["Gemini model returned empty or non-text response."]
+
+    candidates = getattr(response, "candidates", None)
+    if candidates:
+        for idx, candidate in enumerate(candidates):
+            finish_reason = getattr(candidate, "finish_reason", "UNKNOWN")
+            finish_msg = getattr(candidate, "finish_message", None)
+            msg_str = f" ({finish_msg})" if finish_msg else ""
+            diag_lines.append(f"Candidate {idx}: finish_reason={finish_reason}{msg_str}")
+
+            safety_ratings = getattr(candidate, "safety_ratings", None)
+            if safety_ratings:
+                diag_lines.append(f"Candidate {idx} safety ratings: {safety_ratings}")
+
+    function_calls = getattr(response, "function_calls", None)
+    if function_calls:
+        diag_lines.append(f"Model emitted function call(s) instead of text: {function_calls}")
+
+    prompt_feedback = getattr(response, "prompt_feedback", None)
+    if prompt_feedback:
+        block_reason = getattr(prompt_feedback, "block_reason", None)
+        if block_reason:
+            diag_lines.append(f"Prompt blocked: block_reason={block_reason}")
+
+    error_msg = "\n".join(diag_lines)
+    print(f"Error: {error_msg}", file=sys.stderr)
+    raise RuntimeError(error_msg)
