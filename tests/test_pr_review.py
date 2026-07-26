@@ -1267,3 +1267,18 @@ def test_extract_response_text_or_raise_none_with_function_calls(mocker):
         extract_response_text_or_raise(mock_response)
 
     assert "Model emitted function call(s)" in str(exc_info.value)
+
+
+def test_extract_response_text_or_raise_property_getter_exception(mocker):
+    import pytest
+
+    mock_response = mocker.Mock()
+    type(mock_response).text = property(mocker.Mock(side_effect=ValueError("Response candidate was blocked")))
+    mock_response.candidates = []
+    mock_response.function_calls = None
+    mock_response.prompt_feedback = None
+
+    with pytest.raises(RuntimeError) as exc_info:
+        extract_response_text_or_raise(mock_response)
+
+    assert "Gemini model returned empty or non-text response" in str(exc_info.value)

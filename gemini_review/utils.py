@@ -369,32 +369,67 @@ def extract_response_text_or_raise(response: Any) -> str:
     """Extract text content from a Gemini model response or raise RuntimeError with detailed diagnostics.
 
     Inspects candidates, finish reasons, block reasons, and function call attempts when response.text is None.
+    Safely wraps property accesses in try-except to catch ValueError or AttributeError raised by SDK getters.
     """
-    text = getattr(response, "text", None)
+    text = None
+    try:
+        text = getattr(response, "text", None)
+    except Exception:
+        text = None
+
     if text:
         return text
 
     diag_lines = ["Gemini model returned empty or non-text response."]
 
-    candidates = getattr(response, "candidates", None)
+    candidates = None
+    try:
+        candidates = getattr(response, "candidates", None)
+    except Exception:
+        candidates = None
+
     if candidates:
         for idx, candidate in enumerate(candidates):
-            finish_reason = getattr(candidate, "finish_reason", "UNKNOWN")
-            finish_msg = getattr(candidate, "finish_message", None)
+            try:
+                finish_reason = getattr(candidate, "finish_reason", "UNKNOWN")
+            except Exception:
+                finish_reason = "UNKNOWN"
+
+            try:
+                finish_msg = getattr(candidate, "finish_message", None)
+            except Exception:
+                finish_msg = None
+
             msg_str = f" ({finish_msg})" if finish_msg else ""
             diag_lines.append(f"Candidate {idx}: finish_reason={finish_reason}{msg_str}")
 
-            safety_ratings = getattr(candidate, "safety_ratings", None)
+            try:
+                safety_ratings = getattr(candidate, "safety_ratings", None)
+            except Exception:
+                safety_ratings = None
+
             if safety_ratings:
                 diag_lines.append(f"Candidate {idx} safety ratings: {safety_ratings}")
 
-    function_calls = getattr(response, "function_calls", None)
+    try:
+        function_calls = getattr(response, "function_calls", None)
+    except Exception:
+        function_calls = None
+
     if function_calls:
         diag_lines.append(f"Model emitted function call(s) instead of text: {function_calls}")
 
-    prompt_feedback = getattr(response, "prompt_feedback", None)
+    try:
+        prompt_feedback = getattr(response, "prompt_feedback", None)
+    except Exception:
+        prompt_feedback = None
+
     if prompt_feedback:
-        block_reason = getattr(prompt_feedback, "block_reason", None)
+        try:
+            block_reason = getattr(prompt_feedback, "block_reason", None)
+        except Exception:
+            block_reason = None
+
         if block_reason:
             diag_lines.append(f"Prompt blocked: block_reason={block_reason}")
 
