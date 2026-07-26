@@ -12,6 +12,7 @@ from gemini_pr_review import (
     ReviewResult,
     build_prompt,
     count_text_tokens,
+    extract_response_text_or_raise,
     filter_review_comments,
     format_diff_patch_with_line_numbers,
     format_file_content_with_line_numbers,
@@ -1224,3 +1225,60 @@ def test_post_review_multiline_payload(mocker):
     assert payload["comments"][0]["start_line"] == 10
     assert payload["comments"][0]["start_side"] == "RIGHT"
     assert payload["comments"][0]["line"] == 15
+
+
+def test_extract_response_text_or_raise_success(mocker):
+    mock_response = mocker.Mock()
+    mock_response.text = '{"summary": "All good"}'
+    assert extract_response_text_or_raise(mock_response) == '{"summary": "All good"}'
+
+
+def test_extract_response_text_or_raise_none_with_candidates(mocker):
+    import pytest
+
+    mock_candidate = mocker.Mock()
+    mock_candidate.finish_reason = "SAFETY"
+    mock_candidate.finish_message = "Blocked due to safety settings"
+    mock_candidate.safety_ratings = [{"category": "HARM", "probability": "HIGH"}]
+
+    mock_response = mocker.Mock()
+    mock_response.text = None
+    mock_response.candidates = [mock_candidate]
+    mock_response.function_calls = None
+    mock_response.prompt_feedback = None
+
+    with pytest.raises(RuntimeError) as exc_info:
+        extract_response_text_or_raise(mock_response)
+
+    assert "finish_reason=SAFETY" in str(exc_info.value)
+    assert "Blocked due to safety settings" in str(exc_info.value)
+
+
+def test_extract_response_text_or_raise_none_with_function_calls(mocker):
+    import pytest
+
+    mock_response = mocker.Mock()
+    mock_response.text = None
+    mock_response.candidates = []
+    mock_response.function_calls = [{"name": "search_google_developer_knowledge"}]
+    mock_response.prompt_feedback = None
+
+    with pytest.raises(RuntimeError) as exc_info:
+        extract_response_text_or_raise(mock_response)
+
+    assert "Model emitted function call(s)" in str(exc_info.value)
+
+
+def test_extract_response_text_or_raise_property_getter_exception(mocker):
+    import pytest
+
+    mock_response = mocker.Mock()
+    type(mock_response).text = property(mocker.Mock(side_effect=ValueError("Response candidate was blocked")))
+    mock_response.candidates = []
+    mock_response.function_calls = None
+    mock_response.prompt_feedback = None
+
+    with pytest.raises(RuntimeError) as exc_info:
+        extract_response_text_or_raise(mock_response)
+
+    assert "Gemini model returned empty or non-text response" in str(exc_info.value)

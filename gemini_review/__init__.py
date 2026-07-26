@@ -35,6 +35,7 @@ from .skills import (
 from .utils import (
     _normalize_model_name,
     count_text_tokens,
+    extract_response_text_or_raise,
     filter_review_comments,
     format_diff_patch_with_line_numbers,
     format_file_content_with_line_numbers,
@@ -58,6 +59,7 @@ __all__ = [
     "build_pr_diff_prompt",
     "build_prompt",
     "count_text_tokens",
+    "extract_response_text_or_raise",
     "filter_review_comments",
     "format_diff_patch_with_line_numbers",
     "format_file_content_with_line_numbers",

@@ -27,6 +27,8 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 
+from gemini_review import extract_response_text_or_raise
+
 DEFAULT_TIMEOUT = 60
 
 
@@ -179,7 +181,8 @@ def main():
         ),
     )
 
-    result_data = json.loads(response.text)
+    result_text = extract_response_text_or_raise(response)
+    result_data = json.loads(result_text)
     triage = TriageResult(**result_data)
 
     if is_dry_run:
