@@ -49,6 +49,17 @@ def load_system_instruction(repository: str | None, pr_number: int, config: dict
         language = os.environ.get("GEMINI_LANGUAGE", "English (UK)")
         base_prompt = prompt.replace("!{echo $LANGUAGE}", language)
 
+    # Append inline suggestion guidance regarding line-range alignment
+    suggestion_instruction = (
+        "IMPORTANT FOR INLINE CODE SUGGESTIONS: GitHub inline suggestions replace EXACTLY the line range between"
+        " start_line and line (inclusive). Whenever code_suggestion modifies or replaces multiple existing lines, you"
+        " MUST provide start_line (start of replaced range) and line (end of replaced range). If start_line is omitted"
+        " (single-line comment), code_suggestion MUST replace only that single line. Never include surrounding lines"
+        " in code_suggestion unless start_line and line span all of those original lines, otherwise GitHub's inline"
+        " replacement will duplicate surrounding code."
+    )
+    base_prompt = f"{base_prompt}\n\n{suggestion_instruction}"
+
     # Append reviewer persona prompt (e.g. 'straight', 'thorough') to base_prompt in either case
     persona_name = resolve_persona_name(config)
     print(f"Reviewer persona: '{persona_name}'", file=sys.stderr)

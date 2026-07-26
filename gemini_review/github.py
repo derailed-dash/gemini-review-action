@@ -303,3 +303,37 @@ def post_commit_status(
             )
     except Exception as e:
         print(f"Warning: Exception updating GitHub commit status: {e}", file=sys.stderr)
+
+
+def is_inline_suggestion_commit(
+    repository: str, commit_sha: str, headers: dict, timeout: int = DEFAULT_TIMEOUT
+) -> bool:
+    """Check whether a given commit SHA was created by accepting an inline suggestion via GitHub UI."""
+    if not repository or not commit_sha or commit_sha == "mock_head_sha":
+        return False
+
+    url = f"https://api.github.com/repos/{repository}/commits/{commit_sha}"
+    try:
+        res = requests.get(url, headers=headers, timeout=timeout)
+        if res.status_code != 200:
+            return False
+        data = res.json()
+
+        committer = data.get("committer") or {}
+        committer_login = committer.get("login", "")
+        commit_info = data.get("commit") or {}
+        committer_email = (commit_info.get("committer") or {}).get("email", "")
+        commit_msg = commit_info.get("message", "")
+
+        is_web_flow = committer_login == "web-flow" or committer_email == "noreply@github.com"
+        has_bot_coauthor = "github-actions[bot]" in commit_msg
+        is_suggestion_msg = (
+            commit_msg.startswith("Update ")
+            or commit_msg.startswith("Apply suggestion")
+            or commit_msg.startswith("Apply suggestions")
+        )
+
+        return is_web_flow and (has_bot_coauthor or is_suggestion_msg)
+    except Exception as e:
+        print(f"Warning: Failed to check commit details for inline suggestion detection: {e}", file=sys.stderr)
+        return False

@@ -10,7 +10,7 @@ import subprocess
 import sys
 from typing import Any
 
-from gemini_review.schemas import ReviewResult
+from gemini_review.schemas import InlineComment, ReviewResult
 
 
 def _get_pr_review_func(name: str, fallback: Any) -> Any:
@@ -171,6 +171,70 @@ def get_valid_changed_lines(patch: str) -> set[int]:
     return valid_right
 
 
+def _auto_correct_suggestion_range(
+    comment: InlineComment,
+    matched_file: str,
+    valid_set: set[int],
+) -> None:
+    """Auto-correct comment.start_line and comment.line if code_suggestion includes multi-line original file content."""
+    if not comment.code_suggestion:
+        return
+
+    s_lines = [sl.strip() for sl in comment.code_suggestion.strip().splitlines() if sl.strip()]
+    if len(s_lines) <= 1:
+        return
+
+    content = get_file_content(matched_file)
+    if not content:
+        return
+
+    file_lines = {idx: line.strip() for idx, line in enumerate(content.splitlines(), start=1)}
+
+    target_line = comment.line
+
+    if comment.start_line is None:
+        target_str = file_lines.get(target_line, "")
+        if not target_str:
+            return
+
+        match_indices = [idx for idx, sl in enumerate(s_lines) if sl == target_str]
+        if not match_indices:
+            return
+
+        min_line = target_line
+        max_line = target_line
+
+        idx_match = match_indices[0]
+
+        # Check subsequent lines for contiguous sequential match
+        offset = 1
+        while (
+            (target_line + offset) in file_lines
+            and (target_line + offset) in valid_set
+            and (idx_match + offset) < len(s_lines)
+        ):
+            if file_lines[target_line + offset] == s_lines[idx_match + offset]:
+                max_line = target_line + offset
+                offset += 1
+            else:
+                break
+
+        # Check preceding lines for contiguous sequential match
+        offset = 1
+        while (
+            (target_line - offset) in file_lines and (target_line - offset) in valid_set and (idx_match - offset) >= 0
+        ):
+            if file_lines[target_line - offset] == s_lines[idx_match - offset]:
+                min_line = target_line - offset
+                offset += 1
+            else:
+                break
+
+        if min_line < max_line:
+            comment.start_line = min_line
+            comment.line = max_line
+
+
 def filter_review_comments(review: ReviewResult, text_files: list) -> ReviewResult:
     """Filter inline comments to ensure they apply to valid lines in the diff,
     redirecting others to general feedback. Sanitises multi-line start_line bounds.
@@ -208,6 +272,9 @@ def filter_review_comments(review: ReviewResult, text_files: list) -> ReviewResu
         valid_right, valid_left = valid_lines_by_file[matched_file]
         is_left = comment.side and comment.side.upper() == "LEFT"
         valid_set = valid_left if is_left else valid_right
+
+        # Auto-correct multi-line suggestion range bounds if start_line is omitted
+        _auto_correct_suggestion_range(comment, matched_file, valid_set)
 
         # Validate start_line range if present
         if comment.start_line is not None:

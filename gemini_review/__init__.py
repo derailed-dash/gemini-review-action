@@ -14,6 +14,7 @@ from .github import (
     format_pr_comment_history,
     get_pr_comments,
     get_pr_files,
+    is_inline_suggestion_commit,
     post_commit_status,
     post_review,
 )
@@ -77,6 +78,7 @@ __all__ = [
     "get_valid_changed_lines",
     "get_valid_diff_lines",
     "is_core_file",
+    "is_inline_suggestion_commit",
     "is_text_file",
     "list_available_skills",
     "load_config",
