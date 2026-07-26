@@ -14,6 +14,7 @@ from .github import (
     format_pr_comment_history,
     get_pr_comments,
     get_pr_files,
+    post_commit_status,
     post_review,
 )
 from .personas import (
@@ -83,6 +84,7 @@ __all__ = [
     "load_system_instruction",
     "load_workspace_rules",
     "parse_skill_metadata",
+    "post_commit_status",
     "post_review",
     "resolve_persona_name",
     "search_google_developer_knowledge",
