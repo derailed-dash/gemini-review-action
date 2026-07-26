@@ -193,26 +193,40 @@ def _auto_correct_suggestion_range(
     target_line = comment.line
 
     if comment.start_line is None:
+        target_str = file_lines.get(target_line, "")
+        if not target_str:
+            return
+
+        match_indices = [idx for idx, sl in enumerate(s_lines) if sl == target_str]
+        if not match_indices:
+            return
+
         min_line = target_line
         max_line = target_line
 
-        # Check subsequent lines (target_line + 1, + 2, ...)
-        check_line = target_line + 1
-        while check_line in file_lines and check_line in valid_set:
-            line_str = file_lines[check_line]
-            if line_str and any(line_str == sl for sl in s_lines):
-                max_line = check_line
-                check_line += 1
+        idx_match = match_indices[0]
+
+        # Check subsequent lines for contiguous sequential match
+        offset = 1
+        while (
+            (target_line + offset) in file_lines
+            and (target_line + offset) in valid_set
+            and (idx_match + offset) < len(s_lines)
+        ):
+            if file_lines[target_line + offset] == s_lines[idx_match + offset]:
+                max_line = target_line + offset
+                offset += 1
             else:
                 break
 
-        # Check preceding lines (target_line - 1, - 2, ...)
-        check_line = target_line - 1
-        while check_line in file_lines and check_line in valid_set:
-            line_str = file_lines[check_line]
-            if line_str and any(line_str == sl for sl in s_lines):
-                min_line = check_line
-                check_line -= 1
+        # Check preceding lines for contiguous sequential match
+        offset = 1
+        while (
+            (target_line - offset) in file_lines and (target_line - offset) in valid_set and (idx_match - offset) >= 0
+        ):
+            if file_lines[target_line - offset] == s_lines[idx_match - offset]:
+                min_line = target_line - offset
+                offset += 1
             else:
                 break
 
