@@ -237,6 +237,9 @@ def post_review(
 
     if res.status_code in (200, 201):
         print("Successfully posted PR review atomically.", file=sys.stderr)
+        post_commit_status(
+            repository, commit_id, "success", "Gemini PR Review completed successfully", headers, timeout=timeout
+        )
         return
 
     print(f"Warning: Failed to submit review atomically (status {res.status_code}). Error: {res.text}", file=sys.stderr)
@@ -264,3 +267,39 @@ def post_review(
                 f" {res_comment.text}",
                 file=sys.stderr,
             )
+
+    post_commit_status(
+        repository, commit_id, "success", "Gemini PR Review completed successfully", headers, timeout=timeout
+    )
+
+
+def post_commit_status(
+    repository: str,
+    commit_id: str,
+    state: str,
+    description: str,
+    headers: dict,
+    context: str = "Dazbo's Gemini Code Review / review (pull_request)",
+    timeout: int = DEFAULT_TIMEOUT,
+) -> None:
+    """Post a commit status update to GitHub's Statuses API to update PR check marks."""
+    if not repository or not commit_id or commit_id == "mock_head_sha":
+        return
+
+    url = f"https://api.github.com/repos/{repository}/statuses/{commit_id}"
+    payload = {
+        "state": state,
+        "description": description[:140],
+        "context": context,
+    }
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        if res.status_code in (200, 201):
+            print(f"Updated GitHub commit status '{context}' to '{state}'.", file=sys.stderr)
+        else:
+            print(
+                f"Warning: Failed to update GitHub commit status ({res.status_code}): {res.text}",
+                file=sys.stderr,
+            )
+    except Exception as e:
+        print(f"Warning: Exception updating GitHub commit status: {e}", file=sys.stderr)

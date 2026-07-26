@@ -30,6 +30,8 @@ from gemini_pr_review import (
     load_config,
     load_skill_instructions,
     load_system_instruction,
+    parse_skill_metadata,
+    post_commit_status,
     post_review,
     search_google_developer_knowledge,
 )
@@ -222,16 +224,14 @@ def test_post_review_atomic(mocker):
 
     post_review("derailed-dash/gemini-review-action", 42, "head_sha_123", review, {"Authorization": "token test"})
 
-    # Assert atomic review creation was attempted
-    mock_post.assert_called_once_with(
-        "https://api.github.com/repos/derailed-dash/gemini-review-action/pulls/42/reviews",
-        headers={"Authorization": "token test"},
-        json={
-            "body": "## 📋 Review Summary\n\nLooks good\n\n## 🔍 General Feedback\n\n- Clean code",
-            "event": "COMMENT",
-            "comments": [],
-        },
-        timeout=60,
+    assert mock_post.call_count == 2
+    assert (
+        mock_post.call_args_list[0][0][0]
+        == "https://api.github.com/repos/derailed-dash/gemini-review-action/pulls/42/reviews"
+    )
+    assert (
+        mock_post.call_args_list[1][0][0]
+        == "https://api.github.com/repos/derailed-dash/gemini-review-action/statuses/head_sha_123"
     )
 
 
@@ -242,11 +242,11 @@ def test_post_review_fallback(mocker):
     mock_res_atomic = mocker.Mock()
     mock_res_atomic.status_code = 422
 
-    # Subsequent individual comments post and review post succeed
+    # Subsequent individual comments post and commit status post succeed
     mock_res_ok = mocker.Mock()
     mock_res_ok.status_code = 201
 
-    mock_post.side_effect = [mock_res_atomic, mock_res_ok, mock_res_ok]
+    mock_post.side_effect = [mock_res_atomic, mock_res_ok, mock_res_ok, mock_res_ok]
 
     review = ReviewResult(
         summary="Some bugs",
@@ -265,11 +265,16 @@ def test_post_review_fallback(mocker):
 
     post_review("derailed-dash/gemini-review-action", 42, "head_sha_123", review, {"Authorization": "token test"})
 
-    # We expect 3 requests total:
+    # We expect 4 requests total:
     # 1. Atomic review post (which fails)
-    # 2. Individual comment post for the single comment
-    # 3. Final review submit post (without comments)
-    assert mock_post.call_count == 3
+    # 2. PR issue summary comment
+    # 3. Individual inline comment post
+    # 4. Commit status update
+    assert mock_post.call_count == 4
+    assert (
+        mock_post.call_args_list[3][0][0]
+        == "https://api.github.com/repos/derailed-dash/gemini-review-action/statuses/head_sha_123"
+    )
 
 
 def test_get_valid_changed_lines():
@@ -437,7 +442,6 @@ def test_load_skill_instructions_path_traversal():
 
 
 def test_parse_skill_metadata(mocker):
-    from gemini_pr_review import parse_skill_metadata
 
     # 1. Folder-structured skill (e.g. SKILL.md)
     mocker.patch("builtins.open", mocker.mock_open(read_data="---\nname: Specific Folder Skill\n---\n"))
@@ -972,8 +976,8 @@ def test_post_review_with_resolved_items(mocker):
 
     post_review("owner/repo", 42, "head_sha", review, {"Authorization": "token abc"})
 
-    assert mock_post.call_count == 1
-    posted_payload = mock_post.call_args[1]["json"]
+    assert mock_post.call_count == 2
+    posted_payload = mock_post.call_args_list[0][1]["json"]
     body = posted_payload["body"]
 
     assert "## 📋 Review Summary" in body
@@ -1006,8 +1010,8 @@ def test_post_review_with_usage_metadata(mocker):
 
     post_review("owner/repo", 42, "head_sha", review, {"Authorization": "token abc"}, usage_metadata=usage_metadata)
 
-    assert mock_post.call_count == 1
-    posted_payload = mock_post.call_args[1]["json"]
+    assert mock_post.call_count == 2
+    posted_payload = mock_post.call_args_list[0][1]["json"]
     body = posted_payload["body"]
 
     assert "<details>" in body
@@ -1219,8 +1223,8 @@ def test_post_review_multiline_payload(mocker):
 
     post_review("owner/repo", 1, "sha", review, {"Authorization": "token test"})
 
-    mock_post.assert_called_once()
-    payload = mock_post.call_args[1]["json"]
+    assert mock_post.call_count == 2
+    payload = mock_post.call_args_list[0][1]["json"]
     assert len(payload["comments"]) == 1
     assert payload["comments"][0]["start_line"] == 10
     assert payload["comments"][0]["start_side"] == "RIGHT"
@@ -1282,3 +1286,19 @@ def test_extract_response_text_or_raise_property_getter_exception(mocker):
         extract_response_text_or_raise(mock_response)
 
     assert "Gemini model returned empty or non-text response" in str(exc_info.value)
+
+
+def test_post_commit_status(mocker):
+    mock_post = mocker.patch("requests.post")
+    mock_res = mocker.Mock()
+    mock_res.status_code = 201
+    mock_post.return_value = mock_res
+
+    post_commit_status("owner/repo", "sha123456", "success", "All good", {"Authorization": "token test"})
+
+    mock_post.assert_called_once()
+    args, kwargs = mock_post.call_args
+    assert args[0] == "https://api.github.com/repos/owner/repo/statuses/sha123456"
+    assert kwargs["json"]["state"] == "success"
+    assert kwargs["json"]["description"] == "All good"
+    assert kwargs["json"]["context"] == "Dazbo's Gemini Code Review / review (pull_request)"
