@@ -1,5 +1,5 @@
-name: "Dazbo's Gemini Review & Triage"
-description: "Automated Pull Request code reviews and Issue Triage using Google Gemini"
+name: "Dazbo's Gemini Code Review & Issue Triage"
+description: "Automated Pull Request AI code reviews and Issue Triage using Google Gemini"
 author: 'Dazbo (derailed-dash)'
 
 # Note: To control which files trigger this action, configure `paths` or `paths-ignore`
