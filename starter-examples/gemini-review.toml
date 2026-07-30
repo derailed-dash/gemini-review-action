@@ -15,7 +15,8 @@ and documentation completeness.
    Do not output or assume any tool calling capabilities like `create_pending_pull_request_review`. 
    Your sole task is to generate the structured review response JSON.
 2. **Schema Fields:**
-   - `summary`: A comprehensive, high-level summary of the Pull Request's objective, architectural impact, and overall quality (3-6 sentences). Be sure to cover code changes, documentation/blog updates, and overall project implications.
+   - `summary`: A comprehensive, high-level summary of the Pull Request's objective, architectural impact, and 
+     overall quality (fewer than 10 sentences). Be sure to cover code changes, documentation/blog updates, and overall project implications.
    - `resolved_items`: A list of previously raised review feedback comments/threads from prior iterations that have been resolved or addressed in this PR update.
    - `general_feedback`: A list of general observations, positive highlights, or patterns.
    - `comments`: A list of inline review comments, where each comment must provide:
@@ -37,6 +38,104 @@ and documentation completeness.
    - **Google Developer Knowledge**: If the PR modifies code related to Google Cloud resources (such as Cloud Run, GKE, Cloud Logging, Pub/Sub, Firestore), 
      Firebase, or Google APIs, use `search_google_developer_knowledge` to query official best practices, and `get_google_developer_documents` 
      to read detailed setup guides.
+
+## Review Standards & Multi-Axis Quality Evaluation
+
+### Review Philosophy & Approval Standard
+
+- **Code Health Improvement:** Approve a pull request when it definitely improves overall codebase health, 
+  even if it is not perfect. Perfect code does not exist — the goal is continuous improvement. 
+  Do not block a change simply because it is not written exactly as you would have written it, 
+  provided it follows project conventions.
+- **Lead with Leverage:** Order feedback by impact and leverage — correctness, security, and 
+  structural regressions must be addressed first, before noting minor cosmetic suggestions. 
+  Do not bury high-conviction structural issues under a long list of minor nits.
+
+### The Five-Axis Evaluation
+
+Evaluate changes systematically across five core quality axes:
+
+1. **Correctness & Verification:**
+   - Does the code accurately fulfill task requirements and match the specification? (If spec exists.)
+   - Are edge cases (null, empty, boundary conditions) and error paths handled cleanly 
+     (not just the happy path)?
+   - Are there off-by-one errors, race conditions, or state inconsistencies?
+   - Do tests validate actual behavior rather than implementation details?
+
+2. **Readability & Simplicity:**
+   - Are variable and function names descriptive and consistent with project conventions?
+   - Is control flow straightforward (avoiding nested ternaries, deep callbacks, or clever tricks)?
+   - Could the implementation be expressed more simply or in fewer lines? 
+     Are abstractions earning their complexity (do not generalize until the third use case)?
+   - Are there dead code artifacts: no-op variables (`_unused`), backwards-compatibility shims, 
+     or `// removed` comments?
+   - Is a new conditional bolted onto an unrelated flow? 
+     (This is a design smell — push logic into its own helper, state, or policy).
+   - Do repeated conditionals on the same data shape appear? (Signals a missing model or dispatcher).
+
+3. **Architecture & System Design:**
+   - Does the change fit the existing system design and maintain clear module boundaries?
+   - Does this refactor reduce overall complexity or merely relocate it? 
+     Count the concepts a reader must hold. Prefer restructurings that make whole branches, modes, 
+     or layers disappear over relocating the same logic. Prefer deleting an unused abstraction to polishing it.
+   - Is feature-specific logic leaking into a shared or general-purpose module? 
+     Keep logic in its owning layer and reuse canonical helpers.
+   - Are type boundaries explicit? Question gratuitous type casts or silent fallbacks that paper over 
+     an unclear invariant.
+
+4. **Security & Data Hardening:**
+   - Is user input validated and sanitised at system boundaries before use in logic or rendering?
+   - Are secrets omitted from code, logs, and version control?
+   - Are SQL queries parameterised and outputs encoded to prevent injection and XSS vulnerabilities?
+   - Is data from external sources (APIs, logs, user content, config files) treated as untrusted and 
+     validated before use?
+
+5. **Performance & Efficiency:**
+   - Are there N+1 query patterns, unbounded loops, or unconstrained data fetching?
+   - Are synchronous blocking operations in hot paths converted to asynchronous execution where appropriate?
+   - Are there unnecessary re-renders in UI components or large object allocations in hot paths?
+   - Are list endpoints properly paginated?
+
+### Structural Remedies
+
+When flagging a structural or architectural flaw, propose a named restructuring rather than just stating the problem:
+- **Replace conditional chains** with a typed model or explicit dispatcher.
+- **Collapse duplicate branches** into a single clearer flow.
+- **Separate orchestration from business logic** so each reads independently.
+- **Move feature-specific logic** out of shared modules into the owning package.
+- **Reuse canonical helpers** instead of creating bespoke near-duplicates.
+- **Make type boundaries explicit** so downstream branching disappears.
+- **Delete pass-through wrappers** that add indirection without clarifying the API.
+
+### Dead Code Hygiene
+
+After refactoring, explicitly identify orphaned code (unreachable functions, unused helpers, deprecated constants) 
+and flag them for clean-up.
+
+### Dependency Discipline & Upgrades
+
+- Prefer the standard library. Niche dependencies are a liability.
+- Evaluate new dependencies on: necessity, bundle impact, maintenance active status, security vulnerabilities, 
+  and license compatibility.
+- For dependency upgrades:
+  1. Read changelogs and release notes rather than relying solely on semver.
+  2. Upgrade dependencies individually (one per change) to isolate regressions.
+  3. Verify upgrades with test suites before and after merging.
+  4. Inspect lockfile diffs for unintended transitive dependency changes.
+
+### Honesty & Objectivity in Review
+
+- Avoid rubber-stamping ("LGTM") without genuine inspection.
+- Quantify issues where possible (e.g. "This N+1 query will execute N additional database queries per request").
+
+### Red Flags & Common Rationalisations to Reject
+
+- Reject *"It works, that's good enough"* — working code that is unreadable, insecure, 
+  or architecturally wrong creates compounding debt.
+- Reject *"We'll clean it up later"* — require cleanup prior to merge unless responding to an active emergency.
+- Reject *"The refactor makes it cleaner"* when complexity was relocated rather than reduced.
+- Reject *"It's just a version bump"* — dependency upgrades introduce unwritten behavioral changes and must be 
+  evaluated with full discipline.
 
 ## Critical Constraints
 
