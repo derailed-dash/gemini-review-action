@@ -125,3 +125,49 @@ enable_context_caching = true  # Enable native Gemini Context Caching for large 
 cache_ttl_seconds = 3600       # Cache TTL in seconds (default: 3600 / 1 hour)
 ```
 
+---
+
+## 🏛️ Architectural Decision: Direct Gemini API vs. Managed Agents (Interactions API)
+
+### Context & Evaluation
+
+Google provides **Google Managed Agents** (such as the **Antigravity Agent**) via the stateful **Interactions API** (`interactions.create`). Managed agents execute inside a Google-hosted, OS-isolated Linux sandbox VM equipped with native tool harnesses (file mounting, shell execution, web search) and multi-turn state persistence.
+
+During the architectural design of this action, I evaluated using Managed Agents (`interactions.create`) versus the direct Gemini Model API (`client.models.generate_content`) paired with native Gemini Context Caching (`client.caches`).
+
+### Architectural Comparison
+
+| Dimension | Direct Gemini API + Context Caching (Selected) | Managed Agents / Interactions API |
+| :--- | :--- | :--- |
+| **API Primitives** | `client.models.generate_content` + `client.caches` | `client.interactions.create` + `agent_config` |
+| **Execution Environment** | Client-side Python runner on GitHub Runner | Google-hosted cloud Linux sandbox VM |
+| **Codebase Context Strategy** | Native Gemini Context Caching (`CachedContent`) | Repo mounted in VM sandbox via environment sources |
+| **Input Token Pricing** | **90% discount** on cached tokens (>100k chars) | Standard token pricing per interaction turn |
+| **Startup Overhead & Latency** | Near-zero (direct token generation) | VM sandbox boot & cold-start latency per job |
+| **State Management** | Stateless single-turn pass per PR commit | Persistent multi-turn sessions (`previous_interaction_id`) |
+| **API Maturity** | GA (General Availability) | Public Preview |
+
+### Decision Rationale
+
+I selected the **Direct Gemini API + Context Caching** model based on the following technical trade-offs:
+
+1. **Latency & CI Execution Speed**:
+   Code review in a CI pipeline requires rapid execution feedback. Managed Agent sandboxes incur non-negligible cold-start boot latency when provisioning remote containers for each workflow trigger. Direct API generation starts producing feedback immediately.
+
+2. **Context Caching Cost Optimisation (90% Input Token Savings)**:
+   For repositories with large codebase contexts (>100,000 characters), my context caching engine creates a server-side `CachedContent` handle that persists across workflow runs. Subsequent PR review runs referencing the cache receive a **90% discount** on cached input tokens. Managed agent environments load context into a remote VM container filesystem, which does not benefit from native `CachedContent` input token discounts.
+
+3. **Appropriate Complexity for CI Workflows**:
+   A Pull Request review is inherently a single-turn structured evaluation per git commit. The heavyweight architecture of a persistent Linux VM sandbox container (with mounted tool shims and session state tracking) introduces unnecessary complexity compared to a focused Python execution loop running on the native GitHub Action runner.
+
+4. **Security & Credential Scope**:
+   Passing repository access tokens into remote cloud VM sandboxes (even with egress proxy header transforms) broadens the credential trust boundary. Running the review logic locally on the ephemeral GitHub runner ensures standard GitHub Actions secret isolation.
+
+5. **API Stability**:
+   Direct API generation and Context Caching primitives are generally available (GA) with guaranteed SLAs, avoiding reliance on Public Preview APIs for production CI pipelines.
+
+### References
+* [Google Managed Agents Overview](https://ai.google.dev/gemini-api/docs/agents)
+* [Antigravity Agent Documentation](https://ai.google.dev/gemini-api/docs/antigravity-agent)
+* [Agent Environment Overview](https://ai.google.dev/gemini-api/docs/agent-environment)
+
