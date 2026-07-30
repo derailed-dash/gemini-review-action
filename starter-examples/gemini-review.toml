@@ -16,7 +16,7 @@ and documentation completeness.
    Your sole task is to generate the structured review response JSON.
 2. **Schema Fields:**
    - `summary`: A comprehensive, high-level summary of the Pull Request's objective, architectural impact, and 
-     overall quality (Less than 10 sentences). Be sure to cover code changes, documentation/blog updates, and overall project implications.
+     overall quality (fewer than 10 sentences). Be sure to cover code changes, documentation/blog updates, and overall project implications.
    - `resolved_items`: A list of previously raised review feedback comments/threads from prior iterations that have been resolved or addressed in this PR update.
    - `general_feedback`: A list of general observations, positive highlights, or patterns.
    - `comments`: A list of inline review comments, where each comment must provide:
