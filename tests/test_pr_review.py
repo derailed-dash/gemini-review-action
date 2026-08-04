@@ -1392,9 +1392,12 @@ def test_sanitize_code_suggestion():
     fenced = "```suggestion\ndef foo():\n    pass\n```"
     assert sanitize_code_suggestion(fenced) == "def foo():\n    pass"
 
-    # Untouched valid code
-    valid_code = "def bar():\n    return 42"
+    # Untouched valid code (including dict keys with integer labels like '105: "foo"')
+    valid_code = "def bar():\n    d = {105: 'foo'}\n    return 42"
     assert sanitize_code_suggestion(valid_code) == valid_code
+
+    dict_key_line = "105: 'foo'"
+    assert sanitize_code_suggestion(dict_key_line) == dict_key_line
 
 
 def test_filter_review_comments_sanitizes_line_prefixes(mocker):

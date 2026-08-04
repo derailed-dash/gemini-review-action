@@ -254,8 +254,9 @@ def sanitize_code_suggestion(suggestion: str | None) -> str | None:
     if not cleaned:
         return None
 
-    # Strip line number prefixes (e.g. '105 | ', '  105 + | ', '105 - | ', 'L105: ', '105: ')
-    prefix_pattern = re.compile(r"^\s*(?:L?\d+[\s\t]*(?:[+-][\s\t]*)?[:|][\s\t]?)")
+    # Strip line number prefixes (e.g. '105 | ', '  105 + | ', '105 - | ', 'L105: ')
+    # Plain numeric prefixes must be pipe-delimited (|) to avoid stripping dict keys (e.g., '105: "foo"').
+    prefix_pattern = re.compile(r"^\s*(?:L\d+[\s\t]*[:|]|\d+[\s\t]*(?:[+-][\s\t]*)?\|)[\s\t]?")
 
     lines = cleaned.splitlines()
     if any(prefix_pattern.match(line) for line in lines):
