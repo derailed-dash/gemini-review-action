@@ -1464,3 +1464,68 @@ def test_filter_review_comments_auto_aligns_indentation(mocker):
 
     assert len(filtered.comments) == 1
     assert filtered.comments[0].code_suggestion == "    prefix_pattern = re.compile(r'new')"
+
+
+def test_auto_align_suggestion_indentation_deep_nesting(mocker):
+    # Target line at line 10 has 12 spaces of indentation
+    mock_file_content = ("Line\n" * 9) + "            deeply_nested_func(a, b)\nLine 11\n"
+    mocker.patch("gemini_review.utils.get_file_content", return_value=mock_file_content)
+
+    text_files = [
+        {
+            "filename": "deep.py",
+            "patch": "@@ -9,3 +9,3 @@\n Line\n+            deeply_nested_func(a, b)\n Line 11\n",
+        }
+    ]
+
+    # Case 1: 0 spaces base in suggestion -> shifted by 12 spaces
+    comment_0 = InlineComment(
+        path="deep.py",
+        line=10,
+        start_line=None,
+        side="RIGHT",
+        severity="🟡",
+        comment_text="Refactor",
+        code_suggestion="deeply_nested_func(a, b,\n    c=1)",
+    )
+    review_0 = filter_review_comments(ReviewResult(summary="S", general_feedback=[], comments=[comment_0]), text_files)
+    assert review_0.comments[0].code_suggestion == "            deeply_nested_func(a, b,\n                c=1)"
+
+    s_input = (" " * 4) + "deeply_nested_func(a, b,\n" + (" " * 8) + "c=1)"
+    expected = (" " * 12) + "deeply_nested_func(a, b,\n" + (" " * 16) + "c=1)"
+    comment_4 = InlineComment(
+        path="deep.py",
+        line=10,
+        start_line=None,
+        side="RIGHT",
+        severity="🟡",
+        comment_text="Refactor",
+        code_suggestion=s_input,
+    )
+    review_4 = filter_review_comments(ReviewResult(summary="S", general_feedback=[], comments=[comment_4]), text_files)
+    assert review_4.comments[0].code_suggestion == expected
+
+
+def test_auto_align_suggestion_indentation_tabs(mocker):
+    # Target line at line 5 has 2 tabs of indentation
+    mock_file_content = ("Line\n" * 4) + "\t\tfunc()\nLine 6\n"
+    mocker.patch("gemini_review.utils.get_file_content", return_value=mock_file_content)
+
+    text_files = [
+        {
+            "filename": "tabs.go",
+            "patch": "@@ -4,3 +4,3 @@\n Line\n+\t\tfunc()\n Line 6\n",
+        }
+    ]
+
+    comment = InlineComment(
+        path="tabs.go",
+        line=5,
+        start_line=None,
+        side="RIGHT",
+        severity="🟡",
+        comment_text="Refactor Go",
+        code_suggestion="func()\n\tmore()",
+    )
+    review = filter_review_comments(ReviewResult(summary="S", general_feedback=[], comments=[comment]), text_files)
+    assert review.comments[0].code_suggestion == "\t\tfunc()\n\t\t\tmore()"

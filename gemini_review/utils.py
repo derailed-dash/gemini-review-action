@@ -262,11 +262,13 @@ def _auto_align_suggestion_indentation(comment: InlineComment, matched_file: str
         return
 
     first_s_indent = len(s_lines[0]) - len(s_lines[0].lstrip(" \t"))
-    if first_s_indent == 0:
+    if first_s_indent < target_indent:
+        delta = target_indent - first_s_indent
+        indent_addition = indent_prefix[:delta]
         new_lines = []
         for line in s_lines:
             if line.strip():
-                new_lines.append(indent_prefix + line)
+                new_lines.append(indent_addition + line)
             else:
                 new_lines.append(line)
         comment.code_suggestion = "\n".join(new_lines)
@@ -277,8 +279,8 @@ def sanitize_code_suggestion(suggestion: str | None) -> str | None:
     if not suggestion:
         return None
 
-    cleaned = suggestion.strip()
-    if not cleaned:
+    cleaned = suggestion.strip("\r\n")
+    if not cleaned or not cleaned.strip():
         return None
 
     # Strip outer markdown code block fences if model enclosed suggestion in ```...```
