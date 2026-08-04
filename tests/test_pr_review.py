@@ -1436,3 +1436,31 @@ def test_filter_review_comments_sanitizes_line_prefixes(mocker):
     assert c.code_suggestion == "3. For any newly relocated skill:\n    - Prompt the user\n    - Insert the skill"
     assert c.start_line == 105
     assert c.line == 107
+
+
+def test_filter_review_comments_auto_aligns_indentation(mocker):
+    mock_file_content = ("Dummy\n" * 257) + "    prefix_pattern = re.compile(r'old')\nLine 259\n"
+    mocker.patch("gemini_review.utils.get_file_content", return_value=mock_file_content)
+
+    text_files = [
+        {
+            "filename": "utils.py",
+            "patch": "@@ -257,3 +257,3 @@\n Dummy\n+    prefix_pattern = re.compile(r'old')\n Line 259\n",
+        }
+    ]
+
+    comment = InlineComment(
+        path="utils.py",
+        line=258,
+        start_line=None,
+        side="RIGHT",
+        severity="🟡",
+        comment_text="Refine regex pattern",
+        code_suggestion="prefix_pattern = re.compile(r'new')",
+    )
+
+    review = ReviewResult(summary="Summary", general_feedback=[], comments=[comment])
+    filtered = filter_review_comments(review, text_files)
+
+    assert len(filtered.comments) == 1
+    assert filtered.comments[0].code_suggestion == "    prefix_pattern = re.compile(r'new')"
