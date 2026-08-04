@@ -6,6 +6,7 @@ generating repo file trees, and loading workspace agent rules.
 
 import fnmatch
 import os
+import re
 import subprocess
 import sys
 from typing import Any
@@ -235,9 +236,38 @@ def _auto_correct_suggestion_range(
             comment.line = max_line
 
 
+def sanitize_code_suggestion(suggestion: str | None) -> str | None:
+    """Sanitise code_suggestion by stripping outer markdown code block fences and line number prefixes."""
+    if not suggestion:
+        return None
+
+    cleaned = suggestion.strip()
+    if not cleaned:
+        return None
+
+    # Strip outer markdown code block fences if model enclosed suggestion in ```...```
+    if cleaned.startswith("```") and cleaned.endswith("```"):
+        lines = cleaned.splitlines()
+        if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
+            cleaned = "\n".join(lines[1:-1]).strip()
+
+    if not cleaned:
+        return None
+
+    # Strip line number prefixes (e.g. '105 | ', '  105 + | ', '105 - | ', 'L105: ', '105: ')
+    prefix_pattern = re.compile(r"^\s*(?:L?\d+[\s\t]*(?:[+-][\s\t]*)?[:|][\s\t]?)")
+
+    lines = cleaned.splitlines()
+    if any(prefix_pattern.match(line) for line in lines):
+        cleaned = "\n".join(prefix_pattern.sub("", line, count=1) for line in lines)
+
+    return cleaned if cleaned.strip() else None
+
+
 def filter_review_comments(review: ReviewResult, text_files: list) -> ReviewResult:
     """Filter inline comments to ensure they apply to valid lines in the diff,
-    redirecting others to general feedback. Sanitises multi-line start_line bounds.
+    redirecting others to general feedback. Sanitises multi-line start_line bounds
+    and code suggestions.
     """
     fn_get_valid_diff_lines = _get_pr_review_func("get_valid_diff_lines", get_valid_diff_lines)
 
@@ -249,6 +279,9 @@ def filter_review_comments(review: ReviewResult, text_files: list) -> ReviewResu
     redirected_feedback = []
 
     for comment in review.comments:
+        if comment.code_suggestion:
+            comment.code_suggestion = sanitize_code_suggestion(comment.code_suggestion)
+
         comment_path = comment.path.replace("\\", "/")
 
         matched_file = None

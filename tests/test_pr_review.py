@@ -34,6 +34,7 @@ from gemini_pr_review import (
     parse_skill_metadata,
     post_commit_status,
     post_review,
+    sanitize_code_suggestion,
     search_google_developer_knowledge,
 )
 
@@ -1365,3 +1366,70 @@ def test_is_inline_suggestion_commit_false(mocker):
     mock_get.return_value = mock_res
 
     assert is_inline_suggestion_commit("owner/repo", "sha123", {"Authorization": "token test"}) is False
+
+
+def test_sanitize_code_suggestion():
+    # None or empty
+    assert sanitize_code_suggestion(None) is None
+    assert sanitize_code_suggestion("   ") is None
+
+    # Line number pipe prefixes (the exact bug case)
+    dirty = "105 | 3. For any newly relocated skill:\n106 |     - Prompt the user\n107 |     - Insert the skill"
+    clean = "3. For any newly relocated skill:\n    - Prompt the user\n    - Insert the skill"
+    assert sanitize_code_suggestion(dirty) == clean
+
+    # Diff annotated line numbers
+    dirty_diff = "  105 + |     - Prompt the user\n  106 + |     - Insert the skill"
+    clean_diff = "    - Prompt the user\n    - Insert the skill"
+    assert sanitize_code_suggestion(dirty_diff) == clean_diff
+
+    # Colon line numbers or L-prefixes
+    dirty_colon = "L105: return True\nL106: return False"
+    clean_colon = "return True\nreturn False"
+    assert sanitize_code_suggestion(dirty_colon) == clean_colon
+
+    # Outer markdown code block fences
+    fenced = "```suggestion\ndef foo():\n    pass\n```"
+    assert sanitize_code_suggestion(fenced) == "def foo():\n    pass"
+
+    # Untouched valid code
+    valid_code = "def bar():\n    return 42"
+    assert sanitize_code_suggestion(valid_code) == valid_code
+
+
+def test_filter_review_comments_sanitizes_line_prefixes(mocker):
+    mock_file_content = (
+        "Dummy\n" * 104
+    ) + "3. For any newly relocated skill:\n    - Prompt the user\n    - Insert the skill\nLine 108\n"
+    mocker.patch("gemini_review.utils.get_file_content", return_value=mock_file_content)
+
+    text_files = [
+        {
+            "filename": "SKILL.md",
+            "patch": (
+                "@@ -104,5 +104,5 @@\n Line 104\n+3. For any newly relocated skill:\n+    - Prompt the"
+                " user\n+    - Insert the skill\n Line 108\n"
+            ),
+        }
+    ]
+
+    comment = InlineComment(
+        path="SKILL.md",
+        line=105,
+        start_line=None,
+        side="RIGHT",
+        severity="🟡",
+        comment_text="Fix indentation",
+        code_suggestion=(
+            "105 | 3. For any newly relocated skill:\n106 |     - Prompt the user\n107 |     - Insert the skill"
+        ),
+    )
+
+    review = ReviewResult(summary="Summary", general_feedback=[], comments=[comment])
+    filtered = filter_review_comments(review, text_files)
+
+    assert len(filtered.comments) == 1
+    c = filtered.comments[0]
+    assert c.code_suggestion == "3. For any newly relocated skill:\n    - Prompt the user\n    - Insert the skill"
+    assert c.start_line == 105
+    assert c.line == 107

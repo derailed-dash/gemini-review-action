@@ -50,6 +50,7 @@ from .utils import (
     is_core_file,
     is_text_file,
     load_workspace_rules,
+    sanitize_code_suggestion,
 )
 
 __all__ = [
@@ -89,5 +90,6 @@ __all__ = [
     "post_commit_status",
     "post_review",
     "resolve_persona_name",
+    "sanitize_code_suggestion",
     "search_google_developer_knowledge",
 ]
