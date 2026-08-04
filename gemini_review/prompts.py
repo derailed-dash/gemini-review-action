@@ -56,7 +56,9 @@ def load_system_instruction(repository: str | None, pr_number: int, config: dict
         " MUST provide start_line (start of replaced range) and line (end of replaced range). If start_line is omitted"
         " (single-line comment), code_suggestion MUST replace only that single line. Never include surrounding lines"
         " in code_suggestion unless start_line and line span all of those original lines, otherwise GitHub's inline"
-        " replacement will duplicate surrounding code."
+        " replacement will duplicate surrounding code. NEVER include line numbers, line prefixes (e.g. '105 | ',"
+        " '105 + | ', 'L105:'), or markdown code block fences in code_suggestion; code_suggestion MUST contain ONLY raw"
+        " drop-in replacement code."
     )
     base_prompt = f"{base_prompt}\n\n{suggestion_instruction}"
 

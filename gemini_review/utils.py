@@ -6,6 +6,7 @@ generating repo file trees, and loading workspace agent rules.
 
 import fnmatch
 import os
+import re
 import subprocess
 import sys
 from typing import Any
@@ -235,9 +236,77 @@ def _auto_correct_suggestion_range(
             comment.line = max_line
 
 
+def _auto_align_suggestion_indentation(comment: InlineComment, matched_file: str) -> None:
+    """Ensure comment.code_suggestion retains the base indentation of the target file line."""
+    if not comment.code_suggestion:
+        return
+
+    content = get_file_content(matched_file)
+    if not content:
+        return
+
+    file_lines = content.splitlines()
+    target_line_idx = (comment.start_line or comment.line) - 1
+    if not (0 <= target_line_idx < len(file_lines)):
+        return
+
+    target_line = file_lines[target_line_idx]
+    target_indent = len(target_line) - len(target_line.lstrip(" \t"))
+    if target_indent == 0:
+        return
+
+    indent_prefix = target_line[:target_indent]
+
+    s_lines = comment.code_suggestion.splitlines()
+    if not s_lines:
+        return
+
+    first_s_indent = len(s_lines[0]) - len(s_lines[0].lstrip(" \t"))
+    if first_s_indent < target_indent:
+        delta = target_indent - first_s_indent
+        indent_addition = indent_prefix[:delta]
+        new_lines = []
+        for line in s_lines:
+            if line.strip():
+                new_lines.append(indent_addition + line)
+            else:
+                new_lines.append(line)
+        comment.code_suggestion = "\n".join(new_lines)
+
+
+def sanitize_code_suggestion(suggestion: str | None) -> str | None:
+    """Sanitise code_suggestion by stripping outer markdown code block fences and line number prefixes."""
+    if not suggestion:
+        return None
+
+    cleaned = suggestion.strip("\r\n")
+    if not cleaned or not cleaned.strip():
+        return None
+
+    # Strip outer markdown code block fences if model enclosed suggestion in ```...```
+    if cleaned.startswith("```") and cleaned.endswith("```"):
+        lines = cleaned.splitlines()
+        if len(lines) >= 2 and lines[0].startswith("```") and lines[-1].strip() == "```":
+            cleaned = "\n".join(lines[1:-1]).strip()
+
+    if not cleaned:
+        return None
+
+    # Strip line number prefixes (e.g. '105 | ', '  105 + | ', '105 - | ', 'L105: ')
+    # Plain numeric prefixes must be pipe-delimited (|) to avoid stripping dict keys (e.g., '105: "foo"').
+    prefix_pattern = re.compile(r"^\s*(?:L\d+[\s\t]*[:|]|\d+[\s\t]*(?:[+-][\s\t]*)?\|)[\s\t]?")
+
+    lines = cleaned.splitlines()
+    if any(prefix_pattern.match(line) for line in lines):
+        cleaned = "\n".join(prefix_pattern.sub("", line, count=1) for line in lines)
+
+    return cleaned if cleaned.strip() else None
+
+
 def filter_review_comments(review: ReviewResult, text_files: list) -> ReviewResult:
     """Filter inline comments to ensure they apply to valid lines in the diff,
-    redirecting others to general feedback. Sanitises multi-line start_line bounds.
+    redirecting others to general feedback. Sanitises multi-line start_line bounds
+    and code suggestions.
     """
     fn_get_valid_diff_lines = _get_pr_review_func("get_valid_diff_lines", get_valid_diff_lines)
 
@@ -249,6 +318,9 @@ def filter_review_comments(review: ReviewResult, text_files: list) -> ReviewResu
     redirected_feedback = []
 
     for comment in review.comments:
+        if comment.code_suggestion:
+            comment.code_suggestion = sanitize_code_suggestion(comment.code_suggestion)
+
         comment_path = comment.path.replace("\\", "/")
 
         matched_file = None
@@ -275,6 +347,9 @@ def filter_review_comments(review: ReviewResult, text_files: list) -> ReviewResu
 
         # Auto-correct multi-line suggestion range bounds if start_line is omitted
         _auto_correct_suggestion_range(comment, matched_file, valid_set)
+
+        # Auto-align code suggestion base indentation with target line in source file
+        _auto_align_suggestion_indentation(comment, matched_file)
 
         # Validate start_line range if present
         if comment.start_line is not None:

@@ -35,11 +35,11 @@ class InlineComment(BaseModel):
         None,
         description=(
             "Optional drop-in replacement code. Must match the exact code structure and indentation of the replaced"
-            " line(s) WITHOUT line number prefixes or markdown fences. CRITICAL: code_suggestion must correspond"
-            " EXACTLY to the target line range [start_line..line]. If start_line is omitted (single-line comment),"
-            " code_suggestion MUST only modify or replace that single line. If code_suggestion replaces multiple"
-            " existing lines, start_line MUST be set to the first line and line to the last line of the replaced"
-            " range to prevent GitHub line duplication."
+            " line(s) WITHOUT line numbers, line prefixes (e.g. '105 | '), or markdown fences. CRITICAL:"
+            " code_suggestion must correspond EXACTLY to the target line range [start_line..line]. If start_line is"
+            " omitted (single-line comment), code_suggestion MUST only modify or replace that single line. If"
+            " code_suggestion replaces multiple existing lines, start_line MUST be set to the first line and line to"
+            " the last line of the replaced range to prevent GitHub line duplication."
         ),
     )
 

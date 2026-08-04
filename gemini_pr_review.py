@@ -61,6 +61,7 @@ from gemini_review import (
     post_commit_status,
     post_review,
     resolve_persona_name,
+    sanitize_code_suggestion,
     search_google_developer_knowledge,
 )
 
@@ -104,6 +105,7 @@ __all__ = [
     "post_commit_status",
     "post_review",
     "resolve_persona_name",
+    "sanitize_code_suggestion",
     "search_google_developer_knowledge",
 ]
 
