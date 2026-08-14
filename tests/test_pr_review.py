@@ -648,8 +648,8 @@ def test_context_caching_reuse_existing_cache(mocker):
     mock_client = mocker.Mock()
     existing_cache = mocker.Mock()
     existing_cache.name = "cachedContents/existing-cache-456"
-    existing_cache.display_name = "repo-cache-test-owner-test-repo-gemini-3.6-flash-straight"
-    existing_cache.model = "gemini-3.6-flash"
+    existing_cache.display_name = "repo-cache-test-owner-test-repo-gemini-3.7-flash-straight"
+    existing_cache.model = "gemini-3.7-flash"
     mock_client.caches.list.return_value = [existing_cache]
 
     mock_response = mocker.Mock()
@@ -683,7 +683,7 @@ def test_context_caching_model_mismatch_skips_cache(mocker):
         os.environ,
         {
             "GEMINI_API_KEY": "test-key",
-            "GEMINI_MODEL": "gemini-3.6-flash",
+            "GEMINI_MODEL": "gemini-3.7-flash",
             "GITHUB_REPOSITORY": "test-owner/test-repo",
             "GITHUB_EVENT_PATH": "",
         },
@@ -729,8 +729,8 @@ def test_context_caching_model_mismatch_skips_cache(mocker):
     # Verify caches.create WAS called because old cache model did not match
     assert mock_client.caches.create.called
     create_call_args = mock_client.caches.create.call_args
-    assert create_call_args.kwargs["model"] == "gemini-3.6-flash"
-    assert "repo-cache-test-owner-test-repo-gemini-3.6-flash" in create_call_args.kwargs["config"].display_name
+    assert create_call_args.kwargs["model"] == "gemini-3.7-flash"
+    assert "repo-cache-test-owner-test-repo-gemini-3.7-flash" in create_call_args.kwargs["config"].display_name
 
     # Verify generate_content received the newly created cache handle
     gen_call_args = mock_client.models.generate_content.call_args
@@ -747,7 +747,7 @@ def test_context_caching_persona_mismatch_skips_cache(mocker):
         os.environ,
         {
             "GEMINI_API_KEY": "test-key",
-            "GEMINI_MODEL": "gemini-3.6-flash",
+            "GEMINI_MODEL": "gemini-3.7-flash",
             "GEMINI_PERSONA": "rick",
             "GITHUB_REPOSITORY": "test-owner/test-repo",
             "GITHUB_EVENT_PATH": "",
@@ -766,8 +766,8 @@ def test_context_caching_persona_mismatch_skips_cache(mocker):
     mock_client.models._parse_config.return_value.tools = None
     existing_cache = mocker.Mock()
     existing_cache.name = "cachedContents/old-dazbo-cache-123"
-    existing_cache.display_name = "repo-cache-test-owner-test-repo-gemini-3.6-flash-dazbo"
-    existing_cache.model = "gemini-3.6-flash"
+    existing_cache.display_name = "repo-cache-test-owner-test-repo-gemini-3.7-flash-dazbo"
+    existing_cache.model = "gemini-3.7-flash"
     mock_client.caches.list.return_value = [existing_cache]
 
     mock_new_cache = mocker.Mock()
@@ -792,7 +792,7 @@ def test_context_caching_persona_mismatch_skips_cache(mocker):
     # Verify caches.create WAS called because old cache persona (dazbo) did not match new persona (rick)
     assert mock_client.caches.create.called
     create_call_args = mock_client.caches.create.call_args
-    assert create_call_args.kwargs["config"].display_name == "repo-cache-test-owner-test-repo-gemini-3.6-flash-rick"
+    assert create_call_args.kwargs["config"].display_name == "repo-cache-test-owner-test-repo-gemini-3.7-flash-rick"
 
     # Verify generate_content received the newly created rick cache handle
     gen_call_args = mock_client.models.generate_content.call_args
@@ -826,8 +826,8 @@ def test_context_caching_generate_content_fallback(mocker):
     mock_client = mocker.Mock()
     existing_cache = mocker.Mock()
     existing_cache.name = "cachedContents/invalid-cache-999"
-    existing_cache.display_name = "repo-cache-test-owner-test-repo-gemini-3.6-flash-straight"
-    existing_cache.model = "gemini-3.6-flash"
+    existing_cache.display_name = "repo-cache-test-owner-test-repo-gemini-3.7-flash-straight"
+    existing_cache.model = "gemini-3.7-flash"
     mock_client.caches.list.return_value = [existing_cache]
 
     mock_response = mocker.Mock()
@@ -868,7 +868,7 @@ def test_normalize_model_name():
     assert _normalize_model_name("gemini-3.5-flash") == "gemini-3.5-flash"
     assert _normalize_model_name("models/gemini-3.5-flash") == "gemini-3.5-flash"
     assert _normalize_model_name("publishers/google/models/gemini-3.5-flash") == "gemini-3.5-flash"
-    assert _normalize_model_name("  MODELS/GEMINI-3.6-FLASH  ") == "gemini-3.6-flash"
+    assert _normalize_model_name("  MODELS/GEMINI-3.7-FLASH  ") == "gemini-3.7-flash"
 
 
 def test_get_pr_comments(mocker):
@@ -970,11 +970,11 @@ def test_count_text_tokens(mocker):
     mock_client.models.count_tokens.return_value = mocker.Mock(total_tokens=150)
 
     # With SDK support
-    count = count_text_tokens(mock_client, "gemini-3.6-flash", "Hello world! " * 50)
+    count = count_text_tokens(mock_client, "gemini-3.7-flash", "Hello world! " * 50)
     assert count == 150
 
     # Fallback heuristic when client is None
-    fallback_count = count_text_tokens(None, "gemini-3.6-flash", "Hello world!")
+    fallback_count = count_text_tokens(None, "gemini-3.7-flash", "Hello world!")
     assert fallback_count == len("Hello world!") // 4
 
 
