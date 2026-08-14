@@ -42,7 +42,7 @@ See the supporting blog post about this action [here](https://medium.com/google-
 
 ![Features Overview](assets/features-overview.png)
 
-- **AI-Powered Code Reviews**: Automated, constructive line-specific feedback on Pull Requests using Google Gemini models (Gemini 3.6 Flash by default).
+- **AI-Powered Code Reviews**: Automated, constructive line-specific feedback on Pull Requests using Google Gemini models (Gemini 3.7 Flash by default).
 - **Automated Issue Triage**: Dynamically labels, prioritises, and triages incoming issues.
 - **PR Comment & Discussion Thread History**: Automatically retrieves inline review threads and general PR conversation comments, enabling Gemini to track issue resolution, respect developer justifications/disagreements, and avoid repeating resolved suggestions across commits.
 - **Tokenomics & Cost Telemetry Report**: Appends a collapsible cost efficiency and token usage summary to each review.
@@ -240,7 +240,7 @@ jobs:
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          gemini_model: 'gemini-3.6-flash'
+          gemini_model: 'gemini-3.7-flash'
           language: 'English (UK)'           # Optional (e.g. English (UK), French, Spanish)
           # persona: 'straight'                # Optional: straight (default), dazbo, palpatine, rick
           # timeout: '60'                     # Optional API timeout in seconds
@@ -342,7 +342,7 @@ jobs:
           command: 'triage'        
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          gemini_model: 'gemini-3.6-flash'
+          gemini_model: 'gemini-3.7-flash'
           language: 'English (UK)'           # Optional
 ```
 
@@ -354,7 +354,7 @@ jobs:
 | :--- | :--- | :--- | :--- |
 | `gemini_api_key` | Your Gemini Developer API Key (from Google AI Studio). | **Yes** (unless using WIF) | N/A |
 | `github_token` | Repository `GITHUB_TOKEN` (automatically provided by GitHub; no manual secret creation required). | **Yes** | N/A |
-| `gemini_model` | The Gemini model version to target. | No | `gemini-3.6-flash` |
+| `gemini_model` | The Gemini model version to target. | No | `gemini-3.7-flash` |
 | `command` | The mode/command to run: `review` (for PR reviews) or `triage` (for issue triaging). | No | `review` |
 | `include_comment_history` | Whether to fetch prior inline review threads and conversation comments from GitHub. | No | `'true'` |
 | `language` | The language to use for the review comments (e.g. `English (UK)`, `English (US)`, `French`, `Spanish`). | No | `English (UK)` |
@@ -567,7 +567,7 @@ jobs:
           GOOGLE_CLOUD_LOCATION: "global" # Or your preferred model endpoint region
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          gemini_model: 'gemini-3.6-flash'
+          gemini_model: 'gemini-3.7-flash'
 ```
 
 > [!NOTE]
@@ -752,7 +752,7 @@ For a typical repository with **0.5 MB (~500 KB)** of tracked text files running
 | **Input Tokens** | ~130,000 – 140,000 tokens | ~125,000 tokens for 0.5 MB repo context + ~10,000 tokens for PR diff & system prompt. |
 | **Output Tokens** | ~500 – 1,500 tokens | Structured JSON review summary & line recommendations. |
 
-Using standard model rates for **`gemini-3.6-flash`**:
+Using standard model rates for **`gemini-3.7-flash`**:
 * **Input Rate**: $1.50 per 1,000,000 tokens (uncached)
 * **Output Rate**: $7.50 per 1,000,000 tokens
 
