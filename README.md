@@ -354,7 +354,7 @@ jobs:
 | :--- | :--- | :--- | :--- |
 | `gemini_api_key` | Your Gemini Developer API Key (from Google AI Studio). | **Yes** (unless using WIF) | N/A |
 | `github_token` | Repository `GITHUB_TOKEN` (automatically provided by GitHub; no manual secret creation required). | **Yes** | N/A |
-| `gemini_model` | The Gemini model version to target. | No | `gemini-3.7-flash` |
+| `gemini_model` | The Gemini model version to target for code review and dynamic context selection. | No | `gemini-3.7-flash` |
 | `command` | The mode/command to run: `review` (for PR reviews) or `triage` (for issue triaging). | No | `review` |
 | `include_comment_history` | Whether to fetch prior inline review threads and conversation comments from GitHub. | No | `'true'` |
 | `language` | The language to use for the review comments (e.g. `English (UK)`, `English (US)`, `French`, `Spanish`). | No | `English (UK)` |
@@ -364,17 +364,26 @@ jobs:
 
 ### Codebase Context Configuration
 
-By default, the action uses a hybrid context engine to feed codebase context to the model during review:
+By default, the action uses an intelligent hybrid context engine to feed relevant repository context to the model during review:
 *   **max_context_bytes** (Default: `1500000` / 1.5 MB): The total size of all other text files in the repository. At ~375,000 tokens, 1.5 MB safely fits within Gemini's 1M+ token window while leaving plenty of headroom for the PR diff/patch and structured reviews. If the repository is smaller than this limit, the action runs in *Full Context Mode* and includes all files. If the repository exceeds this limit, it switches to *Sparse Context Mode*.
-*   **core_file_patterns**: A list of glob patterns matching project manifest, build, or documentation files that should always be read and passed along as context in *Sparse Context Mode*.
+*   **max_core_context_bytes** (Default: `500000` / 500 KB): In *Sparse Context Mode*, limits the maximum cumulative size of static core documentation and manifest files attached to the prompt. Any core files beyond this budget are deferred to Dynamic Context Selection.
+*   **Dynamic Context Selection**: In *Sparse Context Mode*, the action uses the configured Gemini model (e.g. `gemini-3.7-flash`) to evaluate modified files/diffs against a 4-tier architectural prioritization framework and select up to 8 of the most relevant candidate repository files (such as imported modules, sister classes, shared utilities, domain/algorithmic precedents, or tests) to attach directly into the review prompt alongside the file tree.
+*   **core_file_patterns**: A list of glob patterns matching project manifests, build definitions, root documentation, templates, and shared utilities (e.g. `README*`, `CONTRIBUTING*`, `ARCHITECTURE*`, `DESIGN*`, `SPEC*`, `DEPLOYMENT*`, `INSTALL*`, `PRODUCT*`, `SDD*`, `TDD*`, `TODO*`, `GEMINI.md`, `*template*`, `*shared*`, `*util*`, `*common*`, `*core*`, `pyproject.toml`, `package.json`) that are prioritized in *Sparse Context Mode*.
 
-You can configure these settings by adding the following keys to your custom `.github/commands/gemini-review.toml` configuration:
+You can configure these settings by adding the following keys to your custom `.github/commands/gemini-review.toml` configuration (or via `GEMINI_MAX_CONTEXT_BYTES` and `GEMINI_MAX_CORE_CONTEXT_BYTES`):
 
 ```toml
 # Codebase Context Configuration (Optional)
-max_context_bytes = 1500000  # Threshold in bytes
-core_file_patterns = ["*.md", "pyproject.toml", "package.json", "go.mod", "Cargo.toml"]  # File patterns to always include
+max_context_bytes = 1500000  # Threshold in bytes to trigger Sparse Mode (default 1.5 MB)
+max_core_context_bytes = 500000  # Max bytes for static core docs/manifests/utils in Sparse Mode (default 500 KB)
+core_file_patterns = [
+  "README*", "CONTRIBUTING*", "ARCHITECTURE*", "DESIGN*", "SPEC*", "DEPLOYMENT*", "INSTALL*", "PRODUCT*", "SDD*", "TDD*", "TODO*", "GEMINI.md",
+  "*template*", "*shared*", "*util*", "*common*", "*core*",
+  "pyproject.toml", "package.json", "go.mod", "Cargo.toml", "pom.xml", "build.gradle"
+]
 ```
+
+
 
 ### Reviewer Personas
 

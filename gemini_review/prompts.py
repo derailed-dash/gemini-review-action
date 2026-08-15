@@ -1,13 +1,18 @@
 """
 Description: Prompt construction and system instruction loading module.
 Constructs PR diff patches, codebase context (Full or Sparse mode),
-and merges discussion thread history for Gemini model prompts.
+dynamic context file selection using Gemini Flash-Lite, and merges discussion thread history.
 """
 
+import json
 import os
 import sys
+from typing import Any
+
+from google.genai import types
 
 from gemini_review.personas import get_persona_prompt, resolve_persona_name
+from gemini_review.schemas import DynamicContextSelection
 from gemini_review.utils import (
     _get_pr_review_func,
     format_diff_patch_with_line_numbers,
@@ -18,6 +23,86 @@ from gemini_review.utils import (
     is_core_file,
     is_text_file,
 )
+
+
+def select_dynamic_context_files(
+    client: Any,
+    model: str,
+    files: list[dict],
+    candidate_files: list[str],
+    max_files: int = 8,
+) -> tuple[list[str], str]:
+    """Dynamically select the most relevant repository files for PR review context."""
+    if not client or not candidate_files:
+        return [], ""
+
+    # Build concise diff/change summary for modified files
+    modified_summary = []
+    for f in files:
+        fname = f.get("filename", "")
+        status = f.get("status", "modified")
+        patch = f.get("patch", "")
+        # Include snippet of patch (first 40 lines per file to avoid token bloat during selection)
+        patch_snippet = "\n".join(patch.splitlines()[:40]) if patch else "(no diff patch available)"
+        modified_summary.append(f"File: {fname} (Status: {status})\nDiff Snippet:\n{patch_snippet}")
+
+    diff_context = "\n\n".join(modified_summary)
+    candidates_list_str = "\n".join(f"- {path}" for path in candidate_files)
+
+    prompt = (
+        "You are an expert principal software engineer analyzing a Pull Request to select the most valuable"
+        " repository context for an in-depth code review.\n\n"
+        f"### Modified Files in PR:\n{diff_context}\n\n"
+        f"### Available Candidate Files in Repository:\n{candidates_list_str}\n\n"
+        "### Context Selection Guidelines:\n"
+        f"Select up to {max_files} of the most relevant candidate files to help the reviewer evaluate correctness,"
+        " algorithmic efficiency, architectural alignment, and project idioms.\n"
+        "Prioritize across these dimensions:\n"
+        "1. **Direct Dependencies & Callers**: Modules directly imported by or importing the modified code.\n"
+        "2. **Tests & Data Fixtures**: Corresponding unit tests, integration tests, or input fixtures.\n"
+        "3. **Algorithmic & Domain Precedents**: Sibling modules solving similar domain problems or implementing"
+        " related patterns (e.g. other search/traversal algorithms, handlers, controllers, or data models).\n"
+        "4. **Shared Frameworks & Utilities**: Common base classes, coordinate/math utilities, schemas, or"
+        " helpers.\n\n"
+        f"From the candidate list above, select up to {max_files} files that are most relevant. Return ONLY valid"
+        " paths from the candidate list.\n"
+        "Provide a concise justification for your selection in 'reasoning'."
+    )
+
+    try:
+        print(
+            f"Dynamic context selection: evaluating {len(candidate_files)} candidate files with '{model}'...",
+            file=sys.stderr,
+        )
+        response = client.models.generate_content(
+            model=model,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=DynamicContextSelection,
+                temperature=0.0,
+            ),
+        )
+
+        raw_text = response.text or "{}"
+        data = json.loads(raw_text)
+        selection = DynamicContextSelection(**data)
+
+        # Validate candidate membership
+        valid_candidates = set(candidate_files)
+        valid_selected = []
+        for path in selection.selected_files:
+            clean_path = path.strip().lstrip("./")
+            if clean_path in valid_candidates and clean_path not in valid_selected:
+                valid_selected.append(clean_path)
+            elif path in valid_candidates and path not in valid_selected:
+                valid_selected.append(path)
+
+        valid_selected = valid_selected[:max_files]
+        return valid_selected, selection.reasoning
+    except Exception as e:
+        print(f"Warning: Dynamic context selection failed ({e}). Proceeding without dynamic files.", file=sys.stderr)
+        return [], ""
 
 
 def load_system_instruction(repository: str | None, pr_number: int, config: dict) -> str:
@@ -108,12 +193,18 @@ def build_pr_diff_prompt(files: list) -> str:
     return "\n".join(prompt_parts)
 
 
-def build_codebase_context(files: list, config: dict) -> str:
-    """Build the static repository codebase context for caching."""
+def build_codebase_context(
+    files: list,
+    config: dict,
+    client: Any = None,
+    model: str | None = None,
+) -> str:
+    """Build the repository codebase context (Full or Sparse mode) for Gemini code review."""
     fn_get_all_repo_files = _get_pr_review_func("get_all_repo_files", get_all_repo_files)
     fn_get_file_content = _get_pr_review_func("get_file_content", get_file_content)
     fn_is_core_file = _get_pr_review_func("is_core_file", is_core_file)
     fn_generate_file_tree = _get_pr_review_func("generate_file_tree", generate_file_tree)
+    fn_select_dynamic_context_files = _get_pr_review_func("select_dynamic_context_files", select_dynamic_context_files)
 
     prompt_parts = []
     pr_filenames = {f["filename"] for f in files}
@@ -125,11 +216,48 @@ def build_codebase_context(files: list, config: dict) -> str:
         except ValueError:
             pass
 
+    max_core_context_bytes = config.get("max_core_context_bytes", 500 * 1024)
+    if "GEMINI_MAX_CORE_CONTEXT_BYTES" in os.environ:
+        try:
+            max_core_context_bytes = int(os.environ["GEMINI_MAX_CORE_CONTEXT_BYTES"])
+        except ValueError:
+            pass
+
     core_patterns = config.get(
         "core_file_patterns",
         [
-            # Documentation
-            "*.md",
+            # Core documentation & project specification
+            "README*",
+            "CONTRIBUTING*",
+            "ARCHITECTURE*",
+            "DESIGN*",
+            "SPEC*",
+            "DEPLOYMENT*",
+            "INSTALL*",
+            "PRODUCT*",
+            "PROD*",
+            "SDD*",
+            "TDD*",
+            "TODO*",
+            "CHANGELOG*",
+            "SECURITY*",
+            "GEMINI.md",
+            "AGENTS.md",
+            "CLAUDE.md",
+            "docs/*.md",
+            "docs/design/*.md",
+            "docs/spec/*.md",
+            "docs/architecture/*.md",
+            # Shared templates, utilities & core modules
+            "*template*",
+            "*shared*",
+            "*util*",
+            "*utils*",
+            "*common*",
+            "*core*",
+            "*helper*",
+            "*helpers*",
+            "*base*",
             # Python
             "pyproject.toml",
             "setup.py",
@@ -208,8 +336,8 @@ def build_codebase_context(files: list, config: dict) -> str:
             prompt_parts.append("=========================================\n")
         else:
             print(
-                "Codebase context: running in Sparse Context Mode (attaching file tree and core"
-                " manifests/documentation).",
+                "Codebase context: running in Sparse Context Mode (attaching file tree, core manifests,"
+                " and dynamic context).",
                 file=sys.stderr,
             )
             prompt_parts.append("=== Repository Context (Large Codebase) ===")
@@ -226,29 +354,78 @@ def build_codebase_context(files: list, config: dict) -> str:
 
             prompt_parts.append("--- Key Configuration and Documentation Files ---")
             core_files_included = []
+            core_bytes_used = 0
             for f in other_files:
                 if fn_is_core_file(f, core_patterns):
-                    content = fn_get_file_content(f)
-                    if content:
-                        prompt_parts.append(f"--- File: {f} ---")
-                        prompt_parts.append(content)
-                        prompt_parts.append("-----------------\n")
-                        core_files_included.append(f)
+                    try:
+                        f_size = os.path.getsize(f)
+                    except Exception:
+                        f_size = 0
+                    if core_bytes_used + f_size <= max_core_context_bytes:
+                        content = fn_get_file_content(f)
+                        if content:
+                            prompt_parts.append(f"--- File: {f} ---")
+                            prompt_parts.append(content)
+                            prompt_parts.append("-----------------\n")
+                            core_files_included.append(f)
+                            core_bytes_used += f_size
+                    else:
+                        print(
+                            f"Codebase context: skipping core file '{f}' (exceeds max_core_context_bytes limit of"
+                            f" {max_core_context_bytes} bytes).",
+                            file=sys.stderr,
+                        )
             if core_files_included:
                 print(
-                    f"Codebase context: attached {len(core_files_included)} core configuration/documentation files:"
-                    f" {', '.join(core_files_included)}",
+                    f"Codebase context: attached {len(core_files_included)} core configuration/documentation files"
+                    f" ({core_bytes_used} bytes): {', '.join(core_files_included)}",
                     file=sys.stderr,
                 )
             else:
                 prompt_parts.append("(No additional key configuration or documentation files found.)\n")
                 print("Codebase context: no core files matched or found.", file=sys.stderr)
+
+            # Dynamic context selection via model
+            dynamic_candidates = [f for f in other_files if f not in core_files_included]
+            if client and dynamic_candidates:
+                effective_model = model or os.environ.get("GEMINI_MODEL", "gemini-3.7-flash")
+                selected_files, reasoning = fn_select_dynamic_context_files(
+                    client=client,
+                    model=effective_model,
+                    files=files,
+                    candidate_files=dynamic_candidates,
+                )
+                if selected_files:
+                    print(
+                        f"Dynamic context selection: selected {len(selected_files)} relevant file(s) using"
+                        f" '{effective_model}': {', '.join(selected_files)}",
+                        file=sys.stderr,
+                    )
+
+                    if reasoning:
+                        print(f"Dynamic context selection reasoning: {reasoning}", file=sys.stderr)
+                    prompt_parts.append("--- Relevant Codebase Context (Dynamically Selected) ---")
+                    if reasoning:
+                        prompt_parts.append(f"Selection Rationale: {reasoning}\n")
+                    for sf in selected_files:
+                        content = fn_get_file_content(sf)
+                        if content:
+                            prompt_parts.append(f"--- File: {sf} ---")
+                            prompt_parts.append(content)
+                            prompt_parts.append("-----------------\n")
+
             prompt_parts.append("==========================================\n")
 
     return "\n".join(prompt_parts)
 
 
-def build_prompt(files: list, config: dict, comment_history: str = "") -> str:
+def build_prompt(
+    files: list,
+    config: dict,
+    comment_history: str = "",
+    client: Any = None,
+    model: str | None = None,
+) -> str:
     """Consolidate file patches, PR comment history, and file contents into a single review context."""
     fn_build_pr_diff_prompt = _get_pr_review_func("build_pr_diff_prompt", build_pr_diff_prompt)
     fn_build_codebase_context = _get_pr_review_func("build_codebase_context", build_codebase_context)
@@ -257,7 +434,7 @@ def build_prompt(files: list, config: dict, comment_history: str = "") -> str:
     parts = [pr_prompt]
     if comment_history:
         parts.append(comment_history)
-    codebase_ctx = fn_build_codebase_context(files, config)
+    codebase_ctx = fn_build_codebase_context(files, config, client=client, model=model)
     if codebase_ctx:
         parts.append(codebase_ctx)
     return "\n\n".join(parts)

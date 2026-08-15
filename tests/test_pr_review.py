@@ -8,8 +8,10 @@ PR number, and language) correctly.
 import os
 
 from gemini_pr_review import (
+    DynamicContextSelection,
     InlineComment,
     ReviewResult,
+    build_codebase_context,
     build_prompt,
     count_text_tokens,
     extract_response_text_or_raise,
@@ -36,6 +38,7 @@ from gemini_pr_review import (
     post_review,
     sanitize_code_suggestion,
     search_google_developer_knowledge,
+    select_dynamic_context_files,
 )
 
 
@@ -78,12 +81,54 @@ def test_load_system_instruction(mocker):
 
 
 def test_is_core_file():
-    patterns = ["*.md", "pyproject.toml", "Cargo.toml", "src/*.py"]
+    patterns = [
+        "README*",
+        "DESIGN*",
+        "SPEC*",
+        "DEPLOYMENT*",
+        "INSTALL*",
+        "PRODUCT*",
+        "PROD*",
+        "SDD*",
+        "TDD*",
+        "TODO*",
+        "docs/*.md",
+        "*template*",
+        "*shared*",
+        "*util*",
+        "*utils*",
+        "*common*",
+        "*core*",
+        "*helper*",
+        "*helpers*",
+        "*base*",
+        "pyproject.toml",
+        "Cargo.toml",
+        "src/*.py",
+    ]
     assert is_core_file("README.md", patterns) is True
+    assert is_core_file("readme.rst", patterns) is True
+    assert is_core_file("DESIGN.md", patterns) is True
+    assert is_core_file("design_doc.txt", patterns) is True
+    assert is_core_file("spec.md", patterns) is True
+    assert is_core_file("deployment.md", patterns) is True
+    assert is_core_file("install.md", patterns) is True
+    assert is_core_file("product_reqs.md", patterns) is True
+    assert is_core_file("sdd.md", patterns) is True
+    assert is_core_file("tdd_plan.md", patterns) is True
+    assert is_core_file("TODO.md", patterns) is True
     assert is_core_file("docs/architecture.md", patterns) is True
-    assert is_core_file("pyproject.toml", patterns) is True
-    assert is_core_file("main.py", patterns) is False
+    assert is_core_file("docs/nested/deep/random_notes.md", patterns) is False
+    assert is_core_file("src/template.py", patterns) is True
+    assert is_core_file("src/shared/types.ts", patterns) is True
     assert is_core_file("src/utils.py", patterns) is True
+    assert is_core_file("src/aoc_commons.py", patterns) is True
+    assert is_core_file("lib/core_engine.go", patterns) is True
+    assert is_core_file("helpers/test_helper.rb", patterns) is True
+    assert is_core_file("base_model.py", patterns) is True
+    assert is_core_file("pyproject.toml", patterns) is True
+
+    assert is_core_file("main.py", patterns) is False
 
 
 def test_generate_file_tree():
@@ -1529,3 +1574,194 @@ def test_auto_align_suggestion_indentation_tabs(mocker):
     )
     review = filter_review_comments(ReviewResult(summary="S", general_feedback=[], comments=[comment]), text_files)
     assert review.comments[0].code_suggestion == "\t\tfunc()\n\t\t\tmore()"
+
+
+def test_select_dynamic_context_files_success(mocker):
+    """Test select_dynamic_context_files successfully queries model and returns validated file paths."""
+    mock_client = mocker.Mock()
+    mock_response = mocker.Mock()
+    mock_response.text = (
+        '{"selected_files": ["gemini_review/prompts.py", "gemini_review/utils.py"], "reasoning": "Core helpers"}'
+    )
+    mock_client.models.generate_content.return_value = mock_response
+
+    files = [{"filename": "gemini_pr_review.py", "status": "modified", "patch": "@@ -1 +1 @@\n+import utils"}]
+    candidates = ["gemini_review/prompts.py", "gemini_review/utils.py", "unrelated/asset.txt"]
+
+    selected, reasoning = select_dynamic_context_files(
+        client=mock_client,
+        model="gemini-3.7-flash",
+        files=files,
+        candidate_files=candidates,
+    )
+
+    assert selected == ["gemini_review/prompts.py", "gemini_review/utils.py"]
+    assert reasoning == "Core helpers"
+    assert mock_client.models.generate_content.called
+    call_args = mock_client.models.generate_content.call_args
+    assert call_args.kwargs["model"] == "gemini-3.7-flash"
+    assert call_args.kwargs["config"].response_schema == DynamicContextSelection
+
+
+def test_select_dynamic_context_files_filters_hallucinated_files(mocker):
+    """Test select_dynamic_context_files filters out paths not present in candidate_files."""
+    mock_client = mocker.Mock()
+    mock_response = mocker.Mock()
+    mock_response.text = (
+        '{"selected_files": ["gemini_review/utils.py", "non_existent/fake.py", "./gemini_review/prompts.py"],'
+        ' "reasoning": "Test rationale"}'
+    )
+    mock_client.models.generate_content.return_value = mock_response
+
+    files = [{"filename": "main.py", "status": "modified", "patch": "diff"}]
+    candidates = ["gemini_review/prompts.py", "gemini_review/utils.py"]
+
+    selected, reasoning = select_dynamic_context_files(
+        client=mock_client,
+        model="gemini-3.7-flash",
+        files=files,
+        candidate_files=candidates,
+    )
+
+    assert selected == ["gemini_review/utils.py", "gemini_review/prompts.py"]
+    assert "non_existent/fake.py" not in selected
+    assert reasoning == "Test rationale"
+
+
+def test_select_dynamic_context_files_handles_exception(mocker):
+    """Test select_dynamic_context_files gracefully handles API exceptions without crashing."""
+    mock_client = mocker.Mock()
+    mock_client.models.generate_content.side_effect = RuntimeError("API quota exceeded")
+
+    files = [{"filename": "main.py", "status": "modified", "patch": "diff"}]
+    candidates = ["gemini_review/prompts.py"]
+
+    selected, reasoning = select_dynamic_context_files(
+        client=mock_client,
+        model="gemini-3.7-flash",
+        files=files,
+        candidate_files=candidates,
+    )
+
+    assert selected == []
+    assert reasoning == ""
+
+
+def test_select_dynamic_context_files_no_client():
+    """Test select_dynamic_context_files returns empty selection when client is None."""
+    selected, reasoning = select_dynamic_context_files(
+        client=None,
+        model="gemini-3.7-flash",
+        files=[],
+        candidate_files=["foo.py"],
+    )
+    assert selected == []
+    assert reasoning == ""
+
+
+def test_build_codebase_context_sparse_mode_with_dynamic_selection(mocker):
+    """Test build_codebase_context in sparse mode invokes dynamic context selection and appends files."""
+    mocker.patch("gemini_pr_review.get_all_repo_files", return_value=["main.py", "core.md", "helper.py", "extra.py"])
+    mocker.patch("os.path.getsize", return_value=100000)  # 3 * 100k = 300k bytes > 100k max
+    mocker.patch("gemini_pr_review.is_core_file", side_effect=lambda f, pats: f.endswith(".md"))
+    mocker.patch(
+        "gemini_pr_review.get_file_content",
+        side_effect=lambda f: f"# Content of {f}",
+    )
+    mock_select = mocker.patch(
+        "gemini_pr_review.select_dynamic_context_files",
+        return_value=(["helper.py"], "Helper is imported by main.py"),
+    )
+
+    mock_client = mocker.Mock()
+    files = [{"filename": "main.py", "status": "modified", "patch": "diff"}]
+    config = {"max_context_bytes": 1000}
+
+    context = build_codebase_context(
+        files=files,
+        config=config,
+        client=mock_client,
+        model="gemini-3.7-flash",
+    )
+
+    assert "=== Repository Context (Large Codebase) ===" in context
+    assert "--- Repository File Structure ---" in context
+    assert "--- Key Configuration and Documentation Files ---" in context
+    assert "# Content of core.md" in context
+    assert "--- Relevant Codebase Context (Dynamically Selected) ---" in context
+    assert "Selection Rationale: Helper is imported by main.py" in context
+    assert "# Content of helper.py" in context
+
+    # Verify select_dynamic_context_files was called with candidates excluding core files
+    assert mock_select.called
+    call_kwargs = mock_select.call_args.kwargs
+    assert call_kwargs["candidate_files"] == ["helper.py", "extra.py"]
+    assert call_kwargs["model"] == "gemini-3.7-flash"
+
+
+def test_main_passes_model_to_build_codebase_context(mocker):
+    """Test main() retrieves GEMINI_MODEL and passes client + model to build_codebase_context."""
+    import sys
+
+    from gemini_pr_review import main
+
+    mocker.patch.dict(
+        os.environ,
+        {
+            "GEMINI_API_KEY": "test-key",
+            "GEMINI_MODEL": "gemini-3.7-flash",
+            "GITHUB_REPOSITORY": "test-owner/test-repo",
+            "GITHUB_EVENT_PATH": "",
+        },
+    )
+
+    mocker.patch(
+        "gemini_pr_review.get_local_git_files",
+        return_value=[{"filename": "main.py", "status": "modified", "patch": "diff"}],
+    )
+    mock_build_ctx = mocker.patch("gemini_pr_review.build_codebase_context", return_value="")
+
+    mock_client = mocker.Mock()
+    mock_response = mocker.Mock()
+    mock_response.text = '{"summary": "OK", "general_feedback": [], "comments": []}'
+    mock_response.usage_metadata = None
+    mock_client.models.generate_content.return_value = mock_response
+
+    mocker.patch("google.genai.Client", return_value=mock_client)
+    mocker.patch.object(sys, "argv", ["gemini_pr_review.py"])
+
+    main()
+
+    assert mock_build_ctx.called
+    call_kwargs = mock_build_ctx.call_args.kwargs
+    assert call_kwargs["client"] == mock_client
+    assert call_kwargs["model"] == "gemini-3.7-flash"
+
+
+def test_build_codebase_context_sparse_mode_enforces_max_core_context_bytes(mocker):
+    """Test build_codebase_context in sparse mode respects max_core_context_bytes limit."""
+    mocker.patch("gemini_pr_review.get_all_repo_files", return_value=["main.py", "README.md", "GEMINI.md", "helper.py"])
+    mocker.patch("os.path.getsize", side_effect=lambda f: 300000 if f.endswith(".md") else 100000)
+    mocker.patch("gemini_pr_review.is_core_file", side_effect=lambda f, pats: f.endswith(".md"))
+    mocker.patch("gemini_pr_review.get_file_content", side_effect=lambda f: f"# Content of {f}")
+    mock_select = mocker.patch("gemini_pr_review.select_dynamic_context_files", return_value=([], ""))
+
+    mock_client = mocker.Mock()
+    files = [{"filename": "main.py", "status": "modified", "patch": "diff"}]
+    # max_context_bytes triggers sparse mode (100k < total size ~700k)
+    # max_core_context_bytes is 400k (so only first 300k core file fits, second 300k is skipped)
+    config = {"max_context_bytes": 100000, "max_core_context_bytes": 400000}
+
+    context = build_codebase_context(
+        files=files,
+        config=config,
+        client=mock_client,
+        model="gemini-3.7-flash",
+    )
+
+    assert "# Content of README.md" in context
+    assert "# Content of GEMINI.md" not in context  # Skipped due to 400k limit
+    # The skipped core file GEMINI.md and helper.py become candidates for dynamic selection
+    assert mock_select.called
+    assert "GEMINI.md" in mock_select.call_args.kwargs["candidate_files"]
+    assert "helper.py" in mock_select.call_args.kwargs["candidate_files"]

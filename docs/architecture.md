@@ -41,7 +41,11 @@ To provide Gemini with project-wide awareness, the script traverses the workspac
 * **Full Context Mode (≤ 1.5 MB):**
   If the rest of the text files in the repository fit within the size limit, the script reads their full contents using `get_file_content()` and appends them to the prompt under the section `=== Repository Context (Full Codebase) ===`.
 * **Sparse Context Mode (> 1.5 MB):**
-  If the repository is large, the script generates a visual directory/file tree representation of the codebase using `generate_file_tree()`. It also reads the full contents of only the core documentation or manifest files matching `core_file_patterns` (like `*.md`, `package.json`, `go.mod`, etc.) using `is_core_file()`.
+  If the repository exceeds the threshold, the action activates Sparse Context Mode:
+  1. **Visual Directory File Tree:** Generates a structured representation of the codebase using `generate_file_tree()`.
+  2. **Core Manifests & Documentation:** Reads full contents of key configuration and root documentation files matching `core_file_patterns` (e.g. `README*`, `CONTRIBUTING*`, `ARCHITECTURE*`, `GEMINI.md`, `package.json`, `go.mod`, `pyproject.toml`) via `is_core_file()`, up to a configurable `max_core_context_bytes` budget (default 500 KB).
+  3. **Dynamic Context Selection:** Invokes a structured Gemini model call via `select_dynamic_context_files()` to analyze the PR diff and evaluate non-core repository files against a 4-tier architectural prioritization framework. It dynamically selects up to 8 of the most relevant sister modules, utilities, domain/algorithmic precedents, or unit test files to attach directly into the review prompt.
+
 
 ### 3. Gemini Context Caching Engine
 To drastically reduce API costs and latency for large codebase contexts, `gemini_pr_review.py` incorporates native **Gemini Context Caching**:
