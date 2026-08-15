@@ -27,8 +27,9 @@ from .prompts import (
     build_pr_diff_prompt,
     build_prompt,
     load_system_instruction,
+    select_dynamic_context_files,
 )
-from .schemas import InlineComment, ReviewResult
+from .schemas import DynamicContextSelection, InlineComment, ReviewResult
 from .skills import (
     list_available_skills,
     load_skill_instructions,
@@ -55,6 +56,7 @@ from .utils import (
 
 __all__ = [
     "DEFAULT_TIMEOUT",
+    "DynamicContextSelection",
     "InlineComment",
     "ReviewResult",
     "_normalize_model_name",
@@ -92,4 +94,5 @@ __all__ = [
     "resolve_persona_name",
     "sanitize_code_suggestion",
     "search_google_developer_knowledge",
+    "select_dynamic_context_files",
 ]

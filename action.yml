@@ -76,6 +76,7 @@ runs:
         GEMINI_PERSONA: ${{ inputs.persona }}
         GEMINI_SKIP_INLINE_SUGGESTIONS: ${{ inputs.skip_inline_suggestions }}
         GITHUB_REPOSITORY: ${{ github.repository }}
+
         GITHUB_EVENT_PATH: ${{ github.event_path }}
         GITHUB_EVENT_NAME: ${{ github.event_name }}
       run: |

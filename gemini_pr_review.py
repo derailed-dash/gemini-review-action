@@ -26,6 +26,7 @@ from google.genai import types
 
 from gemini_review import (
     DEFAULT_TIMEOUT,
+    DynamicContextSelection,
     InlineComment,
     ReviewResult,
     _normalize_model_name,
@@ -63,12 +64,14 @@ from gemini_review import (
     resolve_persona_name,
     sanitize_code_suggestion,
     search_google_developer_knowledge,
+    select_dynamic_context_files,
 )
 
 # __all__ explicitly marks these imported symbols as public re-exports for backward compatibility.
 # This prevents linters (such as Ruff) from pruning unused facade imports needed by tests and external callers.
 __all__ = [
     "DEFAULT_TIMEOUT",
+    "DynamicContextSelection",
     "InlineComment",
     "ReviewResult",
     "_normalize_model_name",
@@ -107,6 +110,7 @@ __all__ = [
     "resolve_persona_name",
     "sanitize_code_suggestion",
     "search_google_developer_knowledge",
+    "select_dynamic_context_files",
 ]
 
 
@@ -270,7 +274,8 @@ def main():
 
     pr_diff_prompt = build_pr_diff_prompt(text_files)
     dynamic_pr_prompt = f"{pr_diff_prompt}\n\n{comment_history_str}" if comment_history_str else pr_diff_prompt
-    codebase_context = build_codebase_context(text_files, config)
+    codebase_context = build_codebase_context(text_files, config, client=client, model=model_name)
+
     full_prompt = f"{dynamic_pr_prompt}\n\n{codebase_context}" if codebase_context else dynamic_pr_prompt
 
     enable_caching = config.get("enable_context_caching", True)

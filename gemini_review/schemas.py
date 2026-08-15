@@ -60,3 +60,16 @@ class ReviewResult(BaseModel):
         description="General feedback items, positive observations, or non-line-specific feedback."
     )
     comments: list[InlineComment] = Field(description="Line-specific code review comments and suggestions.")
+
+
+class DynamicContextSelection(BaseModel):
+    """Represents the structured file selection returned by Gemini for dynamic repo context."""
+
+    selected_files: list[str] = Field(
+        default_factory=list,
+        description="List of relative file paths from candidate files selected to provide relevant context for the PR.",
+    )
+    reasoning: str = Field(
+        default="",
+        description="Short justification explaining why these specific files were selected to understand the changes.",
+    )

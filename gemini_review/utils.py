@@ -9,6 +9,7 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import PurePosixPath
 from typing import Any
 
 from gemini_review.schemas import InlineComment, ReviewResult
@@ -403,11 +404,18 @@ def get_local_git_files() -> list:
     try:
         res = subprocess.run(["git", "diff", "main...HEAD", "--name-only"], capture_output=True, text=True, check=True)
         filenames = [f.strip() for f in res.stdout.split("\n") if f.strip()]
+        diff_base = "main...HEAD"
+
+        if not filenames:
+            # Fall back to uncommitted/staged working tree changes vs HEAD
+            res = subprocess.run(["git", "diff", "HEAD", "--name-only"], capture_output=True, text=True, check=True)
+            filenames = [f.strip() for f in res.stdout.split("\n") if f.strip()]
+            diff_base = "HEAD"
 
         files = []
         for filename in filenames:
             diff_res = subprocess.run(
-                ["git", "diff", "main...HEAD", "--", filename], capture_output=True, text=True, check=True
+                ["git", "diff", diff_base, "--", filename], capture_output=True, text=True, check=True
             )
             files.append({"filename": filename, "status": "modified", "patch": diff_res.stdout})
         return files
@@ -438,11 +446,23 @@ def get_all_repo_files() -> list[str]:
 
 
 def is_core_file(filename: str, patterns: list[str]) -> bool:
-    """Check if the filename matches any of the core file patterns."""
-    basename = os.path.basename(filename)
+    """Check if the filename matches any of the core file patterns (case-insensitive)."""
+    norm_path = filename.replace("\\", "/").removeprefix("./")
+    basename = os.path.basename(norm_path)
+    posix_path = PurePosixPath(norm_path.lower())
+
     for pattern in patterns:
-        if fnmatch.fnmatch(basename, pattern) or fnmatch.fnmatch(filename, pattern):
-            return True
+        norm_pat = pattern.replace("\\", "/").removeprefix("./").lower()
+        if "/" in norm_pat:
+            if posix_path.match(norm_pat):
+                return True
+        else:
+            if (
+                fnmatch.fnmatch(basename.lower(), norm_pat)
+                or fnmatch.fnmatch(norm_path.lower(), norm_pat)
+                or posix_path.match(norm_pat)
+            ):
+                return True
     return False
 
 
