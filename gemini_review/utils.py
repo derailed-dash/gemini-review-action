@@ -447,12 +447,12 @@ def get_all_repo_files() -> list[str]:
 
 def is_core_file(filename: str, patterns: list[str]) -> bool:
     """Check if the filename matches any of the core file patterns (case-insensitive)."""
-    norm_path = filename.replace("\\", "/").lstrip("./")
+    norm_path = filename.replace("\\", "/").removeprefix("./")
     basename = os.path.basename(norm_path)
     posix_path = PurePosixPath(norm_path.lower())
 
     for pattern in patterns:
-        norm_pat = pattern.replace("\\", "/").lstrip("./").lower()
+        norm_pat = pattern.replace("\\", "/").removeprefix("./").lower()
         if "/" in norm_pat:
             if posix_path.match(norm_pat):
                 return True

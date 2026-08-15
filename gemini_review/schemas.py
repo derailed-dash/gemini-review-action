@@ -63,7 +63,7 @@ class ReviewResult(BaseModel):
 
 
 class DynamicContextSelection(BaseModel):
-    """Represents the structured file selection returned by Gemini Flash-Lite for dynamic repo context."""
+    """Represents the structured file selection returned by Gemini for dynamic repo context."""
 
     selected_files: list[str] = Field(
         default_factory=list,

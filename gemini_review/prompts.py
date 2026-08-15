@@ -1,7 +1,7 @@
 """
-Description: Prompt construction and system instruction loading module.
-Constructs PR diff patches, codebase context (Full or Sparse mode),
-dynamic context file selection using Gemini Flash-Lite, and merges discussion thread history.
+Description: Prompt templates and dynamic context selection engine.
+Constructs review prompts, parses PR diffs, executes
+dynamic context file selection using the primary Gemini model, and merges discussion thread history.
 """
 
 import json
@@ -92,7 +92,7 @@ def select_dynamic_context_files(
         valid_candidates = set(candidate_files)
         valid_selected = []
         for path in selection.selected_files:
-            clean_path = path.strip().lstrip("./")
+            clean_path = path.strip().removeprefix("./")
             if clean_path in valid_candidates and clean_path not in valid_selected:
                 valid_selected.append(clean_path)
             elif path in valid_candidates and path not in valid_selected:
