@@ -325,6 +325,38 @@ def test_post_review_fallback(mocker):
     )
 
 
+def test_post_review_complete_failure(mocker):
+    import pytest
+
+    mock_post = mocker.patch("requests.post")
+
+    # Atomic post fails
+    mock_res_atomic = mocker.Mock()
+    mock_res_atomic.status_code = 403
+    mock_res_atomic.text = "Forbidden"
+
+    # Fallback summary post fails
+    mock_res_summary = mocker.Mock()
+    mock_res_summary.status_code = 403
+    mock_res_summary.text = "Forbidden"
+
+    # Commit status update succeeds
+    mock_res_status = mocker.Mock()
+    mock_res_status.status_code = 201
+
+    mock_post.side_effect = [mock_res_atomic, mock_res_summary, mock_res_status]
+
+    review = ReviewResult(summary="Clean", general_feedback=[], comments=[])
+
+    with pytest.raises(RuntimeError, match="Failed to post PR review to GitHub"):
+        post_review("derailed-dash/gemini-review-action", 42, "head_sha_123", review, {"Authorization": "token test"})
+
+    # Check that commit status was set to 'failure'
+    status_call = mock_post.call_args_list[-1]
+    assert status_call[0][0] == "https://api.github.com/repos/derailed-dash/gemini-review-action/statuses/head_sha_123"
+    assert status_call[1]["json"]["state"] == "failure"
+
+
 def test_get_valid_changed_lines():
     patch = "@@ -10,3 +10,4 @@ context\n line1\n-line2\n+added1\n+added2\n line3\n"
     # The start is 10 on RIGHT.
