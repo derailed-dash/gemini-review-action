@@ -1,0 +1,26 @@
+name: Track Action Usage
+
+on:
+  schedule:
+    # Run daily at 04:00 UTC
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  track-usage:
+    name: Count Action Users
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Count Action Users
+        uses: cicirello/count-action-users@v1
+        with:
+          action-list: derailed-dash/gemini-review-action
+          target-directory: .github/badges
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
