@@ -34,6 +34,7 @@ from gemini_review import (
     build_pr_diff_prompt,
     build_prompt,
     count_text_tokens,
+    estimate_cost,
     extract_response_text_or_raise,
     filter_review_comments,
     format_diff_patch_with_line_numbers,
@@ -65,6 +66,7 @@ from gemini_review import (
     sanitize_code_suggestion,
     search_google_developer_knowledge,
     select_dynamic_context_files,
+    usd,
 )
 
 # __all__ explicitly marks these imported symbols as public re-exports for backward compatibility.
@@ -420,12 +422,17 @@ def main():
             "fresh_tokens": fresh_tokens,
             "total_tokens": total_tokens,
             "cache_percentage": cache_percentage,
+            # Recorded so the telemetry can be priced. Without it the table can only
+            # show tokens, which is what it did before this was added.
+            "model": model_name,
         }
 
         cache_str = f" ({cache_percentage:.1f}% cached)" if cached_tokens > 0 else ""
+        cost = estimate_cost(usage_dict, model_name, config)
+        cost_str = f" Estimated cost: {usd(cost.total)}." if cost.rate else " No rate entry for this model."
         print(
             f"Token Usage: {prompt_tokens:,d} input tokens{cache_str}, {candidates_tokens:,d} output tokens."
-            f" Total: {total_tokens:,d} tokens.",
+            f" Total: {total_tokens:,d} tokens.{cost_str}",
             file=sys.stderr,
         )
 
@@ -458,6 +465,7 @@ def main():
             headers,
             timeout=timeout,
             usage_metadata=usage_dict,
+            config=config,
         )
 
 
