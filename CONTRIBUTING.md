@@ -71,4 +71,51 @@ Format:
 1. **Create a Feature Branch:** Branch off from `main` using descriptive names (e.g. `feat/my-new-feature` or `fix/issue-description`).
 2. **Write Clean Code & Tests:** Make sure new features or bug fixes have corresponding unit tests in the `tests/` directory.
 3. **Verify Locally:** Ensure `pytest`, `ruff`, and `codespell` all pass cleanly.
-4. **Submit the PR:** Describe your changes clearly in the pull request description, referencing any open issues it resolves.
+4. **Submit the PR:** Describe your changes clearly using the PR template, referencing any open issues it resolves.
+
+---
+
+## 🤖 AI Code Reviews & The Fork PR Workflow
+
+This repository uses **Gemini Code Review Action** to provide automated, constructive feedback on Pull Requests.
+
+### Internal vs Fork Pull Requests
+
+* **Internal Branch PRs (within the repository):**
+  The Gemini Code Review Action runs automatically whenever a PR is opened or updated.
+* **External Fork PRs (from community contributors):**
+  For security reasons, GitHub Actions does **not** pass repository secrets (such as `GEMINI_API_KEY`) to workflows triggered directly by external forks. To prevent failing check runs, automatic execution on fork `pull_request` events is skipped.
+
+### Triggering Reviews via `/gemini-review`
+
+A repository maintainer will trigger the AI review on external fork PRs by posting a comment:
+
+```text
+/gemini-review
+```
+
+This triggers the review workflow with full access to repository secrets, checks out the PR code, and posts inline review comments and suggestions directly to your PR.
+
+> [!TIP]
+> Contributors are also welcome to ask a maintainer to run `/gemini-review` if they would like fresh AI feedback after pushing updates.
+
+### Working with Gemini Review Feedback
+
+1. **Inline Suggestions:** Actionable recommendations are formatted as GitHub suggestion blocks. You can apply them directly from the GitHub UI using the **Apply suggestion** button.
+2. **Discussion & Iteration:** If you disagree with a suggestion or choose an alternative architectural approach, simply reply to the review comment thread explaining your rationale.
+3. **Tracking Resolutions:** When `/gemini-review` is re-run on subsequent pushes, Gemini tracks previous comment history. It acknowledges resolved items under `### ✅ Resolved Items from Prior Reviews` and respects developer explanations for deferred or disagreed points.
+
+---
+
+## 🌟 Exemplar Pull Request: A Real-World Example
+
+If you are looking for a great example of a well-crafted pull request in this repository, check out:
+
+👉 **[PR #33: Feat: Add pricing support for Gemini 3.7 Flash cache reads](https://github.com/derailed-dash/gemini-review-action/pull/33)**
+
+### Why this is a great example:
+* **Focused & Well-Scoped:** Adds a specific, high-value capability (`DEFAULT_CACHE_READ_MULTIPLIER` for Gemini 3.7 Flash) without unnecessary scope creep.
+* **Comprehensive Test Coverage:** Accompanied by unit tests in `tests/test_pr_review.py` verifying both default pricing multipliers and model-specific overrides.
+* **Conventional Commits:** Follows standard commit conventions (`feat(model): ...`).
+* **Interactive AI Review Lifecycle:** Demonstrates the Gemini Code Review Action in practice—Gemini provided an inline suggestion on cost calculation logic, which the author applied directly via GitHub suggestions before merging.
+

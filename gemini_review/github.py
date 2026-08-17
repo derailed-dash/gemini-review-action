@@ -268,10 +268,14 @@ def post_review(
     print(f"Warning: Failed to submit review atomically (status {res.status_code}). Error: {res.text}", file=sys.stderr)
     print("Falling back to posting summary and comments individually...", file=sys.stderr)
 
+    posted_anything = False
+
     # 1. Post review summary as a single comment on the PR conversation
     issue_url = f"https://api.github.com/repos/{repository}/issues/{pr_number}/comments"
     res_summary = requests.post(issue_url, headers=headers, json={"body": review_body}, timeout=timeout)
-    if res_summary.status_code not in (200, 201):
+    if res_summary.status_code in (200, 201):
+        posted_anything = True
+    else:
         print(f"Error posting review summary comment: {res_summary.status_code} - {res_summary.text}", file=sys.stderr)
 
     # 2. Post inline comments one by one
@@ -283,6 +287,7 @@ def post_review(
             c_payload["start_side"] = c["start_side"]
         res_comment = requests.post(comments_url, headers=headers, json=c_payload, timeout=timeout)
         if res_comment.status_code in (200, 201):
+            posted_anything = True
             print(f"Posted comment {idx + 1}/{len(comments_payload)} successfully.", file=sys.stderr)
         else:
             print(
@@ -290,6 +295,20 @@ def post_review(
                 f" {res_comment.text}",
                 file=sys.stderr,
             )
+
+    if not posted_anything:
+        post_commit_status(
+            repository,
+            commit_id,
+            "failure",
+            "Gemini PR Review failed: Unable to post review comments to GitHub",
+            headers,
+            timeout=timeout,
+        )
+        raise RuntimeError(
+            f"Failed to post PR review to GitHub (atomic status: {res.status_code}, "
+            f"summary status: {res_summary.status_code})."
+        )
 
     post_commit_status(
         repository, commit_id, "success", "Gemini PR Review completed successfully", headers, timeout=timeout
