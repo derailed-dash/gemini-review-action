@@ -17,6 +17,7 @@ from .github import (
     is_inline_suggestion_commit,
     post_commit_status,
     post_review,
+    post_with_retry,
 )
 from .personas import (
     get_persona_prompt,
@@ -64,6 +65,7 @@ from .utils import (
 )
 
 __all__ = [
+    "post_with_retry",
     "Cost",
     "Promo",
     "RATES",
