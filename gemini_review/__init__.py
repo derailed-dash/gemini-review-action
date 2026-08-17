@@ -22,6 +22,15 @@ from .personas import (
     get_persona_prompt,
     resolve_persona_name,
 )
+from .pricing import (
+    RATES,
+    Cost,
+    Promo,
+    Rate,
+    effective_rate,
+    estimate_cost,
+    usd,
+)
 from .prompts import (
     build_codebase_context,
     build_pr_diff_prompt,
@@ -55,6 +64,13 @@ from .utils import (
 )
 
 __all__ = [
+    "Cost",
+    "Promo",
+    "RATES",
+    "Rate",
+    "effective_rate",
+    "estimate_cost",
+    "usd",
     "DEFAULT_TIMEOUT",
     "DynamicContextSelection",
     "InlineComment",

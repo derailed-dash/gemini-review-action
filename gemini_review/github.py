@@ -10,6 +10,7 @@ from typing import Any
 import requests
 
 from gemini_review.config import DEFAULT_TIMEOUT
+from gemini_review.pricing import estimate_cost, usd
 from gemini_review.schemas import ReviewResult
 
 
@@ -172,6 +173,7 @@ def post_review(
     headers: dict,
     timeout: int = DEFAULT_TIMEOUT,
     usage_metadata: dict[str, Any] | None = None,
+    config: dict[str, Any] | None = None,
 ) -> None:
     """Submit review comments atomically or fall back to individual comments if needed."""
     comments_payload = []
@@ -219,11 +221,32 @@ def post_review(
             ]
         )
 
+        # Cost, from the same counts. A model with no rate entry renders tokens only —
+        # borrowing another model's rate would produce a confident wrong figure.
+        cost = estimate_cost(usage_metadata, usage_metadata.get("model"), config)
+        cost_rows = []
+        if cost.rate:
+            cost_rows = [
+                f"| **Cost (uncached input)** | {usd(cost.uncached_input)} |",
+            ]
+            if cached_tokens > 0:
+                cost_rows.append(f"| **Cost (cached input)** | {usd(cost.cached_input)} |")
+            cost_rows.extend(
+                [
+                    f"| **Cost (output)** | {usd(cost.output)} |",
+                    f"| **Estimated Total Cost** | **{usd(cost.total)}** |",
+                ]
+            )
+
+        caveat_md = ""
+        if cost.caveats:
+            caveat_md = "\n\n" + "\n".join(f"> {c}" for c in cost.caveats)
+
         telemetry_md = (
             "<details>\n"
             "<summary>📊 Token Usage & Cost Efficiency</summary>\n\n"
-            "| Metric | Token Count |\n"
-            "| :--- | :---: |\n" + "\n".join(table_rows) + "\n\n</details>"
+            "| Metric | Value |\n"
+            "| :--- | :---: |\n" + "\n".join(table_rows + cost_rows) + caveat_md + "\n\n</details>"
         )
         body_sections.append(telemetry_md)
 
