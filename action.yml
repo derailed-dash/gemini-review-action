@@ -44,6 +44,13 @@ inputs:
     description: 'Fetch and include prior PR review threads and conversation comments in prompt context'
     required: false
     default: 'true'
+  billing_labels:
+    description: >-
+      Extra Cloud Billing labels for cost attribution, as `key=value,key=value`. Merged over the
+      defaults (`component`, `repo`). Set to `none` to disable. VERTEX AI ONLY: the Gemini
+      Developer API has no labels field, so this is ignored when authenticating with an API key.
+    required: false
+    default: ''
   persona:
     description: 'Persona overlay for reviewer (straight, dazbo, palpatine, rick)'
     required: false
@@ -74,6 +81,7 @@ runs:
         GEMINI_TIMEOUT: ${{ inputs.timeout }}
         GEMINI_INCLUDE_COMMENT_HISTORY: ${{ inputs.include_comment_history }}
         GEMINI_PERSONA: ${{ inputs.persona }}
+        GEMINI_BILLING_LABELS: ${{ inputs.billing_labels }}
         GEMINI_SKIP_INLINE_SUGGESTIONS: ${{ inputs.skip_inline_suggestions }}
         GITHUB_REPOSITORY: ${{ github.repository }}
 

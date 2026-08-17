@@ -45,6 +45,7 @@ See the supporting blog post about this action [here](https://medium.com/google-
 - **AI-Powered Code Reviews**: Automated, constructive line-specific feedback on Pull Requests using Google Gemini models (Gemini 3.7 Flash by default).
 - **Automated Issue Triage**: Dynamically labels, prioritises, and triages incoming issues.
 - **PR Comment & Discussion Thread History**: Automatically retrieves inline review threads and general PR conversation comments, enabling Gemini to track issue resolution, respect developer justifications/disagreements, and avoid repeating resolved suggestions across commits.
+- **Billing Labels for Cost Attribution (Vertex AI only)**: Tags every request with Cloud Billing labels (`component`, `repo`), so spend per repository is a group-by in the billing export rather than a sum of numbers in review comments.
 - **Tokenomics & Cost Telemetry Report**: Appends a collapsible token usage and **estimated dollar cost** summary to each review, with the rate that was applied stated alongside it.
 - **Drop-in Migration**: Fully compatible as a direct, drop-in replacement for the deprecated `run-gemini-cli` action.
 - **Structured Outputs**: Error-free JSON response formatting using Pydantic schema validation.
@@ -782,6 +783,32 @@ Rates for **`gemini-3.7-flash`**, which the action now applies for you and print
 
 Since most input tokens will be cached, the actual cost is typically far lower again — a real review of a
 ~4 MB repository in Sparse Context Mode with 85% cache hits came in at **$0.02**.
+
+### Billing labels (Vertex AI only)
+
+The telemetry block tells you what one review cost. Labels answer the other question: **what have code reviews cost on this repository this month**, from the billing data itself.
+
+On Vertex, every request is tagged and the labels arrive in the Cloud Billing export, so cost becomes a group-by:
+
+```
+component = gemini-review-action
+repo      = owner_repo
+```
+
+(`/` is not legal in a label value, so `owner/repo` is written `owner_repo`. Values are lowercased and restricted to `[a-z0-9_-]`, max 63 characters.)
+
+Add your own with the `billing_labels` input, merged over the defaults, or `none` to switch it off:
+
+```yaml
+- uses: derailed-dash/gemini-review-action@v1
+  with:
+    billing_labels: 'team=platform,cost_centre=engineering'
+```
+
+**The pull request number is deliberately not a default label**, because it would make every PR its own dimension in the billing export. Add it yourself if you want that granularity.
+
+> [!NOTE]
+> **This is a Vertex AI capability, not a choice made by this action.** The Gemini Developer API's `GenerateContentRequest` has no `labels` field at all, and the SDK raises `labels parameter is only supported in Gemini Enterprise Agent Platform mode` rather than sending one. On the API-key path the field is simply omitted, so nothing breaks and nothing changes. To attribute cost there, the usual approach is a separate Cloud project per repository.
 
 ### Overriding the rate
 
