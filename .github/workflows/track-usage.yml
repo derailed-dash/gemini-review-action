@@ -22,5 +22,6 @@ jobs:
         with:
           action-list: derailed-dash/gemini-review-action
           target-directory: .github/badges
+          fail-on-error: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
