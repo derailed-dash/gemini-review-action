@@ -33,14 +33,14 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6 # pin to a commit SHA in your own repo, see README
         with:
           # Automatically checks out the head ref for PR events,
           # and pulls the PR head branch for comment-based triggers
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', github.event.issue.number) }}
 
       - name: Run Gemini Review Action
-        uses: derailed-dash/gemini-review-action@v1
+        uses: derailed-dash/gemini-review-action@v1 # or a commit SHA, see README > Pinning
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
