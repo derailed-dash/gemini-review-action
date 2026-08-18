@@ -185,17 +185,28 @@ def post_with_retry(url: str, headers: dict, json_payload: dict, timeout: int) -
     the tokens, and lost all of them to 503s on the way back. The work was done and thrown away. One
     retry would have delivered most of it.
     """
-    response = requests.post(url, headers=headers, json=json_payload, timeout=timeout)
-    for attempt in range(POST_RETRIES):
-        if response.status_code not in RETRYABLE_STATUS:
-            return response
+    last_error: Exception | None = None
+    for attempt in range(POST_RETRIES + 1):
+        try:
+            response = requests.post(url, headers=headers, json=json_payload, timeout=timeout)
+            if response.status_code not in RETRYABLE_STATUS or attempt == POST_RETRIES:
+                return response
+            status_desc = f"{response.status_code}"
+        except requests.exceptions.RequestException as e:
+            last_error = e
+            if attempt == POST_RETRIES:
+                raise
+            status_desc = f"network error ({e})"
+
         delay = RETRY_BACKOFF_SECONDS[min(attempt, len(RETRY_BACKOFF_SECONDS) - 1)]
         print(
-            f"Notice: GitHub returned {response.status_code}, retrying in {delay}s ({attempt + 1}/{POST_RETRIES})...",
+            f"Notice: GitHub returned {status_desc}, retrying in {delay}s ({attempt + 1}/{POST_RETRIES})...",
             file=sys.stderr,
         )
         time.sleep(delay)
-        response = requests.post(url, headers=headers, json=json_payload, timeout=timeout)
+
+    if last_error:
+        raise last_error
     return response
 
 

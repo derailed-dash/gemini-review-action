@@ -3,6 +3,7 @@
 from unittest.mock import Mock, patch
 
 import pytest
+import requests
 
 from gemini_review.github import POST_RETRIES, RETRYABLE_STATUS, post_with_retry
 
@@ -33,6 +34,24 @@ class TestPostWithRetry:
             res = post_with_retry("u", {}, {}, 60)
         assert res.status_code == 201
         assert post.call_count == 2
+
+    def test_network_error_then_success(self):
+        with patch(
+            "gemini_review.github.requests.post",
+            side_effect=[requests.exceptions.ConnectionError("reset"), response(201)],
+        ) as post:
+            res = post_with_retry("u", {}, {}, 60)
+        assert res.status_code == 201
+        assert post.call_count == 2
+
+    def test_network_error_gives_up_and_raises(self):
+        with patch(
+            "gemini_review.github.requests.post",
+            side_effect=requests.exceptions.Timeout("timed out"),
+        ) as post:
+            with pytest.raises(requests.exceptions.Timeout):
+                post_with_retry("u", {}, {}, 60)
+        assert post.call_count == POST_RETRIES + 1
 
     def test_gives_up_after_the_retry_budget_and_returns_the_last_response(self):
         with patch("gemini_review.github.requests.post", return_value=response(503)) as post:
