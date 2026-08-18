@@ -154,13 +154,22 @@ def estimate_cost(usage: dict, model: str | None, config: dict | None = None, to
     output_tokens = max(0, usage.get("candidates_tokens", 0))
 
     uncached_cost = full_price_input / 1e6 * rate.input
-    cached_cost = cached / 1e6 * rate.input * (rate.cache_read or DEFAULT_CACHE_READ_MULTIPLIER)
+    # `is not None` rather than `or`: a rate that legitimately sets cache_read=0.0, which is what a
+    # provider offering free cache reads would look like, is falsy and would silently fall back to 0.1.
+    cache_multiplier = rate.cache_read if rate.cache_read is not None else DEFAULT_CACHE_READ_MULTIPLIER
+    cached_cost = cached / 1e6 * rate.input * cache_multiplier
     output_cost = output_tokens / 1e6 * rate.output
 
     if cached > 0:
+        # Deliberately hedged. Cache STORAGE is a separate per-token-hour SKU for some model families
+        # and, as far as the published Vertex SKU catalogue goes, not for others: there are storage
+        # SKUs for the 1.5 through 3.6 families and none for 3.7 Flash, whose caching SKUs are all
+        # per-token. Absence from the catalogue is not proof it is free, so this says "may" rather
+        # than asserting a charge that may not exist. Stating a cost that is not real is the same
+        # class of error this module exists to avoid.
         caveats.append(
-            "Context-cache STORAGE is billed per token-hour and is not reported here, "
-            "so the figure runs slightly low on repositories reviewed infrequently."
+            "Cache reads are priced here, but context-cache STORAGE, where the model charges for it "
+            "separately per token-hour, is not included, so the figure can run slightly low."
         )
 
     return Cost(

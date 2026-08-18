@@ -2,6 +2,10 @@
 
 ![Dazbo's Gemini Review & Triage Banner](assets/gemini_review_banner.png)
 
+[![Used by](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/derailed-dash/gemini-review-action/main/.github/badges/gemini-review-action.json&logo=githubactions&logoColor=white&label=used%20by)](https://github.com/derailed-dash/gemini-review-action)
+[![GitHub release](https://img.shields.io/github/v/release/derailed-dash/gemini-review-action?logo=github)](https://github.com/derailed-dash/gemini-review-action/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 **Automated, Google Gemini-based Pull Request reviews and Issue Triaging for all your GitHub repositories and CI/CD pipelines.**
 
 ![Automated PR Review Output Example](assets/review-output.png)

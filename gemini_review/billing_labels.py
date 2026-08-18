@@ -29,7 +29,7 @@ from typing import Any
 MAX_LABEL_LENGTH = 63
 _ILLEGAL = re.compile(r"[^a-z0-9_-]")
 
-DISABLE_VALUES = frozenset({"none", "off", "false", "0", ""})
+DISABLE_VALUES = frozenset({"none", "off", "false", "0"})
 
 
 def sanitise(value: str) -> str:

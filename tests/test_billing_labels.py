@@ -80,6 +80,11 @@ class TestBuildLabels:
         monkeypatch.setenv("GEMINI_BILLING_LABELS", off)
         assert build_labels(vertex()) is None
 
+    def test_empty_string_env_var_does_not_disable_default_labels(self, monkeypatch):
+        """Action inputs default to '' in action.yml; empty string must not turn off defaults."""
+        monkeypatch.setenv("GEMINI_BILLING_LABELS", "")
+        assert build_labels(vertex()) == {"component": "gemini-review-action", "repo": "owner_repo"}
+
     def test_config_is_used_when_the_env_var_is_absent(self):
         assert build_labels(vertex(), {"billing_labels": "team=bse"})["team"] == "bse"
 

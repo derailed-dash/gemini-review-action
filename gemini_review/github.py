@@ -5,6 +5,7 @@ and posting review summaries and inline comments.
 """
 
 import sys
+import time
 from typing import Any
 
 import requests
@@ -165,6 +166,50 @@ def format_pr_comment_history(review_comments: list[dict], issue_comments: list[
     return "\n".join(prompt_parts)
 
 
+# Status codes worth trying again. 5xx and 429 are GitHub saying "not now" rather than "no": the
+# request was well-formed and would have succeeded a moment earlier or later. 4xx others are not
+# retried, because a 403 or 422 will fail identically however many times it is sent.
+RETRYABLE_STATUS = frozenset({429, 500, 502, 503, 504})
+
+# Two retries, ~1s then ~3s. Deliberately small: a review that arrives four minutes late is not
+# much use on a PR someone is waiting to merge, and the job failing loudly is an acceptable
+# outcome. This is for the transient blip, not for riding out an incident.
+POST_RETRIES = 2
+RETRY_BACKOFF_SECONDS = (1, 3)
+
+
+def post_with_retry(url: str, headers: dict, json_payload: dict, timeout: int) -> Any:
+    """POST, retrying only on transient GitHub failures.
+
+    Why this exists: during a GitHub incident the reviewer computed three complete reviews, paid for
+    the tokens, and lost all of them to 503s on the way back. The work was done and thrown away. One
+    retry would have delivered most of it.
+    """
+    last_error: Exception | None = None
+    for attempt in range(POST_RETRIES + 1):
+        try:
+            response = requests.post(url, headers=headers, json=json_payload, timeout=timeout)
+            if response.status_code not in RETRYABLE_STATUS or attempt == POST_RETRIES:
+                return response
+            status_desc = f"{response.status_code}"
+        except requests.exceptions.RequestException as e:
+            last_error = e
+            if attempt == POST_RETRIES:
+                raise
+            status_desc = f"network error ({e})"
+
+        delay = RETRY_BACKOFF_SECONDS[min(attempt, len(RETRY_BACKOFF_SECONDS) - 1)]
+        print(
+            f"Notice: GitHub returned {status_desc}, retrying in {delay}s ({attempt + 1}/{POST_RETRIES})...",
+            file=sys.stderr,
+        )
+        time.sleep(delay)
+
+    if last_error:
+        raise last_error
+    return response
+
+
 def post_review(
     repository: str,
     pr_number: int,
@@ -256,7 +301,7 @@ def post_review(
 
     url = f"https://api.github.com/repos/{repository}/pulls/{pr_number}/reviews"
     print(f"Submitting review to PR #{pr_number} on {repository}...", file=sys.stderr)
-    res = requests.post(url, headers=headers, json=payload, timeout=timeout)
+    res = post_with_retry(url, headers, payload, timeout)
 
     if res.status_code in (200, 201):
         print("Successfully posted PR review atomically.", file=sys.stderr)
@@ -272,7 +317,7 @@ def post_review(
 
     # 1. Post review summary as a single comment on the PR conversation
     issue_url = f"https://api.github.com/repos/{repository}/issues/{pr_number}/comments"
-    res_summary = requests.post(issue_url, headers=headers, json={"body": review_body}, timeout=timeout)
+    res_summary = post_with_retry(issue_url, headers, {"body": review_body}, timeout)
     if res_summary.status_code in (200, 201):
         posted_anything = True
     else:
@@ -285,7 +330,7 @@ def post_review(
         if "start_line" in c:
             c_payload["start_line"] = c["start_line"]
             c_payload["start_side"] = c["start_side"]
-        res_comment = requests.post(comments_url, headers=headers, json=c_payload, timeout=timeout)
+        res_comment = post_with_retry(comments_url, headers, c_payload, timeout)
         if res_comment.status_code in (200, 201):
             posted_anything = True
             print(f"Posted comment {idx + 1}/{len(comments_payload)} successfully.", file=sys.stderr)
