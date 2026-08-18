@@ -4,6 +4,7 @@ Handles fetching changed files, retrieving prior inline review & issue conversat
 and posting review summaries and inline comments.
 """
 
+import os
 import sys
 import time
 from typing import Any
@@ -219,6 +220,7 @@ def post_review(
     timeout: int = DEFAULT_TIMEOUT,
     usage_metadata: dict[str, Any] | None = None,
     config: dict[str, Any] | None = None,
+    event_name: str = "pull_request",
 ) -> None:
     """Submit review comments atomically or fall back to individual comments if needed."""
     comments_payload = []
@@ -305,9 +307,10 @@ def post_review(
 
     if res.status_code in (200, 201):
         print("Successfully posted PR review atomically.", file=sys.stderr)
-        post_commit_status(
-            repository, commit_id, "success", "Gemini PR Review completed successfully", headers, timeout=timeout
-        )
+        if event_name != "pull_request":
+            post_commit_status(
+                repository, commit_id, "success", "Gemini PR Review completed successfully", headers, timeout=timeout
+            )
         return
 
     print(f"Warning: Failed to submit review atomically (status {res.status_code}). Error: {res.text}", file=sys.stderr)
@@ -342,22 +345,24 @@ def post_review(
             )
 
     if not posted_anything:
-        post_commit_status(
-            repository,
-            commit_id,
-            "failure",
-            "Gemini PR Review failed: Unable to post review comments to GitHub",
-            headers,
-            timeout=timeout,
-        )
+        if event_name != "pull_request":
+            post_commit_status(
+                repository,
+                commit_id,
+                "failure",
+                "Gemini PR Review failed: Unable to post review comments to GitHub",
+                headers,
+                timeout=timeout,
+            )
         raise RuntimeError(
             f"Failed to post PR review to GitHub (atomic status: {res.status_code}, "
             f"summary status: {res_summary.status_code})."
         )
 
-    post_commit_status(
-        repository, commit_id, "success", "Gemini PR Review completed successfully", headers, timeout=timeout
-    )
+    if event_name != "pull_request":
+        post_commit_status(
+            repository, commit_id, "success", "Gemini PR Review completed successfully", headers, timeout=timeout
+        )
 
 
 def post_commit_status(
@@ -366,12 +371,16 @@ def post_commit_status(
     state: str,
     description: str,
     headers: dict,
-    context: str = "Dazbo's Gemini Code Review / review (pull_request)",
+    context: str | None = None,
     timeout: int = DEFAULT_TIMEOUT,
 ) -> None:
     """Post a commit status update to GitHub's Statuses API to update PR check marks."""
     if not repository or not commit_id or commit_id == "mock_head_sha":
         return
+
+    if context is None:
+        workflow_name = os.environ.get("GITHUB_WORKFLOW", "Gemini Code Review")
+        context = f"{workflow_name} / review"
 
     url = f"https://api.github.com/repos/{repository}/statuses/{commit_id}"
     payload = {
