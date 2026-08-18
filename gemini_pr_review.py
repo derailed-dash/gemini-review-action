@@ -31,6 +31,7 @@ from gemini_review import (
     ReviewResult,
     _normalize_model_name,
     build_codebase_context,
+    build_labels,
     build_pr_diff_prompt,
     build_prompt,
     count_text_tokens,
@@ -226,6 +227,13 @@ def main():
         client = genai.Client(api_key=gemini_api_key)
 
     config = load_config()
+
+    # Cost attribution. Vertex attaches these to the billed charge so spend can be grouped
+    # by repository in the Cloud Billing export; returns None on the API-key path, where the
+    # API has no labels field at all.
+    billing_labels = build_labels(client, config, repository)
+    if billing_labels:
+        print(f"Billing labels: {billing_labels}", file=sys.stderr)
     system_instruction = load_system_instruction(repository, pr_number, config)
 
     # Load workspace rules (AGENTS.md, etc.)
@@ -363,6 +371,7 @@ def main():
             cached_content=cached_content_name,
             response_mime_type="application/json",
             response_schema=ReviewResult,
+            labels=billing_labels,
         )
     else:
         gen_config = types.GenerateContentConfig(
@@ -370,6 +379,7 @@ def main():
             tools=tools,
             response_mime_type="application/json",
             response_schema=ReviewResult,
+            labels=billing_labels,
         )
 
     print("Generating code review...", file=sys.stderr)
@@ -394,6 +404,7 @@ def main():
                 tools=tools,
                 response_mime_type="application/json",
                 response_schema=ReviewResult,
+                labels=billing_labels,
             )
             response = client.models.generate_content(
                 model=model_name,

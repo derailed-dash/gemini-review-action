@@ -4,6 +4,12 @@ Exposes public API models, configuration constants, GitHub integration utilities
 skills loaders, developer knowledge integrations, prompt builders, and general helpers.
 """
 
+from .billing_labels import (
+    build_labels,
+    parse_pairs,
+    sanitise,
+    sanitise_key,
+)
 from .config import DEFAULT_TIMEOUT, load_config
 from .developer_knowledge import (
     get_google_auth_headers,
@@ -65,6 +71,10 @@ from .utils import (
 )
 
 __all__ = [
+    "build_labels",
+    "parse_pairs",
+    "sanitise",
+    "sanitise_key",
     "post_with_retry",
     "Cost",
     "Promo",
