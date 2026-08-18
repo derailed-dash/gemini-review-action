@@ -148,3 +148,32 @@ class TestRateTable:
         for key in RATES:
             assert key == key.lower()
             assert "models/" not in key
+
+
+class TestCacheReadMultiplier:
+    """A rate that sets cache_read=0.0 means free cache reads, not "unset"."""
+
+    def test_zero_cache_read_is_honoured_not_treated_as_missing(self, monkeypatch):
+        from gemini_review import pricing
+
+        free = Rate(input=1.0, output=2.0, label="Free cache reads", cache_read=0.0)
+        monkeypatch.setitem(pricing.RATES, "free-cache-model", free)
+        cost = estimate_cost(usage(cached=1_000_000), "free-cache-model")
+        assert cost.cached_input == 0.0
+        assert cost.total == 0.0
+
+    def test_unset_cache_read_falls_back_to_the_default_multiple(self, monkeypatch):
+        from gemini_review import pricing
+
+        plain = Rate(input=1.0, output=2.0, label="No cache_read set")
+        monkeypatch.setitem(pricing.RATES, "plain-model", plain)
+        cost = estimate_cost(usage(cached=1_000_000), "plain-model")
+        assert cost.cached_input == pytest.approx(0.1)
+
+    def test_storage_caveat_is_hedged_not_asserted(self):
+        """Some model families have a per-token-hour storage SKU and some do not."""
+        cost = estimate_cost(usage(fresh=10, cached=10), "gemini-3.6-flash")
+        storage = [c for c in cost.caveats if "STORAGE" in c]
+        assert storage, "expected a storage caveat when cache was used"
+        assert "where the model charges for it" in storage[0]
+        assert "is billed per token-hour" not in storage[0]
