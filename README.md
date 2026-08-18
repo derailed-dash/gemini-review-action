@@ -256,6 +256,34 @@ After adding the workflow to your repository, it should look something like this
 
 ![gemini-review.yml included in your repo](assets/including-the-workflow.png)
 
+### Pinning
+
+The examples above use floating tags (`@v1`, `@v6`) because they are easier to read. For anything beyond a personal repo, **pin to a full commit SHA instead**:
+
+```yaml
+- uses: derailed-dash/gemini-review-action@<40-char-sha> # v1.6.0
+```
+
+This action's job holds `pull-requests: write` and, on the WIF path, `id-token: write`, and it runs against **untrusted pull request head content**. A tag is a movable reference, so a re-tagged release executes in that job without anyone reviewing the change. A SHA is not movable. The same applies to `actions/checkout` and `google-github-actions/auth` in the same job.
+
+Dependabot understands SHA pins with a trailing version comment and will raise a PR when a new release lands, so you still get updates, just deliberately.
+
+### A caveat if you add `concurrency`
+
+Not in the examples, but a natural addition to avoid paying for three reviews when someone pushes three times in a minute. **Put it under the job, not at workflow level:**
+
+```yaml
+jobs:
+  review:
+    concurrency:
+      group: gemini-review-${{ github.event.pull_request.number || github.event.issue.number }}-${{ github.event_name }}
+      cancel-in-progress: true
+```
+
+Workflow-level `concurrency` is evaluated when a run is **queued**, before any job `if` is evaluated. An `issue_comment` payload has no top-level `pull_request`, so a key like `${{ github.event.pull_request.number || github.event.issue.number }}` falls through to the issue number, which for a pull request is the same number. Both trigger types then share one group.
+
+The result is that **any comment on the PR cancels a review that is still running**, before the job gets to check whether the comment was a `/gemini-review` command at all. Keeping it at job level, and including `github.event_name` in the key, avoids both halves.
+
 ### Seeing It In Action
 
 1. Create a PR in the repository:
