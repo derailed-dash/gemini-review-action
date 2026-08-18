@@ -272,6 +272,32 @@ def test_post_review_atomic(mocker):
 
     post_review("derailed-dash/gemini-review-action", 42, "head_sha_123", review, {"Authorization": "token test"})
 
+    # On pull_request event, only the atomic review is posted (no commit status duplicate)
+    assert mock_post.call_count == 1
+    assert (
+        mock_post.call_args_list[0][0][0]
+        == "https://api.github.com/repos/derailed-dash/gemini-review-action/pulls/42/reviews"
+    )
+
+
+def test_post_review_issue_comment_atomic(mocker):
+    mock_post = mocker.patch("requests.post")
+    mock_res = mocker.Mock()
+    mock_res.status_code = 200
+    mock_post.return_value = mock_res
+
+    review = ReviewResult(summary="Looks good", general_feedback=["Clean code"], comments=[])
+
+    post_review(
+        "derailed-dash/gemini-review-action",
+        42,
+        "head_sha_123",
+        review,
+        {"Authorization": "token test"},
+        event_name="issue_comment",
+    )
+
+    # On issue_comment event, review is posted AND commit status is posted to update check marks
     assert mock_post.call_count == 2
     assert (
         mock_post.call_args_list[0][0][0]
@@ -284,6 +310,43 @@ def test_post_review_atomic(mocker):
 
 
 def test_post_review_fallback(mocker):
+    mock_post = mocker.patch("requests.post")
+
+    # First post (atomic review) fails with 422
+    mock_res_atomic = mocker.Mock()
+    mock_res_atomic.status_code = 422
+
+    # Subsequent individual comments post succeed
+    mock_res_ok = mocker.Mock()
+    mock_res_ok.status_code = 201
+
+    mock_post.side_effect = [mock_res_atomic, mock_res_ok, mock_res_ok]
+
+    review = ReviewResult(
+        summary="Some bugs",
+        general_feedback=["Needs fix"],
+        comments=[
+            {
+                "path": "main.py",
+                "line": 10,
+                "side": "RIGHT",
+                "severity": "🔴",
+                "comment_text": "Fix this crash",
+                "code_suggestion": "print('fixed')",
+            }
+        ],
+    )
+
+    post_review("derailed-dash/gemini-review-action", 42, "head_sha_123", review, {"Authorization": "token test"})
+
+    # We expect 3 requests total on pull_request event:
+    # 1. Atomic review post (which fails)
+    # 2. PR issue summary comment
+    # 3. Individual inline comment post
+    assert mock_post.call_count == 3
+
+
+def test_post_review_issue_comment_fallback(mocker):
     mock_post = mocker.patch("requests.post")
 
     # First post (atomic review) fails with 422
@@ -311,9 +374,16 @@ def test_post_review_fallback(mocker):
         ],
     )
 
-    post_review("derailed-dash/gemini-review-action", 42, "head_sha_123", review, {"Authorization": "token test"})
+    post_review(
+        "derailed-dash/gemini-review-action",
+        42,
+        "head_sha_123",
+        review,
+        {"Authorization": "token test"},
+        event_name="issue_comment",
+    )
 
-    # We expect 4 requests total:
+    # We expect 4 requests total on issue_comment:
     # 1. Atomic review post (which fails)
     # 2. PR issue summary comment
     # 3. Individual inline comment post
@@ -340,6 +410,31 @@ def test_post_review_complete_failure(mocker):
     mock_res_summary.status_code = 403
     mock_res_summary.text = "Forbidden"
 
+    mock_post.side_effect = [mock_res_atomic, mock_res_summary]
+
+    review = ReviewResult(summary="Clean", general_feedback=[], comments=[])
+
+    with pytest.raises(RuntimeError, match="Failed to post PR review to GitHub"):
+        post_review("derailed-dash/gemini-review-action", 42, "head_sha_123", review, {"Authorization": "token test"})
+
+    assert mock_post.call_count == 2
+
+
+def test_post_review_issue_comment_complete_failure(mocker):
+    import pytest
+
+    mock_post = mocker.patch("requests.post")
+
+    # Atomic post fails
+    mock_res_atomic = mocker.Mock()
+    mock_res_atomic.status_code = 403
+    mock_res_atomic.text = "Forbidden"
+
+    # Fallback summary post fails
+    mock_res_summary = mocker.Mock()
+    mock_res_summary.status_code = 403
+    mock_res_summary.text = "Forbidden"
+
     # Commit status update succeeds
     mock_res_status = mocker.Mock()
     mock_res_status.status_code = 201
@@ -349,7 +444,14 @@ def test_post_review_complete_failure(mocker):
     review = ReviewResult(summary="Clean", general_feedback=[], comments=[])
 
     with pytest.raises(RuntimeError, match="Failed to post PR review to GitHub"):
-        post_review("derailed-dash/gemini-review-action", 42, "head_sha_123", review, {"Authorization": "token test"})
+        post_review(
+            "derailed-dash/gemini-review-action",
+            42,
+            "head_sha_123",
+            review,
+            {"Authorization": "token test"},
+            event_name="issue_comment",
+        )
 
     # Check that commit status was set to 'failure'
     status_call = mock_post.call_args_list[-1]
@@ -1085,8 +1187,8 @@ def test_post_review_with_resolved_items(mocker):
 
     post_review("owner/repo", 42, "head_sha", review, {"Authorization": "token abc"})
 
-    assert mock_post.call_count == 2
-    posted_payload = mock_post.call_args_list[0][1]["json"]
+    assert mock_post.call_count == 1
+    posted_payload = mock_post.call_args[1]["json"]
     body = posted_payload["body"]
 
     assert "## 📋 Review Summary" in body
@@ -1119,8 +1221,8 @@ def test_post_review_with_usage_metadata(mocker):
 
     post_review("owner/repo", 42, "head_sha", review, {"Authorization": "token abc"}, usage_metadata=usage_metadata)
 
-    assert mock_post.call_count == 2
-    posted_payload = mock_post.call_args_list[0][1]["json"]
+    assert mock_post.call_count == 1
+    posted_payload = mock_post.call_args[1]["json"]
     body = posted_payload["body"]
 
     assert "<details>" in body
@@ -1332,8 +1434,8 @@ def test_post_review_multiline_payload(mocker):
 
     post_review("owner/repo", 1, "sha", review, {"Authorization": "token test"})
 
-    assert mock_post.call_count == 2
-    payload = mock_post.call_args_list[0][1]["json"]
+    assert mock_post.call_count == 1
+    payload = mock_post.call_args[1]["json"]
     assert len(payload["comments"]) == 1
     assert payload["comments"][0]["start_line"] == 10
     assert payload["comments"][0]["start_side"] == "RIGHT"
@@ -1397,12 +1499,13 @@ def test_extract_response_text_or_raise_property_getter_exception(mocker):
     assert "Gemini model returned empty or non-text response" in str(exc_info.value)
 
 
-def test_post_commit_status(mocker):
+def test_post_commit_status(mocker, monkeypatch):
     mock_post = mocker.patch("requests.post")
     mock_res = mocker.Mock()
     mock_res.status_code = 201
     mock_post.return_value = mock_res
 
+    monkeypatch.delenv("GITHUB_WORKFLOW", raising=False)
     post_commit_status("owner/repo", "sha123456", "success", "All good", {"Authorization": "token test"})
 
     mock_post.assert_called_once()
@@ -1410,7 +1513,32 @@ def test_post_commit_status(mocker):
     assert args[0] == "https://api.github.com/repos/owner/repo/statuses/sha123456"
     assert kwargs["json"]["state"] == "success"
     assert kwargs["json"]["description"] == "All good"
-    assert kwargs["json"]["context"] == "Dazbo's Gemini Code Review / review (pull_request)"
+    assert kwargs["json"]["context"] == "Gemini Code Review / review"
+
+
+def test_post_commit_status_custom_workflow_and_context(mocker, monkeypatch):
+    mock_post = mocker.patch("requests.post")
+    mock_res = mocker.Mock()
+    mock_res.status_code = 201
+    mock_post.return_value = mock_res
+
+    monkeypatch.setenv("GITHUB_WORKFLOW", "🔎 Dazbo's Gemini Code Review")
+    post_commit_status("owner/repo", "sha123456", "success", "All good", {"Authorization": "token test"})
+
+    args, kwargs = mock_post.call_args
+    assert kwargs["json"]["context"] == "🔎 Dazbo's Gemini Code Review / review"
+
+    # With explicit context override
+    post_commit_status(
+        "owner/repo",
+        "sha123456",
+        "success",
+        "All good",
+        {"Authorization": "token test"},
+        context="Custom Context",
+    )
+    args, kwargs = mock_post.call_args
+    assert kwargs["json"]["context"] == "Custom Context"
 
 
 def test_is_inline_suggestion_commit_true(mocker):

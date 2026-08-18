@@ -466,6 +466,7 @@ def main():
             timeout=timeout,
             usage_metadata=usage_dict,
             config=config,
+            event_name=event_name,
         )
 
 
