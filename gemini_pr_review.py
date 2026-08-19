@@ -63,6 +63,7 @@ from gemini_review import (
     parse_skill_metadata,
     post_commit_status,
     post_review,
+    prompt_token_budget,
     resolve_persona_name,
     sanitize_code_suggestion,
     search_google_developer_knowledge,
@@ -282,11 +283,34 @@ def main():
                 file=sys.stderr,
             )
 
-    pr_diff_prompt = build_pr_diff_prompt(text_files)
+    pr_diff_prompt = build_pr_diff_prompt(text_files, config)
     dynamic_pr_prompt = f"{pr_diff_prompt}\n\n{comment_history_str}" if comment_history_str else pr_diff_prompt
     codebase_context = build_codebase_context(text_files, config, client=client, model=model_name)
 
     full_prompt = f"{dynamic_pr_prompt}\n\n{codebase_context}" if codebase_context else dynamic_pr_prompt
+
+    # Backstop. Per-file caps stop ONE huge file taking the review down; they cannot stop
+    # many files each under the cap. Check here rather than letting the API reject it: a
+    # 400 costs the entire review and posts nothing, whereas dropping repository context
+    # still produces a real review of the diff.
+    budget = prompt_token_budget(model_name, config)
+    prompt_tokens = count_text_tokens(client, model_name, full_prompt)
+    if prompt_tokens > budget and codebase_context:
+        print(
+            f"Context budget: prompt is {prompt_tokens:,} tokens against a budget of {budget:,}. "
+            "Dropping repository context and reviewing the diff alone.",
+            file=sys.stderr,
+        )
+        codebase_context = ""
+        full_prompt = dynamic_pr_prompt
+        prompt_tokens = count_text_tokens(client, model_name, full_prompt)
+
+    if prompt_tokens > budget:
+        print(
+            f"Context budget: the PR diff alone is {prompt_tokens:,} tokens, over the {budget:,} budget for "
+            "this model. Lower GEMINI_MAX_FILE_BYTES, raise GEMINI_MAX_PROMPT_TOKENS, or split the PR.",
+            file=sys.stderr,
+        )
 
     enable_caching = config.get("enable_context_caching", True)
     cache_ttl_seconds = config.get("cache_ttl_seconds", 3600)

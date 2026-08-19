@@ -519,8 +519,13 @@ def count_text_tokens(client, model_name: str, text: str) -> int:
     if client and hasattr(client, "models") and hasattr(client.models, "count_tokens"):
         try:
             resp = client.models.count_tokens(model=model_name, contents=text)
-            if hasattr(resp, "total_tokens") and resp.total_tokens is not None:
-                return resp.total_tokens
+            total = getattr(resp, "total_tokens", None)
+            # Must be a real int. A bool is an int in Python and a stub/mock client can
+            # return anything at all; either would be used in arithmetic and formatting
+            # downstream, so an unusable value falls through to the estimate rather than
+            # raising inside a review that is about to be posted.
+            if isinstance(total, int) and not isinstance(total, bool) and total >= 0:
+                return total
         except Exception:
             pass
     # Fallback heuristic (~4 chars per token)
