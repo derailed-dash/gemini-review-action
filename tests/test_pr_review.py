@@ -80,6 +80,15 @@ def test_load_system_instruction(mocker):
     assert "IMPORTANT FOR INLINE CODE SUGGESTIONS" in result
 
 
+def test_load_system_instruction_fallback(mocker):
+    """Test load_system_instruction uses default fallback prompt with sweeping claims guidance."""
+    mocker.patch.dict(os.environ, {"GEMINI_LANGUAGE": "English (UK)", "GEMINI_PERSONA": "straight"})
+    result = load_system_instruction("derailed-dash/gemini-review-action", 42, {})
+    assert "Do not make sweeping or universal claims" in result
+    assert "IMPORTANT FOR INLINE CODE SUGGESTIONS" in result
+    assert "English (UK)" in result
+
+
 def test_is_core_file():
     patterns = [
         "README*",

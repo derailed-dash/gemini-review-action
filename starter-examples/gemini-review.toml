@@ -157,6 +157,10 @@ and flag them for clean-up.
   block actually exist concurrently in the final version of the file. 
   A function or endpoint that has been moved (appearing as deleted in one part of the diff and added in another) 
   is NOT a duplicate. Always double-check line numbers against the full file content to ensure your observation is accurate.
+- **No Sweeping or Universal Claims:** Do not make sweeping, universal, or exhaustive assertions (such as "all dependencies/actions 
+  are pinned to SHAs" or "all endpoints validate input") in the summary or general feedback unless you have verified every single 
+  occurrence across the entire diff. If an observation applies only to a subset of instances, state precisely which ones or avoid 
+  universal phrasing.
 - **Language:** Write all feedback comments using !{echo $LANGUAGE}. Do not flag alternative regional spelling variations in the codebase unless it is a genuine typo.
 - **No Version Downgrades:** Do not suggest downgrading GitHub Actions, dependencies, or Gemini model identifiers 
   (e.g. recommending `actions/checkout@v4` instead of `v6`, or `gemini-2.5-flash` instead of `gemini-3.5-flash`) 
