@@ -61,3 +61,9 @@ To execute `gemini_pr_review.py` or `gemini_issue_triage.py` locally for testing
    - When executing test scripts in automated or persistent terminals, avoid sending background signals (`SIGINT`) during active API generation calls.
 
 ALWAYS count exactly how many times you executed a review, to allow the user to cross reference invocations against costs and token usage.
+
+## Release Notes & Tagging Standards
+
+When preparing GitHub releases:
+- **Rolled-In Highlights with Collapsible Drop-Downs**: In release notes, roll in summaries of previous recent releases under `## 📜 Rolled-In Highlights from Previous Releases` using collapsible HTML `<details><summary><strong>vX.Y.Z: Title</strong></summary>...</details>` blocks (following the v1.6.1 style).
+- **Floating Tag Maintenance**: Always create the specific versioned tag (e.g. `v1.6.3`) AND force-update the major floating tag (e.g. `git tag -fa v1 -m "Update v1 tag to v1.6.3" && git push origin v1 --force`) so standard action consumers tracking `@v1` automatically receive updates.
