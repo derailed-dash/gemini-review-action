@@ -11,6 +11,7 @@ from typing import Any
 
 from google.genai import types
 
+from gemini_review.budget import cap_file_content, max_file_bytes, report_capped
 from gemini_review.personas import get_persona_prompt, resolve_persona_name
 from gemini_review.schemas import DynamicContextSelection
 from gemini_review.utils import (
@@ -159,8 +160,14 @@ def load_system_instruction(repository: str | None, pr_number: int, config: dict
     return base_prompt
 
 
-def build_pr_diff_prompt(files: list) -> str:
-    """Build the dynamic PR diff patch prompt for modified files."""
+def build_pr_diff_prompt(files: list, config: dict | None = None) -> str:
+    """Build the dynamic PR diff patch prompt for modified files.
+
+    The DIFF is always attached in full: it is what is under review, and it stays small
+    even for enormous files. The FULL CURRENT CONTENT is capped per file, because one
+    generated artifact (an OpenAPI spec, a snapshot, a bundled schema) can exceed the
+    model's entire input window on its own and take the whole review down with it.
+    """
     fn_is_text_file = _get_pr_review_func("is_text_file", is_text_file)
     fn_get_file_content = _get_pr_review_func("get_file_content", get_file_content)
     fn_format_diff_patch = _get_pr_review_func(
@@ -169,6 +176,9 @@ def build_pr_diff_prompt(files: list) -> str:
     fn_format_file_content = _get_pr_review_func(
         "format_file_content_with_line_numbers", format_file_content_with_line_numbers
     )
+
+    limit = max_file_bytes(config)
+    capped: list[str] = []
 
     prompt_parts = []
     prompt_parts.append("Below are the files and changes included in this Pull Request:\n")
@@ -182,6 +192,10 @@ def build_pr_diff_prompt(files: list) -> str:
             continue
 
         full_content = fn_get_file_content(filename)
+        if full_content:
+            full_content, was_capped = cap_file_content(full_content, filename, limit)
+            if was_capped:
+                capped.append(filename)
 
         prompt_parts.append(f"=== File: {filename} ===")
         prompt_parts.append(f"Status: {status}")
@@ -192,6 +206,7 @@ def build_pr_diff_prompt(files: list) -> str:
             prompt_parts.append(fn_format_file_content(full_content))
         prompt_parts.append("=========================\n")
 
+    report_capped(capped, limit)
     return "\n".join(prompt_parts)
 
 
@@ -217,6 +232,8 @@ def build_codebase_context(
             max_context_bytes = int(os.environ["GEMINI_MAX_CONTEXT_BYTES"])
         except ValueError:
             pass
+
+    file_byte_limit = max_file_bytes(config)
 
     max_core_context_bytes = config.get("max_core_context_bytes", 500 * 1024)
     if "GEMINI_MAX_CORE_CONTEXT_BYTES" in os.environ:
@@ -356,6 +373,7 @@ def build_codebase_context(
 
             prompt_parts.append("--- Key Configuration and Documentation Files ---")
             core_files_included = []
+            core_capped: list[str] = []
             core_bytes_used = 0
             for f in other_files:
                 if fn_is_core_file(f, core_patterns):
@@ -366,6 +384,10 @@ def build_codebase_context(
                     if core_bytes_used + f_size <= max_core_context_bytes:
                         content = fn_get_file_content(f)
                         if content:
+                            content, was_capped = cap_file_content(content, f, file_byte_limit)
+                            if was_capped:
+                                core_capped.append(f)
+                                f_size = min(f_size, file_byte_limit)
                             prompt_parts.append(f"--- File: {f} ---")
                             prompt_parts.append(content)
                             prompt_parts.append("-----------------\n")
@@ -377,6 +399,7 @@ def build_codebase_context(
                             f" {max_core_context_bytes} bytes).",
                             file=sys.stderr,
                         )
+            report_capped(core_capped, file_byte_limit)
             if core_files_included:
                 print(
                     f"Codebase context: attached {len(core_files_included)} core configuration/documentation files"
@@ -409,12 +432,17 @@ def build_codebase_context(
                     prompt_parts.append("--- Relevant Codebase Context (Dynamically Selected) ---")
                     if reasoning:
                         prompt_parts.append(f"Selection Rationale: {reasoning}\n")
+                    dynamic_capped: list[str] = []
                     for sf in selected_files:
                         content = fn_get_file_content(sf)
                         if content:
+                            content, was_capped = cap_file_content(content, sf, file_byte_limit)
+                            if was_capped:
+                                dynamic_capped.append(sf)
                             prompt_parts.append(f"--- File: {sf} ---")
                             prompt_parts.append(content)
                             prompt_parts.append("-----------------\n")
+                    report_capped(dynamic_capped, file_byte_limit)
 
             prompt_parts.append("==========================================\n")
 
@@ -432,7 +460,7 @@ def build_prompt(
     fn_build_pr_diff_prompt = _get_pr_review_func("build_pr_diff_prompt", build_pr_diff_prompt)
     fn_build_codebase_context = _get_pr_review_func("build_codebase_context", build_codebase_context)
 
-    pr_prompt = fn_build_pr_diff_prompt(files)
+    pr_prompt = fn_build_pr_diff_prompt(files, config)
     parts = [pr_prompt]
     if comment_history:
         parts.append(comment_history)
