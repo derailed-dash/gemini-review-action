@@ -17,8 +17,14 @@ no resolution at all:
 3. **Failure is non-fatal.** A review that is already posted must not be lost because a follow-up
    mutation failed, so every error here is a warning.
 
-GraphQL only: `resolveReviewThread` has no REST equivalent. `GITHUB_TOKEN` with `pull-requests:
-write` can call it, which the action already requires.
+GraphQL only: `resolveReviewThread` has no REST equivalent.
+
+**The default `GITHUB_TOKEN` cannot call it.** Verified against a live PR: `viewerCanResolve` comes
+back `false` and the mutation is refused with `FORBIDDEN — Resource not accessible by integration`,
+even with `pull-requests: write`. Resolving a thread needs a personal access token or a GitHub App
+installation token with write access to pull requests, supplied as `github_token`. With the default
+token this module resolves nothing and says so on stderr, rather than failing the job: the review
+has already been posted and is worth more than the convenience.
 """
 
 import sys
@@ -207,9 +213,13 @@ def resolve_addressed_threads(
             )
             continue
         if not thread.get("viewerCanResolve"):
+            # Verified against a live PR: the default GITHUB_TOKEN reports false here and the
+            # mutation is refused with FORBIDDEN, regardless of pull-requests: write. Naming the
+            # actual fix matters, because "add a permission" is the obvious wrong guess.
             print(
-                f"Thread resolution: skipping {key[0]}:{key[1]} — the token cannot resolve it "
-                "(needs pull-requests: write).",
+                f"Thread resolution: skipping {key[0]}:{key[1]} — this token cannot resolve review "
+                "threads. The default GITHUB_TOKEN never can; supply a PAT or GitHub App token as "
+                "github_token to use this feature.",
                 file=sys.stderr,
             )
             continue

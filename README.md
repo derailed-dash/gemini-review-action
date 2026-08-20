@@ -880,5 +880,24 @@ It is deliberately conservative, because resolving the wrong thread hides feedba
 - **Only exact file and line matches.** The model supplies the location alongside each resolved item, and nothing is inferred from the prose. An item the model cannot confidently attribute is reported and its thread left open.
 - **Never fatal.** It runs after the review is posted, and any failure is a warning. A review is never lost to a follow-up API call.
 
-Requires `pull-requests: write`, which the action already needs.
+#### It needs a token that is not `GITHUB_TOKEN`
+
+Verified against a live PR: **the default `GITHUB_TOKEN` cannot resolve review threads.** `viewerCanResolve` returns `false` and the mutation is refused:
+
+```
+FORBIDDEN — Resource not accessible by integration
+```
+
+This is not a missing permission. `pull-requests: write` is already granted and makes no difference; GitHub simply does not let the Actions token resolve threads. Supply a **personal access token** or a **GitHub App installation token** with write access to pull requests:
+
+```yaml
+        with:
+          github_token: ${{ secrets.THREAD_RESOLVER_TOKEN }}
+          resolve_addressed_threads: 'true'
+```
+
+With the default token the action resolves nothing, prints why, and carries on. The review is still posted — the feature degrades rather than failing the job.
+
+If the token posts under an identity other than `github-actions[bot]`, set `GEMINI_REVIEWER_LOGIN` so the action recognises its own threads.
+
 

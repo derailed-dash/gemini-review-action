@@ -83,6 +83,9 @@ class TestRefusesToActWhenUnsure:
         assert out == []
 
     def test_a_thread_the_token_cannot_resolve_is_skipped(self):
+        """Not hypothetical: the default GITHUB_TOKEN reports viewerCanResolve=false on every
+        thread and its mutation is refused with FORBIDDEN, verified on a live PR. This guard is
+        what turns that into a clear message instead of an error."""
         with patch("gemini_review.threads.requests.post", side_effect=gql([thread(can_resolve=False)])):
             out = resolve_addressed_threads("o/r", 1, {}, [ResolvedItem(description="x", path="a.py", line=10)], BOT)
         assert out == []

@@ -57,7 +57,9 @@ inputs:
       "Require conversation resolution before merging" stops blocking on feedback the reviewer
       has already agreed is done. Only threads opened by this action, and only where the model
       supplied an exact file and line, are ever resolved. Off by default: closing a
-      human-visible thread on someone's behalf is opinionated.
+      human-visible thread on someone's behalf is opinionated. NOTE: this requires a PAT or
+      GitHub App token in `github_token`; the default GITHUB_TOKEN cannot resolve threads
+      (the mutation is refused with FORBIDDEN) and the action will say so and carry on.
     required: false
     default: 'false'
   persona:
