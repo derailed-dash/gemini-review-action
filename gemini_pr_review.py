@@ -64,7 +64,9 @@ from gemini_review import (
     post_commit_status,
     post_review,
     prompt_token_budget,
+    resolve_addressed_threads,
     resolve_persona_name,
+    reviewer_logins,
     sanitize_code_suggestion,
     search_google_developer_knowledge,
     select_dynamic_context_files,
@@ -483,7 +485,8 @@ def main():
         if review.resolved_items:
             print("\n=== RESOLVED ITEMS ===", file=sys.stderr)
             for r in review.resolved_items:
-                print(f"✅ {r}")
+                loc = f" ({r.path}:{r.line})" if getattr(r, "path", None) and getattr(r, "line", None) else ""
+                print(f"✅ {getattr(r, 'description', r)}{loc}")
         print("\n=== GENERAL FEEDBACK ===", file=sys.stderr)
         for gf in review.general_feedback:
             print(f"- {gf}")
@@ -503,6 +506,25 @@ def main():
             config=config,
             event_name=event_name,
         )
+
+        # After the review is posted, not before: resolving threads must never be able to cost us
+        # the review itself, so it runs last and every failure inside it is a warning.
+        if os.environ.get("GEMINI_RESOLVE_ADDRESSED_THREADS", "false").lower() in ("true", "1"):
+            if review.resolved_items:
+                resolve_addressed_threads(
+                    repository,
+                    pr_number,
+                    headers,
+                    review.resolved_items,
+                    bot_logins=reviewer_logins(),
+                    timeout=timeout,
+                )
+        elif review.resolved_items:
+            print(
+                "Note: items were reported as resolved but their threads were left open. "
+                "Set resolve_addressed_threads: true to close them automatically.",
+                file=sys.stderr,
+            )
 
 
 if __name__ == "__main__":

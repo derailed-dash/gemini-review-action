@@ -179,6 +179,24 @@ POST_RETRIES = 2
 RETRY_BACKOFF_SECONDS = (1, 3)
 
 
+def _format_resolved_item(item: Any) -> str:
+    """Render one resolved item. Accepts the structured form or a bare string.
+
+    The string branch exists because a cached or replayed response from before `resolved_items`
+    became structured would otherwise crash the render of an otherwise valid review.
+    """
+    if isinstance(item, str):
+        return item
+    text = getattr(item, "description", None) or str(item)
+    path = getattr(item, "path", None)
+    line = getattr(item, "line", None)
+    if path and line:
+        return f"{text} (`{path}:{line}`)"
+    if path:
+        return f"{text} (`{path}`)"
+    return text
+
+
 def post_with_retry(url: str, headers: dict, json_payload: dict, timeout: int) -> Any:
     """POST, retrying only on transient GitHub failures.
 
@@ -238,7 +256,7 @@ def post_review(
 
     body_sections = [f"## 📋 Review Summary\n\n{review.summary}"]
     if review.resolved_items:
-        resolved_str = "\n".join(f"- {r}" for r in review.resolved_items)
+        resolved_str = "\n".join(f"- {_format_resolved_item(r)}" for r in review.resolved_items)
         body_sections.append(f"### ✅ Resolved Items from Prior Reviews\n\n{resolved_str}")
     if review.general_feedback:
         feedback_str = "\n".join(f"- {f}" for f in review.general_feedback)

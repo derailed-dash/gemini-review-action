@@ -50,12 +50,13 @@ from .prompts import (
     load_system_instruction,
     select_dynamic_context_files,
 )
-from .schemas import DynamicContextSelection, InlineComment, ReviewResult
+from .schemas import DynamicContextSelection, InlineComment, ResolvedItem, ReviewResult
 from .skills import (
     list_available_skills,
     load_skill_instructions,
     parse_skill_metadata,
 )
+from .threads import fetch_review_threads, resolve_addressed_threads, reviewer_logins
 from .utils import (
     _normalize_model_name,
     count_text_tokens,
@@ -90,6 +91,10 @@ __all__ = [
     "usd",
     "DEFAULT_TIMEOUT",
     "DynamicContextSelection",
+    "ResolvedItem",
+    "fetch_review_threads",
+    "resolve_addressed_threads",
+    "reviewer_logins",
     "InlineComment",
     "ReviewResult",
     "_normalize_model_name",

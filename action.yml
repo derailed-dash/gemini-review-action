@@ -51,6 +51,15 @@ inputs:
       Developer API has no labels field, so this is ignored when authenticating with an API key.
     required: false
     default: ''
+  resolve_addressed_threads:
+    description: >-
+      Resolve the GitHub review threads for findings this action reports as addressed, so
+      "Require conversation resolution before merging" stops blocking on feedback the reviewer
+      has already agreed is done. Only threads opened by this action, and only where the model
+      supplied an exact file and line, are ever resolved. Off by default: closing a
+      human-visible thread on someone's behalf is opinionated.
+    required: false
+    default: 'false'
   persona:
     description: 'Persona overlay for reviewer (straight, dazbo, palpatine, rick)'
     required: false
@@ -79,6 +88,7 @@ runs:
         GEMINI_MODEL: ${{ inputs.gemini_model }}
         GEMINI_LANGUAGE: ${{ inputs.language }}
         GEMINI_TIMEOUT: ${{ inputs.timeout }}
+        GEMINI_RESOLVE_ADDRESSED_THREADS: ${{ inputs.resolve_addressed_threads }}
         GEMINI_INCLUDE_COMMENT_HISTORY: ${{ inputs.include_comment_history }}
         GEMINI_PERSONA: ${{ inputs.persona }}
         GEMINI_BILLING_LABELS: ${{ inputs.billing_labels }}
