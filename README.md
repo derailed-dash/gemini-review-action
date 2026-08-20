@@ -250,6 +250,7 @@ jobs:
           # persona: 'straight'                # Optional: straight (default), dazbo, palpatine, rick
           # timeout: '60'                     # Optional API timeout in seconds
           # include_comment_history: 'true'   # Optional: include prior PR comment history (default: true)
+          # resolve_addressed_threads: 'false' # Optional: auto-resolve threads the review marks addressed (default: false)
           # skip_inline_suggestions: 'true'   # Optional: skip re-reviews on commits created via GitHub UI inline fixes (default: true)
 ```
 
@@ -390,6 +391,7 @@ jobs:
 | `gemini_model` | The Gemini model version to target for code review and dynamic context selection. | No | `gemini-3.7-flash` |
 | `command` | The mode/command to run: `review` (for PR reviews) or `triage` (for issue triaging). | No | `review` |
 | `include_comment_history` | Whether to fetch prior inline review threads and conversation comments from GitHub. | No | `'true'` |
+| `resolve_addressed_threads` | Resolve the GitHub review threads for findings the action reports as addressed, so *Require conversation resolution before merging* stops blocking on feedback the reviewer has already agreed is done. Only threads opened by this action, and only where the model supplied an exact file and line, are resolved. | No | `'false'` |
 | `language` | The language to use for the review comments (e.g. `English (UK)`, `English (US)`, `French`, `Spanish`). | No | `English (UK)` |
 | `persona` | Reviewer persona overlay (`straight`, `dazbo`, `palpatine`, `rick`). | No | `straight` |
 | `skip_inline_suggestions` | Whether to skip automated re-reviews when a commit is created by accepting an inline suggestion via GitHub UI. | No | `'true'` |
@@ -858,3 +860,44 @@ the built-in table is used instead.
 For official, up-to-date pricing details across all Gemini model tiers and regions:
 * [Google AI Studio Pricing Guide](https://ai.google.dev/pricing)
 * [Google Cloud Vertex AI Pricing Guide](https://cloud.google.com/vertex-ai/generative-ai/pricing)
+
+### Resolving addressed threads
+
+The action already recognises when a prior finding has been fixed and lists it under **Resolved Items from Prior Reviews**. By default it stops there, and the review thread stays open.
+
+That matters if the repository has **Require conversation resolution before merging** enabled: the merge is blocked on a comment the reviewer itself has agreed is done, and someone has to click Resolve by hand on every PR.
+
+Set `resolve_addressed_threads: 'true'` and the action resolves those threads for you.
+
+```yaml
+        with:
+          resolve_addressed_threads: 'true'
+```
+
+It is deliberately conservative, because resolving the wrong thread hides feedback that is still outstanding, which is worse than leaving everything open:
+
+- **Only threads this action opened.** A human reviewer's thread is never touched, whatever the model claims. If the action posts under a PAT or a GitHub App rather than the default token, declare that identity with `GEMINI_REVIEWER_LOGIN` so its own threads are recognised; guessing wrong simply resolves nothing.
+- **Only exact file and line matches.** The model supplies the location alongside each resolved item, and nothing is inferred from the prose. An item the model cannot confidently attribute is reported and its thread left open.
+- **Never fatal.** It runs after the review is posted, and any failure is a warning. A review is never lost to a follow-up API call.
+
+#### It needs a token that is not `GITHUB_TOKEN`
+
+Verified against a live PR: **the default `GITHUB_TOKEN` cannot resolve review threads.** `viewerCanResolve` returns `false` and the mutation is refused:
+
+```
+FORBIDDEN — Resource not accessible by integration
+```
+
+This is not a missing permission. `pull-requests: write` is already granted and makes no difference; GitHub simply does not let the Actions token resolve threads. Supply a **personal access token** or a **GitHub App installation token** with write access to pull requests:
+
+```yaml
+        with:
+          github_token: ${{ secrets.THREAD_RESOLVER_TOKEN }}
+          resolve_addressed_threads: 'true'
+```
+
+With the default token the action resolves nothing, prints why, and carries on. The review is still posted — the feature degrades rather than failing the job.
+
+If the token posts under an identity other than `github-actions[bot]`, set `GEMINI_REVIEWER_LOGIN` so the action recognises its own threads.
+
+

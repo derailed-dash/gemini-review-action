@@ -3,7 +3,7 @@ Description: Pydantic schemas for structured Gemini PR review responses.
 Provides Pydantic data schemas for line-specific inline comments and top-level review summaries.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class InlineComment(BaseModel):
@@ -44,18 +44,62 @@ class InlineComment(BaseModel):
     )
 
 
+class ResolvedItem(BaseModel):
+    """A prior review finding the model judges to have been addressed in this update.
+
+    `path` and `line` are optional on purpose. They are what allows the corresponding GitHub
+    review thread to be resolved automatically, but a model that cannot confidently attribute a
+    resolved item to a specific location should omit them rather than guess: the item is still
+    reported in the summary, and its thread is simply left open. Leaving a thread open is a
+    small annoyance, whereas resolving the wrong one hides feedback that is still outstanding.
+    """
+
+    description: str = Field(description="What was resolved, in the requested language.")
+    path: str | None = Field(
+        default=None,
+        description=(
+            "Relative file path of the ORIGINAL comment being resolved. Provide this only when you are"
+            " certain which prior comment this refers to. Omit it if unsure."
+        ),
+    )
+    line: int | None = Field(
+        default=None,
+        description=(
+            "Line number the ORIGINAL comment was attached to, as shown in the prior review context."
+            " Provide only alongside path, and only when certain. Omit if unsure."
+        ),
+    )
+
+
 class ReviewResult(BaseModel):
     """Represents the structured review results returned by the Gemini model."""
 
     summary: str = Field(
         description="A brief, high-level assessment of the Pull Request's objective and quality (2-3 sentences)."
     )
-    resolved_items: list[str] = Field(
+    resolved_items: list[ResolvedItem] = Field(
         default_factory=list,
         description=(
-            "List of previously raised review comments/threads that have been resolved or addressed in this PR update."
+            "Previously raised review comments/threads that have been resolved or addressed in this PR update."
+            " Include path and line ONLY when you are certain which prior comment each refers to."
         ),
     )
+
+    @field_validator("resolved_items", mode="before")
+    @classmethod
+    def _accept_plain_strings(cls, value: object) -> object:
+        """Coerce a bare string into a ResolvedItem.
+
+        `resolved_items` used to be a list of strings. The schema sent to the model is now the
+        structured form only, which is the point — the model must supply path and line for a
+        thread to be resolvable. But a replayed, cached, or hand-built response using the old
+        shape should still render rather than raise, since the alternative is losing a review
+        that has already been paid for over a formatting detail.
+        """
+        if isinstance(value, list):
+            return [{"description": v} if isinstance(v, str) else v for v in value]
+        return value
+
     general_feedback: list[str] = Field(
         description="General feedback items, positive observations, or non-line-specific feedback."
     )
