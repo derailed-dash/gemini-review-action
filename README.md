@@ -250,6 +250,7 @@ jobs:
           # persona: 'straight'                # Optional: straight (default), dazbo, palpatine, rick
           # timeout: '60'                     # Optional API timeout in seconds
           # include_comment_history: 'true'   # Optional: include prior PR comment history (default: true)
+          # exclude_comment_authors: 'claude[bot]' # Optional: keep another bot's comments out of the prompt
           # resolve_addressed_threads: 'false' # Optional: auto-resolve threads the review marks addressed (default: false)
           # skip_inline_suggestions: 'true'   # Optional: skip re-reviews on commits created via GitHub UI inline fixes (default: true)
 ```
@@ -380,6 +381,28 @@ jobs:
           language: 'English (UK)'           # Optional
 ```
 
+### Excluding another reviewer's comments
+
+Comment history exists so the reviewer does not re-raise its **own** feedback once you have addressed it. That is a good default.
+
+It becomes something else when a **second automated reviewer** posts on the same pull requests. Their comments are fetched too, in full, and handed to the model as prior discussion — so the review that follows can restate their conclusions rather than reach its own.
+
+Not hypothetical. On a repository running two AI reviewers, the other bot posted first every time. Its four findings measured ~4,273 tokens against the 4,519 tokens of comment history this action then loaded, so essentially all of them were in the prompt, including the exact fixes. The review that followed reported three of those four findings, on the same lines, and nothing the other reviewer had not already found.
+
+Three costs, only one of them obvious:
+
+- **The review looks independent while being derivative.** A second opinion that read the first opinion is not a second opinion.
+- **You pay for it**, as ordinary input, on every subsequent review of that PR.
+- **It is invisible.** Nothing in the posted review says a finding was already on the page.
+
+```yaml
+        with:
+          exclude_comment_authors: 'claude[bot]'
+```
+
+Excluded comments never reach the prompt and are not counted in the reported token usage. Matching is case-insensitive, and everyone else's comments — humans included — are untouched.
+
+
 ## Configuration
 
 ### Action Inputs
@@ -391,6 +414,7 @@ jobs:
 | `gemini_model` | The Gemini model version to target for code review and dynamic context selection. | No | `gemini-3.7-flash` |
 | `command` | The mode/command to run: `review` (for PR reviews) or `triage` (for issue triaging). | No | `review` |
 | `include_comment_history` | Whether to fetch prior inline review threads and conversation comments from GitHub. | No | `'true'` |
+| `exclude_comment_authors` | Comma-separated GitHub logins whose comments are kept out of the prompt, e.g. `claude[bot]`. Useful when a second automated reviewer posts on the same PRs — see [Excluding another reviewer's comments](#excluding-another-reviewers-comments). | No | `''` |
 | `resolve_addressed_threads` | Resolve the GitHub review threads for findings the action reports as addressed, so *Require conversation resolution before merging* stops blocking on feedback the reviewer has already agreed is done. Only threads opened by this action, and only where the model supplied an exact file and line, are resolved. | No | `'false'` |
 | `language` | The language to use for the review comments (e.g. `English (UK)`, `English (US)`, `French`, `Spanish`). | No | `English (UK)` |
 | `persona` | Reviewer persona overlay (`straight`, `dazbo`, `palpatine`, `rick`). | No | `straight` |
