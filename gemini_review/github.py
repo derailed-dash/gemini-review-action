@@ -93,8 +93,38 @@ def get_pr_comments(
     return review_comments, issue_comments
 
 
-def format_pr_comment_history(review_comments: list[dict], issue_comments: list[dict]) -> str:
-    """Format inline review comments into structured threads, and general issue comments into conversation history."""
+def parse_excluded_authors(raw: str | None) -> set[str]:
+    """Logins whose comments must not enter the prompt. Case-insensitive, comma-separated."""
+    if not raw:
+        return set()
+    return {part.strip().lower() for part in str(raw).split(",") if part.strip()}
+
+
+def _author_login(comment: dict) -> str:
+    return ((comment or {}).get("user") or {}).get("login") or ""
+
+
+def filter_comment_authors(comments: list[dict], excluded: set[str]) -> list[dict]:
+    """Drop comments written by an excluded author, keeping everything else untouched."""
+    if not excluded:
+        return comments
+    return [c for c in comments if isinstance(c, dict) and _author_login(c).lower() not in excluded]
+
+
+def format_pr_comment_history(
+    review_comments: list[dict],
+    issue_comments: list[dict],
+    exclude_authors: set[str] | None = None,
+) -> str:
+    """Format inline review comments into structured threads, and general issue comments into conversation history.
+
+    `exclude_authors` drops comments by the given logins before formatting, so excluded content
+    never reaches the prompt and never appears in the reported token count.
+    """
+    if exclude_authors:
+        review_comments = filter_comment_authors(review_comments, exclude_authors)
+        issue_comments = filter_comment_authors(issue_comments, exclude_authors)
+
     if not review_comments and not issue_comments:
         return ""
 

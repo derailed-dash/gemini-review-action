@@ -62,6 +62,15 @@ inputs:
       (the mutation is refused with FORBIDDEN) and the action will say so and carry on.
     required: false
     default: 'false'
+  exclude_comment_authors:
+    description: >-
+      Comma-separated GitHub logins whose comments are kept OUT of the prompt, e.g.
+      `claude[bot],some-other-reviewer[bot]`. Comment history exists so the reviewer does not
+      re-raise its OWN addressed feedback; another automated reviewer's comments serve a
+      different purpose entirely, since they hand this model its conclusions. Excluded comments
+      never reach the prompt and are not counted in the reported tokens.
+    required: false
+    default: ''
   persona:
     description: 'Persona overlay for reviewer (straight, dazbo, palpatine, rick)'
     required: false
@@ -90,6 +99,7 @@ runs:
         GEMINI_MODEL: ${{ inputs.gemini_model }}
         GEMINI_LANGUAGE: ${{ inputs.language }}
         GEMINI_TIMEOUT: ${{ inputs.timeout }}
+        GEMINI_EXCLUDE_COMMENT_AUTHORS: ${{ inputs.exclude_comment_authors }}
         GEMINI_RESOLVE_ADDRESSED_THREADS: ${{ inputs.resolve_addressed_threads }}
         GEMINI_INCLUDE_COMMENT_HISTORY: ${{ inputs.include_comment_history }}
         GEMINI_PERSONA: ${{ inputs.persona }}

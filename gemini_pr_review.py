@@ -60,6 +60,7 @@ from gemini_review import (
     load_skill_instructions,
     load_system_instruction,
     load_workspace_rules,
+    parse_excluded_authors,
     parse_skill_metadata,
     post_commit_status,
     post_review,
@@ -277,7 +278,10 @@ def main():
     if should_include_comments and not is_dry_run and repository and pr_number:
         print(f"Fetching prior PR comments for PR #{pr_number}...", file=sys.stderr)
         review_comments, issue_comments = get_pr_comments(repository, pr_number, headers, timeout=timeout)
-        comment_history_str = format_pr_comment_history(review_comments, issue_comments)
+        excluded_authors = parse_excluded_authors(os.environ.get("GEMINI_EXCLUDE_COMMENT_AUTHORS"))
+        if excluded_authors:
+            print(f"Comment history: excluding authors {sorted(excluded_authors)}.", file=sys.stderr)
+        comment_history_str = format_pr_comment_history(review_comments, issue_comments, excluded_authors)
         if comment_history_str:
             comment_history_tokens = count_text_tokens(client, model_name, comment_history_str)
             print(
