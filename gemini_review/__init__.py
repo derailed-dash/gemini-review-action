@@ -22,10 +22,12 @@ from .developer_knowledge import (
     search_google_developer_knowledge,
 )
 from .github import (
+    filter_comment_authors,
     format_pr_comment_history,
     get_pr_comments,
     get_pr_files,
     is_inline_suggestion_commit,
+    parse_excluded_authors,
     post_commit_status,
     post_review,
     post_with_retry,
@@ -107,6 +109,8 @@ __all__ = [
     "format_diff_patch_with_line_numbers",
     "format_file_content_with_line_numbers",
     "format_pr_comment_history",
+    "filter_comment_authors",
+    "parse_excluded_authors",
     "generate_file_tree",
     "get_all_repo_files",
     "get_file_content",
