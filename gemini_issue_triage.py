@@ -27,7 +27,7 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 
-from gemini_review import extract_response_text_or_raise
+from gemini_review import extract_response_text_or_raise, get_default_model
 
 DEFAULT_TIMEOUT = 60
 
@@ -112,7 +112,7 @@ def main():
     use_vertexai = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "False").lower() in ("true", "1")
     project = os.environ.get("GOOGLE_CLOUD_PROJECT")
     location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
-    model_name = os.environ.get("GEMINI_MODEL", os.environ.get("MODEL", "gemini-3.7-flash"))
+    model_name = get_default_model()
 
     try:
         timeout = int(os.environ.get("GEMINI_TIMEOUT", str(DEFAULT_TIMEOUT)))

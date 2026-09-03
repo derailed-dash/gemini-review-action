@@ -46,7 +46,7 @@ See the supporting blog post about this action [here](https://medium.com/google-
 
 ![Features Overview](assets/features-overview.png)
 
-- **AI-Powered Code Reviews**: Automated, constructive line-specific feedback on Pull Requests using Google Gemini models (Gemini 3.7 Flash by default).
+- **AI-Powered Code Reviews**: Automated, constructive line-specific feedback on Pull Requests using Google Gemini models (Gemini 3.8 Flash by default).
 - **Automated Issue Triage**: Dynamically labels, prioritises, and triages incoming issues.
 - **PR Comment & Discussion Thread History**: Automatically retrieves inline review threads and general PR conversation comments, enabling Gemini to track issue resolution, respect developer justifications/disagreements, and avoid repeating resolved suggestions across commits.
 - **Billing Labels for Cost Attribution (Vertex AI only)**: Tags every request with Cloud Billing labels (`component`, `repo`), so spend per repository is a group-by in the billing export rather than a sum of numbers in review comments.
@@ -245,7 +245,7 @@ jobs:
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          gemini_model: 'gemini-3.7-flash'
+          gemini_model: 'gemini-3.8-flash'
           language: 'English (UK)'           # Optional (e.g. English (UK), French, Spanish)
           # persona: 'straight'                # Optional: straight (default), dazbo, palpatine, rick
           # timeout: '60'                     # Optional API timeout in seconds
@@ -377,7 +377,7 @@ jobs:
           command: 'triage'        
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          gemini_model: 'gemini-3.7-flash'
+          gemini_model: 'gemini-3.8-flash'
           language: 'English (UK)'           # Optional
 ```
 
@@ -411,7 +411,7 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 | :--- | :--- | :--- | :--- |
 | `gemini_api_key` | Your Gemini Developer API Key (from Google AI Studio). | **Yes** (unless using WIF) | N/A |
 | `github_token` | Repository `GITHUB_TOKEN` (automatically provided by GitHub; no manual secret creation required). | **Yes** | N/A |
-| `gemini_model` | The Gemini model version to target for code review and dynamic context selection. | No | `gemini-3.7-flash` |
+| `gemini_model` | The Gemini model version to target for code review and dynamic context selection. | No | `gemini-3.8-flash` |
 | `command` | The mode/command to run: `review` (for PR reviews) or `triage` (for issue triaging). | No | `review` |
 | `include_comment_history` | Whether to fetch prior inline review threads and conversation comments from GitHub. | No | `'true'` |
 | `exclude_comment_authors` | Comma-separated GitHub logins whose comments are kept out of the prompt, e.g. `claude[bot]`. Useful when a second automated reviewer posts on the same PRs — see [Excluding another reviewer's comments](#excluding-another-reviewers-comments). | No | `''` |
@@ -426,7 +426,7 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 By default, the action uses an intelligent hybrid context engine to feed relevant repository context to the model during review:
 *   **max_context_bytes** (Default: `1500000` / 1.5 MB): The total size of all other text files in the repository. At ~375,000 tokens, 1.5 MB safely fits within Gemini's 1M+ token window while leaving plenty of headroom for the PR diff/patch and structured reviews. If the repository is smaller than this limit, the action runs in *Full Context Mode* and includes all files. If the repository exceeds this limit, it switches to *Sparse Context Mode*.
 *   **max_core_context_bytes** (Default: `500000` / 500 KB): In *Sparse Context Mode*, limits the maximum cumulative size of static core documentation and manifest files attached to the prompt. Any core files beyond this budget are deferred to Dynamic Context Selection.
-*   **Dynamic Context Selection**: In *Sparse Context Mode*, the action uses the configured Gemini model (e.g. `gemini-3.7-flash`) to evaluate modified files/diffs against a 4-tier architectural prioritization framework and select up to 8 of the most relevant candidate repository files (such as imported modules, sister classes, shared utilities, domain/algorithmic precedents, or tests) to attach directly into the review prompt alongside the file tree.
+*   **Dynamic Context Selection**: In *Sparse Context Mode*, the action uses the configured Gemini model (e.g. `gemini-3.8-flash`) to evaluate modified files/diffs against a 4-tier architectural prioritization framework and select up to 8 of the most relevant candidate repository files (such as imported modules, sister classes, shared utilities, domain/algorithmic precedents, or tests) to attach directly into the review prompt alongside the file tree.
 *   **core_file_patterns**: A list of glob patterns matching project manifests, build definitions, root documentation, templates, and shared utilities (e.g. `README*`, `CONTRIBUTING*`, `ARCHITECTURE*`, `DESIGN*`, `SPEC*`, `DEPLOYMENT*`, `INSTALL*`, `PRODUCT*`, `SDD*`, `TDD*`, `TODO*`, `GEMINI.md`, `*template*`, `*shared*`, `*util*`, `*common*`, `*core*`, `pyproject.toml`, `package.json`) that are prioritized in *Sparse Context Mode*.
 
 You can configure these settings by adding the following keys to your custom `.github/commands/gemini-review.toml` configuration (or via `GEMINI_MAX_CONTEXT_BYTES` and `GEMINI_MAX_CORE_CONTEXT_BYTES`):
@@ -542,7 +542,7 @@ Whenever a review run finishes, the action provides token telemetry in two place
    | **Cost (output)** | $0.0008 |
    | **Estimated Total Cost** | **$0.0307** |
 
-   > Gemini 3.7 Flash: introductory rate $0.75/$3.75 per 1M applied; reverts to $1.5/$7.5 after 2026-12-31.
+   > Gemini 3.8 Flash: introductory rate $0.75/$3.75 per 1M applied; reverts to $1.5/$7.5 after 2026-12-31.
    > Context-cache STORAGE is billed per token-hour and is not reported here, so the figure runs slightly low on repositories reviewed infrequently.
 
    </details>
@@ -644,7 +644,7 @@ jobs:
           GOOGLE_CLOUD_LOCATION: "global" # Or your preferred model endpoint region
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          gemini_model: 'gemini-3.7-flash'
+          gemini_model: 'gemini-3.8-flash'
 ```
 
 > [!NOTE]
@@ -829,7 +829,7 @@ For a typical repository with **0.5 MB (~500 KB)** of tracked text files running
 | **Input Tokens** | ~130,000 – 140,000 tokens | ~125,000 tokens for 0.5 MB repo context + ~10,000 tokens for PR diff & system prompt. |
 | **Output Tokens** | ~500 – 1,500 tokens | Structured JSON review summary & line recommendations. |
 
-Rates for **`gemini-3.7-flash`**, which the action now applies for you and prints in the review:
+Rates for **`gemini-3.8-flash`** (and **`gemini-3.7-flash`**), which the action now applies for you and prints in the review:
 * **Input**: **$0.75** per 1,000,000 tokens (uncached) — introductory rate through **2026-12-31**, then $1.50
 * **Output**: **$3.75** per 1,000,000 tokens — then $7.50
 * **Cached input**: 0.1x the input rate

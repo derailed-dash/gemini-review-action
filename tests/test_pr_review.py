@@ -40,6 +40,7 @@ from gemini_pr_review import (
     search_google_developer_knowledge,
     select_dynamic_context_files,
 )
+from gemini_review.config import DEFAULT_MODEL
 
 
 def test_is_text_file():
@@ -836,8 +837,8 @@ def test_context_caching_reuse_existing_cache(mocker):
     mock_client = mocker.Mock()
     existing_cache = mocker.Mock()
     existing_cache.name = "cachedContents/existing-cache-456"
-    existing_cache.display_name = "repo-cache-test-owner-test-repo-gemini-3.7-flash-straight"
-    existing_cache.model = "gemini-3.7-flash"
+    existing_cache.display_name = f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-straight"
+    existing_cache.model = DEFAULT_MODEL
     mock_client.caches.list.return_value = [existing_cache]
 
     mock_response = mocker.Mock()
@@ -871,7 +872,7 @@ def test_context_caching_model_mismatch_skips_cache(mocker):
         os.environ,
         {
             "GEMINI_API_KEY": "test-key",
-            "GEMINI_MODEL": "gemini-3.7-flash",
+            "GEMINI_MODEL": DEFAULT_MODEL,
             "GITHUB_REPOSITORY": "test-owner/test-repo",
             "GITHUB_EVENT_PATH": "",
         },
@@ -917,8 +918,8 @@ def test_context_caching_model_mismatch_skips_cache(mocker):
     # Verify caches.create WAS called because old cache model did not match
     assert mock_client.caches.create.called
     create_call_args = mock_client.caches.create.call_args
-    assert create_call_args.kwargs["model"] == "gemini-3.7-flash"
-    assert "repo-cache-test-owner-test-repo-gemini-3.7-flash" in create_call_args.kwargs["config"].display_name
+    assert create_call_args.kwargs["model"] == DEFAULT_MODEL
+    assert f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}" in create_call_args.kwargs["config"].display_name
 
     # Verify generate_content received the newly created cache handle
     gen_call_args = mock_client.models.generate_content.call_args
@@ -935,7 +936,7 @@ def test_context_caching_persona_mismatch_skips_cache(mocker):
         os.environ,
         {
             "GEMINI_API_KEY": "test-key",
-            "GEMINI_MODEL": "gemini-3.7-flash",
+            "GEMINI_MODEL": DEFAULT_MODEL,
             "GEMINI_PERSONA": "rick",
             "GITHUB_REPOSITORY": "test-owner/test-repo",
             "GITHUB_EVENT_PATH": "",
@@ -954,8 +955,8 @@ def test_context_caching_persona_mismatch_skips_cache(mocker):
     mock_client.models._parse_config.return_value.tools = None
     existing_cache = mocker.Mock()
     existing_cache.name = "cachedContents/old-dazbo-cache-123"
-    existing_cache.display_name = "repo-cache-test-owner-test-repo-gemini-3.7-flash-dazbo"
-    existing_cache.model = "gemini-3.7-flash"
+    existing_cache.display_name = f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-dazbo"
+    existing_cache.model = DEFAULT_MODEL
     mock_client.caches.list.return_value = [existing_cache]
 
     mock_new_cache = mocker.Mock()
@@ -980,7 +981,7 @@ def test_context_caching_persona_mismatch_skips_cache(mocker):
     # Verify caches.create WAS called because old cache persona (dazbo) did not match new persona (rick)
     assert mock_client.caches.create.called
     create_call_args = mock_client.caches.create.call_args
-    assert create_call_args.kwargs["config"].display_name == "repo-cache-test-owner-test-repo-gemini-3.7-flash-rick"
+    assert create_call_args.kwargs["config"].display_name == f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-rick"
 
     # Verify generate_content received the newly created rick cache handle
     gen_call_args = mock_client.models.generate_content.call_args
@@ -1014,8 +1015,8 @@ def test_context_caching_generate_content_fallback(mocker):
     mock_client = mocker.Mock()
     existing_cache = mocker.Mock()
     existing_cache.name = "cachedContents/invalid-cache-999"
-    existing_cache.display_name = "repo-cache-test-owner-test-repo-gemini-3.7-flash-straight"
-    existing_cache.model = "gemini-3.7-flash"
+    existing_cache.display_name = f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-straight"
+    existing_cache.model = DEFAULT_MODEL
     mock_client.caches.list.return_value = [existing_cache]
 
     mock_response = mocker.Mock()
@@ -1158,11 +1159,11 @@ def test_count_text_tokens(mocker):
     mock_client.models.count_tokens.return_value = mocker.Mock(total_tokens=150)
 
     # With SDK support
-    count = count_text_tokens(mock_client, "gemini-3.7-flash", "Hello world! " * 50)
+    count = count_text_tokens(mock_client, DEFAULT_MODEL, "Hello world! " * 50)
     assert count == 150
 
     # Fallback heuristic when client is None
-    fallback_count = count_text_tokens(None, "gemini-3.7-flash", "Hello world!")
+    fallback_count = count_text_tokens(None, DEFAULT_MODEL, "Hello world!")
     assert fallback_count == len("Hello world!") // 4
 
 
@@ -1759,7 +1760,7 @@ def test_select_dynamic_context_files_success(mocker):
 
     selected, reasoning = select_dynamic_context_files(
         client=mock_client,
-        model="gemini-3.7-flash",
+        model=DEFAULT_MODEL,
         files=files,
         candidate_files=candidates,
     )
@@ -1768,7 +1769,7 @@ def test_select_dynamic_context_files_success(mocker):
     assert reasoning == "Core helpers"
     assert mock_client.models.generate_content.called
     call_args = mock_client.models.generate_content.call_args
-    assert call_args.kwargs["model"] == "gemini-3.7-flash"
+    assert call_args.kwargs["model"] == DEFAULT_MODEL
     assert call_args.kwargs["config"].response_schema == DynamicContextSelection
 
 
@@ -1787,7 +1788,7 @@ def test_select_dynamic_context_files_filters_hallucinated_files(mocker):
 
     selected, reasoning = select_dynamic_context_files(
         client=mock_client,
-        model="gemini-3.7-flash",
+        model=DEFAULT_MODEL,
         files=files,
         candidate_files=candidates,
     )
@@ -1807,7 +1808,7 @@ def test_select_dynamic_context_files_handles_exception(mocker):
 
     selected, reasoning = select_dynamic_context_files(
         client=mock_client,
-        model="gemini-3.7-flash",
+        model=DEFAULT_MODEL,
         files=files,
         candidate_files=candidates,
     )
@@ -1820,7 +1821,7 @@ def test_select_dynamic_context_files_no_client():
     """Test select_dynamic_context_files returns empty selection when client is None."""
     selected, reasoning = select_dynamic_context_files(
         client=None,
-        model="gemini-3.7-flash",
+        model=DEFAULT_MODEL,
         files=[],
         candidate_files=["foo.py"],
     )
@@ -1850,7 +1851,7 @@ def test_build_codebase_context_sparse_mode_with_dynamic_selection(mocker):
         files=files,
         config=config,
         client=mock_client,
-        model="gemini-3.7-flash",
+        model=DEFAULT_MODEL,
     )
 
     assert "=== Repository Context (Large Codebase) ===" in context
@@ -1865,7 +1866,7 @@ def test_build_codebase_context_sparse_mode_with_dynamic_selection(mocker):
     assert mock_select.called
     call_kwargs = mock_select.call_args.kwargs
     assert call_kwargs["candidate_files"] == ["helper.py", "extra.py"]
-    assert call_kwargs["model"] == "gemini-3.7-flash"
+    assert call_kwargs["model"] == DEFAULT_MODEL
 
 
 def test_main_passes_model_to_build_codebase_context(mocker):
@@ -1878,7 +1879,7 @@ def test_main_passes_model_to_build_codebase_context(mocker):
         os.environ,
         {
             "GEMINI_API_KEY": "test-key",
-            "GEMINI_MODEL": "gemini-3.7-flash",
+            "GEMINI_MODEL": DEFAULT_MODEL,
             "GITHUB_REPOSITORY": "test-owner/test-repo",
             "GITHUB_EVENT_PATH": "",
         },
@@ -1904,7 +1905,7 @@ def test_main_passes_model_to_build_codebase_context(mocker):
     assert mock_build_ctx.called
     call_kwargs = mock_build_ctx.call_args.kwargs
     assert call_kwargs["client"] == mock_client
-    assert call_kwargs["model"] == "gemini-3.7-flash"
+    assert call_kwargs["model"] == DEFAULT_MODEL
 
 
 def test_build_codebase_context_sparse_mode_enforces_max_core_context_bytes(mocker):
@@ -1925,7 +1926,7 @@ def test_build_codebase_context_sparse_mode_enforces_max_core_context_bytes(mock
         files=files,
         config=config,
         client=mock_client,
-        model="gemini-3.7-flash",
+        model=DEFAULT_MODEL,
     )
 
     assert "# Content of README.md" in context

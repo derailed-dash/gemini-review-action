@@ -51,8 +51,13 @@ class Rate:
 
 # Verified against Google's published pricing. Standard tier, paid.
 #
+# IMPORTANT: DO NOT remove previous/older model rate entries (e.g. gemini-3.7-flash,
+# gemini-3.6-flash) when new models are added. Retaining separate pricing lines for all
+# historical models ensures workflows pinned to prior versions continue to receive exact,
+# accurate cost calculations.
+#
 # Keys are matched after normalising the model id (see `_normalise`), so
-# "models/gemini-3.7-flash" and "publishers/google/models/gemini-3.7-flash" both resolve.
+# "models/gemini-3.8-flash" and "publishers/google/models/gemini-3.8-flash" both resolve.
 RATES: dict[str, Rate] = {
     "gemini-3.8-flash": Rate(
         input=1.50,
@@ -171,7 +176,7 @@ def estimate_cost(usage: dict, model: str | None, config: dict | None = None, to
     if cached > 0:
         # Deliberately hedged. Cache STORAGE is a separate per-token-hour SKU for some model families
         # and, as far as the published Vertex SKU catalogue goes, not for others: there are storage
-        # SKUs for the 1.5 through 3.6 families and none for 3.7 Flash, whose caching SKUs are all
+        # SKUs for the 1.5 through 3.6 families and none for 3.7 or 3.8 Flash, whose caching SKUs are all
         # per-token. Absence from the catalogue is not proof it is free, so this says "may" rather
         # than asserting a charge that may not exist. Stating a cost that is not real is the same
         # class of error this module exists to avoid.

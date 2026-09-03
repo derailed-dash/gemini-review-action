@@ -12,6 +12,7 @@ from typing import Any
 from google.genai import types
 
 from gemini_review.budget import cap_file_content, max_file_bytes, report_capped
+from gemini_review.config import get_default_model
 from gemini_review.personas import get_persona_prompt, resolve_persona_name
 from gemini_review.schemas import DynamicContextSelection
 from gemini_review.utils import (
@@ -413,7 +414,7 @@ def build_codebase_context(
             # Dynamic context selection via model
             dynamic_candidates = [f for f in other_files if f not in core_files_included]
             if client and dynamic_candidates:
-                effective_model = model or os.environ.get("GEMINI_MODEL", "gemini-3.7-flash")
+                effective_model = get_default_model(model)
                 selected_files, reasoning = fn_select_dynamic_context_files(
                     client=client,
                     model=effective_model,

@@ -47,6 +47,7 @@ DEFAULT_MAX_FILE_BYTES = 128 * 1024
 # back to the smallest known value rather than assuming the largest, so a new model id
 # fails safe (a trimmed review) instead of unsafe (a 400 and no review).
 MODEL_INPUT_TOKEN_LIMITS: dict[str, int] = {
+    "gemini-3.8-flash": 1_048_576,
     "gemini-3.7-flash": 1_048_576,
     "gemini-3.6-flash": 1_048_576,
     "gemini-2.5-flash": 1_048_576,

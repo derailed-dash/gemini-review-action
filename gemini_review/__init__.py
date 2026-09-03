@@ -15,7 +15,7 @@ from .budget import (
     max_file_bytes,
     prompt_token_budget,
 )
-from .config import DEFAULT_TIMEOUT, load_config
+from .config import DEFAULT_MODEL, DEFAULT_TIMEOUT, get_default_model, load_config
 from .developer_knowledge import (
     get_google_auth_headers,
     get_google_developer_documents,
@@ -91,7 +91,9 @@ __all__ = [
     "effective_rate",
     "estimate_cost",
     "usd",
+    "DEFAULT_MODEL",
     "DEFAULT_TIMEOUT",
+    "get_default_model",
     "DynamicContextSelection",
     "ResolvedItem",
     "fetch_review_threads",

@@ -8,6 +8,12 @@ import sys
 import tomllib
 
 DEFAULT_TIMEOUT = 60
+DEFAULT_MODEL = "gemini-3.8-flash"
+
+
+def get_default_model(explicit_model: str | None = None) -> str:
+    """Return the default Gemini model configured via argument, environment, or fallback."""
+    return explicit_model or os.environ.get("GEMINI_MODEL") or os.environ.get("MODEL") or DEFAULT_MODEL
 
 
 def load_config() -> dict:
