@@ -41,6 +41,23 @@ class TestConfigAndModelResolution:
         monkeypatch.setenv("MODEL", "gemini-legacy-env")
         assert get_default_model() == "gemini-legacy-env"
 
+    def test_get_default_model_strips_whitespace(self):
+        """Surrounding whitespace in explicit model argument should be trimmed."""
+        assert get_default_model("  gemini-custom  ") == "gemini-custom"
+
+    def test_get_default_model_whitespace_only_falls_back(self, monkeypatch):
+        """Whitespace-only argument or environment variable should fall back to DEFAULT_MODEL."""
+        monkeypatch.delenv("GEMINI_MODEL", raising=False)
+        monkeypatch.delenv("MODEL", raising=False)
+        assert get_default_model("   ") == DEFAULT_MODEL
+
+        monkeypatch.setenv("GEMINI_MODEL", "   ")
+        assert get_default_model() == DEFAULT_MODEL
+
+        monkeypatch.delenv("GEMINI_MODEL", raising=False)
+        monkeypatch.setenv("MODEL", "   \t\n ")
+        assert get_default_model() == DEFAULT_MODEL
+
     def test_load_config_returns_dict(self):
         """load_config should return a dictionary from existing TOML or defaults."""
         config = load_config()

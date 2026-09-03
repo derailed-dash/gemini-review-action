@@ -8,6 +8,7 @@ PR number, and language) correctly.
 import os
 
 from gemini_pr_review import (
+    DEFAULT_MODEL,
     DynamicContextSelection,
     InlineComment,
     ReviewResult,
@@ -40,7 +41,6 @@ from gemini_pr_review import (
     search_google_developer_knowledge,
     select_dynamic_context_files,
 )
-from gemini_review.config import DEFAULT_MODEL
 
 
 def test_is_text_file():

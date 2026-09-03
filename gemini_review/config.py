@@ -13,7 +13,8 @@ DEFAULT_MODEL = "gemini-3.8-flash"
 
 def get_default_model(explicit_model: str | None = None) -> str:
     """Return the default Gemini model configured via argument, environment, or fallback."""
-    return explicit_model or os.environ.get("GEMINI_MODEL") or os.environ.get("MODEL") or DEFAULT_MODEL
+    model = explicit_model or os.environ.get("GEMINI_MODEL") or os.environ.get("MODEL")
+    return model.strip() if model and model.strip() else DEFAULT_MODEL
 
 
 def load_config() -> dict:
