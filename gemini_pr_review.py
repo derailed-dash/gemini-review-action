@@ -24,105 +24,12 @@ import requests
 from google import genai
 from google.genai import types
 
-from gemini_review import (
-    DEFAULT_MODEL,
-    DEFAULT_TIMEOUT,
-    DynamicContextSelection,
-    InlineComment,
-    ReviewResult,
-    _normalize_model_name,
-    build_codebase_context,
-    build_labels,
-    build_pr_diff_prompt,
-    build_prompt,
-    count_text_tokens,
-    estimate_cost,
-    extract_response_text_or_raise,
-    filter_review_comments,
-    format_diff_patch_with_line_numbers,
-    format_file_content_with_line_numbers,
-    format_pr_comment_history,
-    generate_file_tree,
-    get_all_repo_files,
-    get_default_model,
-    get_file_content,
-    get_google_auth_headers,
-    get_google_developer_documents,
-    get_local_git_files,
-    get_persona_prompt,
-    get_pr_comments,
-    get_pr_files,
-    get_valid_changed_lines,
-    get_valid_diff_lines,
-    is_core_file,
-    is_inline_suggestion_commit,
-    is_text_file,
-    list_available_skills,
-    load_config,
-    load_skill_instructions,
-    load_system_instruction,
-    load_workspace_rules,
-    parse_excluded_authors,
-    parse_skill_metadata,
-    post_commit_status,
-    post_review,
-    prompt_token_budget,
-    resolve_addressed_threads,
-    resolve_persona_name,
-    reviewer_logins,
-    sanitize_code_suggestion,
-    search_google_developer_knowledge,
-    select_dynamic_context_files,
-    usd,
-)
+import gemini_review as gr
 
-# __all__ explicitly marks these imported symbols as public re-exports for backward compatibility.
-# This prevents linters (such as Ruff) from pruning unused facade imports needed by tests and external callers.
-__all__ = [
-    "DEFAULT_MODEL",
-    "DEFAULT_TIMEOUT",
-    "DynamicContextSelection",
-    "InlineComment",
-    "ReviewResult",
-    "_normalize_model_name",
-    "build_codebase_context",
-    "build_pr_diff_prompt",
-    "build_prompt",
-    "count_text_tokens",
-    "extract_response_text_or_raise",
-    "filter_review_comments",
-    "format_diff_patch_with_line_numbers",
-    "format_file_content_with_line_numbers",
-    "format_pr_comment_history",
-    "generate_file_tree",
-    "get_all_repo_files",
-    "get_default_model",
-    "get_file_content",
-    "get_google_auth_headers",
-    "get_google_developer_documents",
-    "get_local_git_files",
-    "get_persona_prompt",
-    "get_pr_comments",
-    "get_pr_files",
-    "get_valid_changed_lines",
-    "get_valid_diff_lines",
-    "is_core_file",
-    "is_inline_suggestion_commit",
-    "is_text_file",
-    "list_available_skills",
-    "load_config",
-    "load_skill_instructions",
-    "load_system_instruction",
-    "load_workspace_rules",
-    "main",
-    "parse_skill_metadata",
-    "post_commit_status",
-    "post_review",
-    "resolve_persona_name",
-    "sanitize_code_suggestion",
-    "search_google_developer_knowledge",
-    "select_dynamic_context_files",
-]
+
+def __getattr__(name: str):
+    """Fallback to gemini_review for backward compatibility and test mock resolution."""
+    return getattr(gr, name)
 
 
 def main():
@@ -134,12 +41,12 @@ def main():
     use_vertexai = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "False").lower() in ("true", "1")
     project = os.environ.get("GOOGLE_CLOUD_PROJECT")
     location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
-    model_name = get_default_model()
+    model_name = gr.get_default_model()
 
     try:
-        timeout = int(os.environ.get("GEMINI_TIMEOUT", str(DEFAULT_TIMEOUT)))
+        timeout = int(os.environ.get("GEMINI_TIMEOUT", str(gr.DEFAULT_TIMEOUT)))
     except ValueError:
-        timeout = DEFAULT_TIMEOUT
+        timeout = gr.DEFAULT_TIMEOUT
 
     headers = {}
     if github_token:
@@ -167,7 +74,7 @@ def main():
 
             skip_suggestions = os.environ.get("GEMINI_SKIP_INLINE_SUGGESTIONS", "true").lower() in ("true", "1")
 
-            if skip_suggestions and is_inline_suggestion_commit(repository, head_sha, headers, timeout=timeout):
+            if skip_suggestions and gr.is_inline_suggestion_commit(repository, head_sha, headers, timeout=timeout):
                 print(
                     f"Head commit {head_sha[:7]} was created by accepting an inline suggestion via GitHub UI. "
                     "Skipping automated re-review to avoid unnecessary review noise.",
@@ -208,17 +115,17 @@ def main():
     # Gather file patches and full contents
     if is_dry_run:
         print("Gathering files from local git tree...", file=sys.stderr)
-        files = get_local_git_files()
+        files = gr.get_local_git_files()
     else:
         print(f"Fetching files for PR #{pr_number} from GitHub API...", file=sys.stderr)
-        files = get_pr_files(repository, pr_number, headers, timeout=timeout)
+        files = gr.get_pr_files(repository, pr_number, headers, timeout=timeout)
 
     if not files:
         print("No files modified in this PR. Exiting.", file=sys.stderr)
         sys.exit(0)
 
     # Filter out excluded file types
-    text_files = [f for f in files if is_text_file(f["filename"])]
+    text_files = [f for f in files if gr.is_text_file(f["filename"])]
     if not text_files:
         print("No text-based files to review. Exiting.", file=sys.stderr)
         sys.exit(0)
@@ -234,31 +141,31 @@ def main():
         )
         client = genai.Client(api_key=gemini_api_key)
 
-    config = load_config()
+    config = gr.load_config()
 
     # Cost attribution. Vertex attaches these to the billed charge so spend can be grouped
     # by repository in the Cloud Billing export; returns None on the API-key path, where the
     # API has no labels field at all.
-    billing_labels = build_labels(client, config, repository)
+    billing_labels = gr.build_labels(client, config, repository)
     if billing_labels:
         print(f"Billing labels: {billing_labels}", file=sys.stderr)
-    system_instruction = load_system_instruction(repository, pr_number, config)
+    system_instruction = gr.load_system_instruction(repository, pr_number, config)
 
     # Load workspace rules (AGENTS.md, etc.)
-    workspace_rules = load_workspace_rules()
+    workspace_rules = gr.load_workspace_rules()
     if workspace_rules:
         system_instruction += f"\n\n## Project Rules & Best Practices:\n{workspace_rules}"
 
     # Assemble tools list
-    tools = [list_available_skills, load_skill_instructions]
-    auth_headers = get_google_auth_headers()
+    tools = [gr.list_available_skills, gr.load_skill_instructions]
+    auth_headers = gr.get_google_auth_headers()
     disable_dev_k = os.environ.get("DISABLE_DEVELOPER_KNOWLEDGE", "false").lower() == "true"
     has_dev_knowledge = bool(
         not disable_dev_k and auth_headers and ("X-Goog-Api-Key" in auth_headers or "Authorization" in auth_headers)
     )
     if has_dev_knowledge:
         print("Registering Google Developer Knowledge MCP tools...", file=sys.stderr)
-        tools.extend([search_google_developer_knowledge, get_google_developer_documents])
+        tools.extend([gr.search_google_developer_knowledge, gr.get_google_developer_documents])
 
     # Add tools info to system instruction
     system_instruction += "\n\n## Tools Availability:"
@@ -281,21 +188,21 @@ def main():
     comment_history_tokens = 0
     if should_include_comments and not is_dry_run and repository and pr_number:
         print(f"Fetching prior PR comments for PR #{pr_number}...", file=sys.stderr)
-        review_comments, issue_comments = get_pr_comments(repository, pr_number, headers, timeout=timeout)
-        excluded_authors = parse_excluded_authors(os.environ.get("GEMINI_EXCLUDE_COMMENT_AUTHORS"))
+        review_comments, issue_comments = gr.get_pr_comments(repository, pr_number, headers, timeout=timeout)
+        excluded_authors = gr.parse_excluded_authors(os.environ.get("GEMINI_EXCLUDE_COMMENT_AUTHORS"))
         if excluded_authors:
             print(f"Comment history: excluding authors {sorted(excluded_authors)}.", file=sys.stderr)
-        comment_history_str = format_pr_comment_history(review_comments, issue_comments, excluded_authors)
+        comment_history_str = gr.format_pr_comment_history(review_comments, issue_comments, excluded_authors)
         if comment_history_str:
-            comment_history_tokens = count_text_tokens(client, model_name, comment_history_str)
+            comment_history_tokens = gr.count_text_tokens(client, model_name, comment_history_str)
             print(
                 f"PR comment history included ({comment_history_tokens:,} tokens).",
                 file=sys.stderr,
             )
 
-    pr_diff_prompt = build_pr_diff_prompt(text_files, config)
+    pr_diff_prompt = gr.build_pr_diff_prompt(text_files, config)
     dynamic_pr_prompt = f"{pr_diff_prompt}\n\n{comment_history_str}" if comment_history_str else pr_diff_prompt
-    codebase_context = build_codebase_context(text_files, config, client=client, model=model_name)
+    codebase_context = gr.build_codebase_context(text_files, config, client=client, model=model_name)
 
     full_prompt = f"{dynamic_pr_prompt}\n\n{codebase_context}" if codebase_context else dynamic_pr_prompt
 
@@ -303,8 +210,8 @@ def main():
     # many files each under the cap. Check here rather than letting the API reject it: a
     # 400 costs the entire review and posts nothing, whereas dropping repository context
     # still produces a real review of the diff.
-    budget = prompt_token_budget(model_name, config)
-    prompt_tokens = count_text_tokens(client, model_name, full_prompt)
+    budget = gr.prompt_token_budget(model_name, config)
+    prompt_tokens = gr.count_text_tokens(client, model_name, full_prompt)
     if prompt_tokens > budget and codebase_context:
         print(
             f"Context budget: prompt is {prompt_tokens:,} tokens against a budget of {budget:,}. "
@@ -313,7 +220,7 @@ def main():
         )
         codebase_context = ""
         full_prompt = dynamic_pr_prompt
-        prompt_tokens = count_text_tokens(client, model_name, full_prompt)
+        prompt_tokens = gr.count_text_tokens(client, model_name, full_prompt)
 
     if prompt_tokens > budget:
         print(
@@ -334,8 +241,8 @@ def main():
             # Gemini Context Caching requires minimum 32,768 tokens (approx 100,000+ characters)
             if len(codebase_context) > 100000:
                 clean_repo = repository.replace("/", "-").replace("\\", "-") if repository else "repo"
-                clean_model = _normalize_model_name(model_name).replace("/", "-").replace("\\", "-")
-                clean_persona = resolve_persona_name(config).lower().replace("/", "-").replace("\\", "-")
+                clean_model = gr._normalize_model_name(model_name).replace("/", "-").replace("\\", "-")
+                clean_persona = gr.resolve_persona_name(config).lower().replace("/", "-").replace("\\", "-")
                 display_name = f"repo-cache-{clean_repo}-{clean_model}-{clean_persona}"
 
                 # Check if an active cache already exists matching display_name and model_name
@@ -346,9 +253,9 @@ def main():
                         item_display_name = getattr(cache_item, "display_name", None)
                         if item_display_name == display_name:
                             item_model = getattr(cache_item, "model", None)
-                            if isinstance(item_model, str) and _normalize_model_name(
+                            if isinstance(item_model, str) and gr._normalize_model_name(
                                 item_model
-                            ) != _normalize_model_name(model_name):
+                            ) != gr._normalize_model_name(model_name):
                                 print(
                                     f"Notice: Found cache ({item_display_name}: {cache_item.name}) "
                                     f"for a different model ('{item_model}', expected '{model_name}'). "
@@ -404,7 +311,7 @@ def main():
         gen_config = types.GenerateContentConfig(
             cached_content=cached_content_name,
             response_mime_type="application/json",
-            response_schema=ReviewResult,
+            response_schema=gr.ReviewResult,
             labels=billing_labels,
         )
     else:
@@ -412,7 +319,7 @@ def main():
             system_instruction=system_instruction,
             tools=tools,
             response_mime_type="application/json",
-            response_schema=ReviewResult,
+            response_schema=gr.ReviewResult,
             labels=billing_labels,
         )
 
@@ -437,7 +344,7 @@ def main():
                 system_instruction=system_instruction,
                 tools=tools,
                 response_mime_type="application/json",
-                response_schema=ReviewResult,
+                response_schema=gr.ReviewResult,
                 labels=billing_labels,
             )
             response = client.models.generate_content(
@@ -473,19 +380,19 @@ def main():
         }
 
         cache_str = f" ({cache_percentage:.1f}% cached)" if cached_tokens > 0 else ""
-        cost = estimate_cost(usage_dict, model_name, config)
-        cost_str = f" Estimated cost: {usd(cost.total)}." if cost.rate else " No rate entry for this model."
+        cost = gr.estimate_cost(usage_dict, model_name, config)
+        cost_str = f" Estimated cost: {gr.usd(cost.total)}." if cost.rate else " No rate entry for this model."
         print(
             f"Token Usage: {prompt_tokens:,d} input tokens{cache_str}, {candidates_tokens:,d} output tokens."
             f" Total: {total_tokens:,d} tokens.{cost_str}",
             file=sys.stderr,
         )
 
-    response_text = extract_response_text_or_raise(response)
+    response_text = gr.extract_response_text_or_raise(response)
     review_data = json.loads(response_text)
 
-    review = ReviewResult(**review_data)
-    review = filter_review_comments(review, text_files)
+    review = gr.ReviewResult(**review_data)
+    review = gr.filter_review_comments(review, text_files)
 
     if is_dry_run:
         print("\n=== DRY RUN REVIEW SUMMARY ===", file=sys.stderr)
@@ -503,7 +410,7 @@ def main():
             suggestion_str = f"\nSuggestion:\n{c.code_suggestion}" if c.code_suggestion else ""
             print(f"File: {c.path}:{c.line} ({c.side}) - Severity: {c.severity}\n{c.comment_text}{suggestion_str}\n")
     else:
-        post_review(
+        gr.post_review(
             repository,
             pr_number,
             head_sha,
@@ -519,12 +426,12 @@ def main():
         # the review itself, so it runs last and every failure inside it is a warning.
         if os.environ.get("GEMINI_RESOLVE_ADDRESSED_THREADS", "false").lower() in ("true", "1"):
             if review.resolved_items:
-                resolve_addressed_threads(
+                gr.resolve_addressed_threads(
                     repository,
                     pr_number,
                     headers,
                     review.resolved_items,
-                    bot_logins=reviewer_logins(),
+                    bot_logins=gr.reviewer_logins(),
                     timeout=timeout,
                 )
         elif review.resolved_items:

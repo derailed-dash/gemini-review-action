@@ -16,10 +16,13 @@ from gemini_review.schemas import InlineComment, ReviewResult
 
 
 def _get_pr_review_func(name: str, fallback: Any) -> Any:
-    """Retrieve function from gemini_pr_review module if present to support test mocks."""
-    mod = sys.modules.get("gemini_pr_review")
-    if mod and hasattr(mod, name):
-        return getattr(mod, name)
+    """Retrieve function from gemini_review or gemini_pr_review if patched to support test mocks."""
+    for mod_name in ("gemini_pr_review", "gemini_review"):
+        mod = sys.modules.get(mod_name)
+        if mod and hasattr(mod, name):
+            val = getattr(mod, name)
+            if val is not fallback:
+                return val
     return fallback
 
 

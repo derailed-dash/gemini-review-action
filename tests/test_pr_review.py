@@ -7,7 +7,7 @@ PR number, and language) correctly.
 
 import os
 
-from gemini_pr_review import (
+from gemini_review import (
     DEFAULT_MODEL,
     DynamicContextSelection,
     InlineComment,
@@ -180,9 +180,9 @@ def test_get_all_repo_files_git_fallback(mocker):
 
 def test_build_prompt_full_context(mocker):
     # Setup mock files in repo
-    mocker.patch("gemini_pr_review.get_all_repo_files", return_value=["README.md", "src/utils.py"])
+    mocker.patch("gemini_review.get_all_repo_files", return_value=["README.md", "src/utils.py"])
     mocker.patch("os.path.getsize", return_value=100)
-    mocker.patch("gemini_pr_review.get_file_content", side_effect=lambda path: f"Content of {path}")
+    mocker.patch("gemini_review.get_file_content", side_effect=lambda path: f"Content of {path}")
 
     pr_files = [{"filename": "src/main.py", "status": "modified", "patch": "+++ diff"}]
     config = {"max_context_bytes": 500}
@@ -195,9 +195,9 @@ def test_build_prompt_full_context(mocker):
 
 def test_build_prompt_sparse_context(mocker):
     # Setup mock files in repo where size exceeds limit
-    mocker.patch("gemini_pr_review.get_all_repo_files", return_value=["README.md", "large_file.py", "src/utils.py"])
+    mocker.patch("gemini_review.get_all_repo_files", return_value=["README.md", "large_file.py", "src/utils.py"])
     mocker.patch("os.path.getsize", return_value=1000)  # 3 files * 1000 = 3000 bytes
-    mocker.patch("gemini_pr_review.get_file_content", side_effect=lambda path: f"Content of {path}")
+    mocker.patch("gemini_review.get_file_content", side_effect=lambda path: f"Content of {path}")
 
     pr_files = [{"filename": "src/main.py", "status": "modified", "patch": "+++ diff"}]
     config = {
@@ -574,7 +574,7 @@ def test_get_google_auth_headers_none(mocker):
 
 
 def test_search_google_developer_knowledge_success(mocker):
-    mocker.patch("gemini_pr_review.get_google_auth_headers", return_value={"X-Goog-Api-Key": "key"})
+    mocker.patch("gemini_review.get_google_auth_headers", return_value={"X-Goog-Api-Key": "key"})
 
     mock_post = mocker.patch("requests.post")
     mock_resp = mocker.Mock()
@@ -589,13 +589,13 @@ def test_search_google_developer_knowledge_success(mocker):
 
 
 def test_search_google_developer_knowledge_no_auth(mocker):
-    mocker.patch("gemini_pr_review.get_google_auth_headers", return_value={})
+    mocker.patch("gemini_review.get_google_auth_headers", return_value={})
     res = search_google_developer_knowledge("query")
     assert "Error: No API key or Application Default Credentials found" in res
 
 
 def test_search_google_developer_knowledge_api_error(mocker):
-    mocker.patch("gemini_pr_review.get_google_auth_headers", return_value={"X-Goog-Api-Key": "key"})
+    mocker.patch("gemini_review.get_google_auth_headers", return_value={"X-Goog-Api-Key": "key"})
 
     mock_post = mocker.patch("requests.post")
     mock_resp = mocker.Mock()
@@ -612,9 +612,7 @@ def test_list_available_skills_builtin(mocker):
     mocker.patch("os.path.isdir", side_effect=lambda path: "starter-examples" in path or "my-skill" in path)
     mocker.patch("os.listdir", return_value=["my-skill"])
     mocker.patch("os.path.isfile", side_effect=lambda path: "SKILL.md" in path)
-    mocker.patch(
-        "gemini_pr_review.parse_skill_metadata", return_value={"name": "My Skill", "description": "Dummy skill"}
-    )
+    mocker.patch("gemini_review.parse_skill_metadata", return_value={"name": "My Skill", "description": "Dummy skill"})
 
     skills = list_available_skills()
     assert len(skills) == 1
@@ -628,7 +626,7 @@ def test_list_available_skills_workspace(mocker):
     mocker.patch("os.listdir", return_value=["custom-skill"])
     mocker.patch("os.path.isfile", side_effect=lambda path: "SKILL.md" in path)
     mocker.patch(
-        "gemini_pr_review.parse_skill_metadata", return_value={"name": "Custom Skill", "description": "Project rules"}
+        "gemini_review.parse_skill_metadata", return_value={"name": "Custom Skill", "description": "Project rules"}
     )
 
     skills = list_available_skills()
@@ -701,7 +699,7 @@ description: First line
 
 
 def test_get_google_developer_documents_success(mocker):
-    from gemini_pr_review import get_google_developer_documents
+    from gemini_review import get_google_developer_documents
 
     mocker.patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
     mock_post = mocker.patch("requests.post")
@@ -717,7 +715,7 @@ def test_get_google_developer_documents_success(mocker):
 
 
 def test_get_google_developer_documents_no_auth(mocker):
-    from gemini_pr_review import get_google_developer_documents
+    from gemini_review import get_google_developer_documents
 
     mocker.patch.dict(os.environ, {}, clear=True)
     mocker.patch("google.auth.default", side_effect=Exception("No ADC"))
@@ -727,7 +725,7 @@ def test_get_google_developer_documents_no_auth(mocker):
 
 
 def test_get_google_developer_documents_api_error(mocker):
-    from gemini_pr_review import get_google_developer_documents
+    from gemini_review import get_google_developer_documents
 
     mocker.patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
     mock_post = mocker.patch("requests.post")
@@ -741,7 +739,7 @@ def test_get_google_developer_documents_api_error(mocker):
 
 
 def test_load_workspace_rules_success(mocker):
-    from gemini_pr_review import load_workspace_rules
+    from gemini_review import load_workspace_rules
 
     mocker.patch("os.path.exists", side_effect=lambda path: path == "AGENTS.md")
     mocker.patch("os.path.isfile", side_effect=lambda path: path == "AGENTS.md")
@@ -768,11 +766,11 @@ def test_context_caching_logic(mocker):
     )
 
     mocker.patch(
-        "gemini_pr_review.get_local_git_files",
+        "gemini_review.get_local_git_files",
         return_value=[{"filename": "large.py", "status": "modified", "patch": "diff patch"}],
     )
-    mocker.patch("gemini_pr_review.get_all_repo_files", return_value=["other.py"])
-    mocker.patch("gemini_pr_review.get_file_content", return_value="a" * 120000)
+    mocker.patch("gemini_review.get_all_repo_files", return_value=["other.py"])
+    mocker.patch("gemini_review.get_file_content", return_value="a" * 120000)
 
     mock_client = mocker.Mock()
     mock_cache = mocker.Mock()
@@ -828,11 +826,11 @@ def test_context_caching_reuse_existing_cache(mocker):
     )
 
     mocker.patch(
-        "gemini_pr_review.get_local_git_files",
+        "gemini_review.get_local_git_files",
         return_value=[{"filename": "large.py", "status": "modified", "patch": "diff patch"}],
     )
-    mocker.patch("gemini_pr_review.get_all_repo_files", return_value=["other.py"])
-    mocker.patch("gemini_pr_review.get_file_content", return_value="a" * 120000)
+    mocker.patch("gemini_review.get_all_repo_files", return_value=["other.py"])
+    mocker.patch("gemini_review.get_file_content", return_value="a" * 120000)
 
     mock_client = mocker.Mock()
     existing_cache = mocker.Mock()
@@ -879,11 +877,11 @@ def test_context_caching_model_mismatch_skips_cache(mocker):
     )
 
     mocker.patch(
-        "gemini_pr_review.get_local_git_files",
+        "gemini_review.get_local_git_files",
         return_value=[{"filename": "large.py", "status": "modified", "patch": "diff patch"}],
     )
-    mocker.patch("gemini_pr_review.get_all_repo_files", return_value=["other.py"])
-    mocker.patch("gemini_pr_review.get_file_content", return_value="a" * 120000)
+    mocker.patch("gemini_review.get_all_repo_files", return_value=["other.py"])
+    mocker.patch("gemini_review.get_file_content", return_value="a" * 120000)
 
     mock_client = mocker.Mock()
     existing_cache = mocker.Mock()
@@ -945,11 +943,11 @@ def test_context_caching_persona_mismatch_skips_cache(mocker):
     )
 
     mocker.patch(
-        "gemini_pr_review.get_local_git_files",
+        "gemini_review.get_local_git_files",
         return_value=[{"filename": "large.py", "status": "modified", "patch": "diff patch"}],
     )
-    mocker.patch("gemini_pr_review.get_all_repo_files", return_value=["other.py"])
-    mocker.patch("gemini_pr_review.get_file_content", return_value="a" * 120000)
+    mocker.patch("gemini_review.get_all_repo_files", return_value=["other.py"])
+    mocker.patch("gemini_review.get_file_content", return_value="a" * 120000)
 
     mock_client = mocker.Mock()
     mock_client.models._parse_config.return_value.tools = None
@@ -1006,11 +1004,11 @@ def test_context_caching_generate_content_fallback(mocker):
     )
 
     mocker.patch(
-        "gemini_pr_review.get_local_git_files",
+        "gemini_review.get_local_git_files",
         return_value=[{"filename": "large.py", "status": "modified", "patch": "diff patch"}],
     )
-    mocker.patch("gemini_pr_review.get_all_repo_files", return_value=["other.py"])
-    mocker.patch("gemini_pr_review.get_file_content", return_value="a" * 120000)
+    mocker.patch("gemini_review.get_all_repo_files", return_value=["other.py"])
+    mocker.patch("gemini_review.get_file_content", return_value="a" * 120000)
 
     mock_client = mocker.Mock()
     existing_cache = mocker.Mock()
@@ -1050,7 +1048,7 @@ def test_context_caching_generate_content_fallback(mocker):
 
 def test_normalize_model_name():
     """Test model name normalisation across various SDK and Vertex AI format strings."""
-    from gemini_pr_review import _normalize_model_name
+    from gemini_review import _normalize_model_name
 
     assert _normalize_model_name(None) == ""
     assert _normalize_model_name("") == ""
@@ -1169,9 +1167,9 @@ def test_count_text_tokens(mocker):
 
 def test_build_prompt_with_comment_history(mocker):
     """Test build_prompt includes comment_history when provided."""
-    mocker.patch("gemini_pr_review.is_text_file", return_value=True)
-    mocker.patch("gemini_pr_review.get_file_content", return_value="def main(): pass")
-    mocker.patch("gemini_pr_review.build_codebase_context", return_value="")
+    mocker.patch("gemini_review.is_text_file", return_value=True)
+    mocker.patch("gemini_review.get_file_content", return_value="def main(): pass")
+    mocker.patch("gemini_review.build_codebase_context", return_value="")
 
     files = [{"filename": "main.py", "status": "modified", "patch": "@@ -1 +1 @@\n+def main(): pass"}]
     comment_history = "=== Prior PR Discussion & Review Threads ===\n[dazbo]: Handled upstream."
@@ -1831,15 +1829,15 @@ def test_select_dynamic_context_files_no_client():
 
 def test_build_codebase_context_sparse_mode_with_dynamic_selection(mocker):
     """Test build_codebase_context in sparse mode invokes dynamic context selection and appends files."""
-    mocker.patch("gemini_pr_review.get_all_repo_files", return_value=["main.py", "core.md", "helper.py", "extra.py"])
+    mocker.patch("gemini_review.get_all_repo_files", return_value=["main.py", "core.md", "helper.py", "extra.py"])
     mocker.patch("os.path.getsize", return_value=100000)  # 3 * 100k = 300k bytes > 100k max
-    mocker.patch("gemini_pr_review.is_core_file", side_effect=lambda f, pats: f.endswith(".md"))
+    mocker.patch("gemini_review.is_core_file", side_effect=lambda f, pats: f.endswith(".md"))
     mocker.patch(
-        "gemini_pr_review.get_file_content",
+        "gemini_review.get_file_content",
         side_effect=lambda f: f"# Content of {f}",
     )
     mock_select = mocker.patch(
-        "gemini_pr_review.select_dynamic_context_files",
+        "gemini_review.select_dynamic_context_files",
         return_value=(["helper.py"], "Helper is imported by main.py"),
     )
 
@@ -1886,10 +1884,10 @@ def test_main_passes_model_to_build_codebase_context(mocker):
     )
 
     mocker.patch(
-        "gemini_pr_review.get_local_git_files",
+        "gemini_review.get_local_git_files",
         return_value=[{"filename": "main.py", "status": "modified", "patch": "diff"}],
     )
-    mock_build_ctx = mocker.patch("gemini_pr_review.build_codebase_context", return_value="")
+    mock_build_ctx = mocker.patch("gemini_review.build_codebase_context", return_value="")
 
     mock_client = mocker.Mock()
     mock_response = mocker.Mock()
@@ -1910,11 +1908,11 @@ def test_main_passes_model_to_build_codebase_context(mocker):
 
 def test_build_codebase_context_sparse_mode_enforces_max_core_context_bytes(mocker):
     """Test build_codebase_context in sparse mode respects max_core_context_bytes limit."""
-    mocker.patch("gemini_pr_review.get_all_repo_files", return_value=["main.py", "README.md", "GEMINI.md", "helper.py"])
+    mocker.patch("gemini_review.get_all_repo_files", return_value=["main.py", "README.md", "GEMINI.md", "helper.py"])
     mocker.patch("os.path.getsize", side_effect=lambda f: 300000 if f.endswith(".md") else 100000)
-    mocker.patch("gemini_pr_review.is_core_file", side_effect=lambda f, pats: f.endswith(".md"))
-    mocker.patch("gemini_pr_review.get_file_content", side_effect=lambda f: f"# Content of {f}")
-    mock_select = mocker.patch("gemini_pr_review.select_dynamic_context_files", return_value=([], ""))
+    mocker.patch("gemini_review.is_core_file", side_effect=lambda f, pats: f.endswith(".md"))
+    mocker.patch("gemini_review.get_file_content", side_effect=lambda f: f"# Content of {f}")
+    mock_select = mocker.patch("gemini_review.select_dynamic_context_files", return_value=([], ""))
 
     mock_client = mocker.Mock()
     files = [{"filename": "main.py", "status": "modified", "patch": "diff"}]
@@ -1935,3 +1933,13 @@ def test_build_codebase_context_sparse_mode_enforces_max_core_context_bytes(mock
     assert mock_select.called
     assert "GEMINI.md" in mock_select.call_args.kwargs["candidate_files"]
     assert "helper.py" in mock_select.call_args.kwargs["candidate_files"]
+
+
+def test_gemini_pr_review_getattr_backward_compatibility():
+    """Verify that importing or accessing attributes on gemini_pr_review resolves via __getattr__."""
+    import gemini_pr_review
+    import gemini_review
+
+    assert gemini_pr_review.DEFAULT_MODEL == gemini_review.DEFAULT_MODEL
+    assert gemini_pr_review.build_codebase_context is gemini_review.build_codebase_context
+    assert gemini_pr_review.ReviewResult is gemini_review.ReviewResult
