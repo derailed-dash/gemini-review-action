@@ -45,4 +45,3 @@ class TestConfigAndModelResolution:
         """load_config should return a dictionary from existing TOML or defaults."""
         config = load_config()
         assert isinstance(config, dict)
-
