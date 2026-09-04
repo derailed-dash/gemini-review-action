@@ -61,6 +61,7 @@ See the supporting blog post about this action [here](https://medium.com/google-
 - **Modern SDK Execution**: Leverages the modern Google GenAI SDK (`google-genai`).
 - **Enterprise-Grade Security**: Authentication via either Google Gemini API Keys or Google Cloud Workload Identity Federation (WIF).
 - **Customisable Prompts**: Supports repository-specific overrides for both reviews and triaging via simple TOML config files.
+- **Custom Instructions & Guardrails (Prompt Extension)**: Effortlessly extend default review instructions with project-specific rules, domain context, and guardrails via `.github/review-instruction-additions.md` or the `custom_instructions` action input, without needing to maintain or duplicate the base review prompt.
 - **Reviewer Personas**: Customise the personality, tone, and review style of the agent with pre-built persona overlays (`straight`, `dazbo`, `palpatine`, `rick`).
 - **Google Developer Knowledge Integration**: Automatically queries official Google developer documentation (Google Cloud, Firebase, Android, etc.) via MCP to cross-reference your changes against up-to-date best practices.
 - **On-Demand Agent Skills**: Dynamically discovers and loads project-specific formatting guidelines and coding standards from `.agents/skills` on-demand, keeping prompt contexts lightweight and relevant (bundled with defaults for Google Cloud, Gemini APIs and agentic development).
@@ -418,6 +419,7 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 | `resolve_addressed_threads` | Resolve the GitHub review threads for findings the action reports as addressed, so *Require conversation resolution before merging* stops blocking on feedback the reviewer has already agreed is done. Only threads opened by this action, and only where the model supplied an exact file and line, are resolved. | No | `'false'` |
 | `language` | The language to use for the review comments (e.g. `English (UK)`, `English (US)`, `French`, `Spanish`). | No | `English (UK)` |
 | `persona` | Reviewer persona overlay (`straight`, `dazbo`, `palpatine`, `rick`). | No | `straight` |
+| `custom_instructions` | Custom instructions or guardrails to extend the review prompt. Can be inline text or a file path in the repository (e.g. `.github/review-instruction-additions.md`). | No | `.github/review-instruction-additions.md` |
 | `skip_inline_suggestions` | Whether to skip automated re-reviews when a commit is created by accepting an inline suggestion via GitHub UI. | No | `'true'` |
 | `timeout` | Timeout for API requests in seconds. | No | `60` |
 
@@ -471,19 +473,42 @@ Available personas:
     persona: 'rick'  # Options: straight (default), dazbo, palpatine, rick
 ```
 
-### Custom Prompts / Instructions
+### Custom Prompts & Instructions: Extending vs Replacing
 
 This action bundles high-quality default prompt configurations for both review and triage:
 * **Default Review Prompt:** [starter-examples/gemini-review.toml](starter-examples/gemini-review.toml)
 * **Default Triage Prompt:** [starter-examples/gemini-triage.toml](starter-examples/gemini-triage.toml)
 
-You can customize or completely override the prompt instructions given to the review or triage reviewers on a repository-by-repository basis:
+You can customise instructions depending on whether you want to **extend** the default directives with team-specific guardrails, or **replace** the system prompt entirely:
 
-* **To override the Code Review prompt:** Create a file at `.github/commands/gemini-review.toml` in your calling repository.
-* **To override the Issue Triage prompt:** Create a file at `.github/commands/gemini-triage.toml` in your calling repository.
+#### 1. Extending Instructions & Guardrails (Recommended)
+
+If you want to add repository-specific guardrails (such as security rules, architectural constraints, or forbidden libraries) without losing the built-in 5-axis quality evaluations or persona overlays, **extend** the instructions using one of two methods:
+
+* **Convention-Based File (Automatic)**:
+  Create a file at `.github/review-instruction-additions.md` (or at the root `review-instruction-additions.md`). The action automatically detects and appends these instructions to the review prompt. A starter template is provided in [starter-examples/review-instruction-additions.md](starter-examples/review-instruction-additions.md).
+* **Workflow Input (`custom_instructions`)**:
+  Provide inline directives or specify an alternative file path in your workflow `.yml` file:
+  ```yaml
+  - uses: derailed-dash/gemini-review-action@v1
+    with:
+      gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+      github_token: ${{ secrets.GITHUB_TOKEN }}
+      custom_instructions: |
+        - Ensure all database queries use parameterised inputs.
+        - Verify that new API endpoints include request schema validation.
+        - Flag any new third-party dependencies not documented in an ADR.
+  ```
+
+#### 2. Replacing Instructions Entirely (Full Override)
+
+If you need to completely replace the built-in system prompt with a bespoke prompt from scratch:
+
+* **To override the Code Review prompt:** Create a file at `.github/commands/gemini-review.toml` in your calling repository (copying from [starter-examples/gemini-review.toml](starter-examples/gemini-review.toml)).
+* **To override the Issue Triage prompt:** Create a file at `.github/commands/gemini-triage.toml` in your calling repository (copying from [starter-examples/gemini-triage.toml](starter-examples/gemini-triage.toml)).
 
 > [!NOTE]
-> **Parameter Configuration Scope:** All operational configuration parameters (such as `skip_inline_suggestions`, `include_comment_history`, `persona`, `language`, `timeout`) MUST be configured via Action inputs in your workflow `.yml` file. The `gemini-review.toml` file is strictly reserved for prompt text templates and custom prompt overrides.
+> **Parameter Configuration Scope:** All operational configuration parameters (such as `custom_instructions`, `skip_inline_suggestions`, `include_comment_history`, `persona`, `language`, `timeout`) MUST be configured via Action inputs in your workflow `.yml` file. The `gemini-review.toml` file is strictly reserved for prompt text templates and custom prompt overrides.
 
 Your custom TOML file must contain a `prompt` key enclosing your system instructions in markdown format:
 

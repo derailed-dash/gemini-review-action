@@ -16,13 +16,18 @@ The action runs as a native GitHub Composite Action (`action.yml`) that boots a 
 
 The code review action is organized into a modular Python package (`gemini_review/`) separating domain responsibilities, with `gemini_pr_review.py` serving as the top-level execution entrypoint and backward-compatible API facade:
 
-* **`gemini_review/schemas.py`**: Pydantic schemas defining structured outputs (`InlineComment`, `ReviewResult`).
-* **`gemini_review/config.py`**: Configuration loader for `gemini-review.toml` and timeout defaults.
+* **`gemini_review/schemas.py`**: Pydantic schemas defining structured outputs (`InlineComment`, `ReviewResult`, `DynamicContextSelection`).
+* **`gemini_review/config.py`**: Configuration loader for `gemini-review.toml` and timeout/model defaults.
 * **`gemini_review/utils.py`**: Binary file exclusion, diff patch line parsing, token counting, repo file listing, and rule loaders.
-* **`gemini_review/github.py`**: GitHub REST API client functions for PR files, comment threads, and review postings.
+* **`gemini_review/github.py`**: GitHub REST API client functions for PR files, comment threads, author filtering, and review postings.
+* **`gemini_review/threads.py`**: Pull request review thread retrieval and automated resolution of addressed threads (`resolve_addressed_threads`).
+* **`gemini_review/budget.py`**: Token budget allocation and per-file content truncation (`cap_file_content`) to prevent out-of-budget diffs.
+* **`gemini_review/billing_labels.py`**: Google Cloud billing labels parser and sanitisation for GCP cost attribution.
+* **`gemini_review/personas.py`**: Reviewer persona registry and prompt generation (`straight`, `dazbo`, `palpatine`, `rick`).
+* **`gemini_review/pricing.py`**: Gemini model token pricing and cost estimation engine (including Gemini 3.8 Flash).
 * **`gemini_review/skills.py`**: Agent skill metadata parser and instruction loader for workspace and built-in skills.
 * **`gemini_review/developer_knowledge.py`**: MCP/RPC integration to search and fetch official Google developer documentation.
-* **`gemini_review/prompts.py`**: Dynamic PR diff prompt construction, full/sparse codebase context generation, and prompt assembly.
+* **`gemini_review/prompts.py`**: Dynamic PR diff prompt construction, codebase context generation, custom instruction loaders, and prompt assembly.
 * **`gemini_pr_review.py`**: Main CLI entrypoint script that re-exports all `gemini_review` package APIs and runs the primary review loop.
 
 ---
@@ -38,6 +43,7 @@ The PR review workflow is designed to retrieve PR details, collect local codebas
 ### 2. Hybrid Codebase Context Engine
 To provide Gemini with project-wide awareness, the script traverses the workspace to find all tracked files via `get_all_repo_files()`. It then sums the file sizes (excluding the changed PR files) to determine the context mode:
 
+* **Per-File Content Truncation (`cap_file_content`):** To prevent a single abnormally large file (e.g. bundled assets, minified scripts, or large test fixtures) from monopolising the context budget, individual text files attached to the prompt are capped at 200 KB with a truncation notice.
 * **Full Context Mode (≤ 1.5 MB):**
   If the rest of the text files in the repository fit within the size limit, the script reads their full contents using `get_file_content()` and appends them to the prompt under the section `=== Repository Context (Full Codebase) ===`.
 * **Sparse Context Mode (> 1.5 MB):**
@@ -61,8 +67,10 @@ To drastically reduce API costs and latency for large codebase contexts, `gemini
 ### 4. PR Comment & Discussion Thread History Engine
 When enabled via `include_comment_history: 'true'` (default), `gemini_pr_review.py` fetches complete historical discussion context from the GitHub API:
 * **Inline & Conversation Retrieval (`get_pr_comments()`)**: Fetches inline review comments (`pulls/{pr_number}/comments`) and general PR issue comments (`issues/{pr_number}/comments`) using `while True` pagination loops (`per_page=100`) to guarantee all historical comments are captured.
+* **Comment Author Filtering (`exclude_comment_authors`)**: Selectively filters out automated comments from secondary bots (such as `claude[bot]`) before prompt generation using `filter_comment_authors()`, preventing competing review conclusions from skewing the evaluation.
 * **Thread Structuring (`format_pr_comment_history()`)**: Groups comments into root comments and nested developer replies per file and line number, presenting clear conversational timelines to Gemini.
 * **Resolution Decision Matrix**: Instructs Gemini not to repeat suggestions that have been addressed in code, deferred, or explicitly justified by developers, while ensuring unresolved items without explanation or un-applied agreed fixes are re-flagged.
+* **Automated Thread Resolution (`resolve_addressed_threads`)**: When enabled via action inputs, the action resolves GitHub review conversation threads using `fetch_review_threads()` and `resolve_addressed_threads()` for issues Gemini explicitly reports in `ReviewResult.resolved_items`, unblocking GitHub's *Require conversation resolution before merging* branch rule.
 
 ### 5. Structured Output Schemas
 Gemini is forced to return structured JSON adhering to the Pydantic schemas:
@@ -83,6 +91,15 @@ Gemini is forced to return structured JSON adhering to the Pydantic schemas:
 Submitting reviews with line-specific comments via GitHub's API can be fragile (e.g. if the model specifies a line index that falls outside the diff range).
 * **Atomic Run:** The script first attempts to post the summary, resolved items list (`### ✅ Resolved Items from Prior Reviews`), and all inline comments in a single transaction via `POST /repos/{owner}/{repo}/pulls/{number}/reviews`.
 * **Resilient Fallback:** If the atomic post fails (e.g. returns HTTP 422), the script catches the failure, posts the review summary comment, and attempts to publish individual comments one-by-one. This ensures valid comments are still delivered while preventing a CI checkout block.
+
+### 7. Review Prompt Customisation: Extending vs Replacing
+
+The review prompt assembly in `gemini_review/prompts.py` provides two distinct customisation tiers:
+
+* **Extending Instructions & Guardrails (`custom_instructions` / `load_custom_instructions`)**:
+  Enables teams to layer on repository-specific guardrails, architectural standards, or forbidden libraries without discarding the built-in 5-axis quality evaluations or persona overlays. It resolves convention-based markdown files (`.github/review-instruction-additions.md` with fallback to `review-instruction-additions.md` at root), or inline text supplied via the `custom_instructions` action input in workflow YAML, seamlessly appending them under `## Additional Review Instructions & Guardrails:`.
+* **Replacing Instructions Entirely (`gemini-review.toml`)**:
+  When a repository needs to author a bespoke system prompt from scratch, placing `.github/commands/gemini-review.toml` in the repository completely replaces the base prompt template.
 
 ---
 
@@ -105,9 +122,12 @@ The issue triage script automatically categorises and labels new issues to strea
 
 ---
 
-## 🛠️ Configuration Options
+## 🛠️ Configuration Architecture
 
-The action's behavior is configured via `gemini-review.toml`:
+The action maintains a strict separation of concerns between operational parameters and prompt templates:
+
+* **Operational Action Inputs (`action.yml` / Workflow YAML)**: All operational configuration parameters (such as `gemini_model`, `custom_instructions`, `exclude_comment_authors`, `resolve_addressed_threads`, `skip_inline_suggestions`, `include_comment_history`, `language`, `persona`, and `timeout`) are configured via action inputs in your workflow `.yml` file and mapped to environment variables (`GEMINI_*`).
+* **Prompt Overrides (`gemini-review.toml`)**: `gemini-review.toml` is strictly reserved for custom system prompt overrides and codebase context tuning thresholds:
 
 ```toml
 # Default configuration
@@ -115,7 +135,8 @@ description = "Reviews a pull request using Google Gemini"
 prompt = "..."
 
 # Codebase Context Configuration (Optional)
-max_context_bytes = 1500000  # Size threshold in bytes to trigger Sparse Mode
+max_context_bytes = 1500000  # Size threshold in bytes to trigger Sparse Mode (default: 1.5 MB)
+max_core_context_bytes = 500000  # Max bytes for static core docs/manifests in Sparse Mode (default: 500 KB)
 core_file_patterns = [
     "*.md",
     "pyproject.toml", "package.json", "go.mod", "Cargo.toml", "pom.xml",
@@ -123,10 +144,6 @@ core_file_patterns = [
     "composer.json", "*.csproj", "*.sln", "Dockerfile", "docker-compose.yml",
     "gemini-review.toml", "action.yml"
 ]
-
-# Gemini Context Caching (Optional)
-enable_context_caching = true  # Enable native Gemini Context Caching for large repos (default: true)
-cache_ttl_seconds = 3600       # Cache TTL in seconds (default: 3600 / 1 hour)
 ```
 
 ---

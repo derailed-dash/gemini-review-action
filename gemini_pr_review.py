@@ -149,7 +149,10 @@ def main():
     billing_labels = gr.build_labels(client, config, repository)
     if billing_labels:
         print(f"Billing labels: {billing_labels}", file=sys.stderr)
-    system_instruction = gr.load_system_instruction(repository, pr_number, config)
+    custom_instructions = gr.load_custom_instructions()
+    system_instruction = gr.load_system_instruction(
+        repository, pr_number, config, custom_instructions=custom_instructions
+    )
 
     # Load workspace rules (AGENTS.md, etc.)
     workspace_rules = gr.load_workspace_rules()

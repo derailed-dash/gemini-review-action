@@ -79,6 +79,12 @@ inputs:
     description: 'Skip automated re-reviews when a commit is created by accepting an inline suggestion via GitHub UI'
     required: false
     default: 'true'
+  custom_instructions:
+    description: >-
+      Custom instructions or guardrails to extend the review prompt. Can be inline
+      text or a file path in the repository (defaults to .github/review-instruction-additions.md).
+    required: false
+    default: '.github/review-instruction-additions.md'
 
 runs:
   using: 'composite'
@@ -105,6 +111,7 @@ runs:
         GEMINI_PERSONA: ${{ inputs.persona }}
         GEMINI_BILLING_LABELS: ${{ inputs.billing_labels }}
         GEMINI_SKIP_INLINE_SUGGESTIONS: ${{ inputs.skip_inline_suggestions }}
+        GEMINI_CUSTOM_INSTRUCTIONS: ${{ inputs.custom_instructions }}
         GITHUB_REPOSITORY: ${{ github.repository }}
 
         GITHUB_EVENT_PATH: ${{ github.event_path }}

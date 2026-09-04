@@ -107,7 +107,84 @@ def select_dynamic_context_files(
         return [], ""
 
 
-def load_system_instruction(repository: str | None, pr_number: int, config: dict) -> str:
+DEFAULT_CUSTOM_INSTRUCTIONS_PATH = ".github/review-instruction-additions.md"
+FALLBACK_CUSTOM_INSTRUCTIONS_PATH = "review-instruction-additions.md"
+
+
+def load_custom_instructions(custom_input: str | None = None) -> str:
+    """Load custom review instructions and guardrails from a file path or inline text.
+
+    Supports reading from custom_input argument, GEMINI_CUSTOM_INSTRUCTIONS environment
+    variable, or falling back to convention-based file locations (.github/review-instruction-additions.md
+    or review-instruction-additions.md at repository root). Safely prevents path traversal.
+    If the default file does not exist, returns an empty string without raising an error.
+    """
+    raw_val = custom_input if custom_input is not None else os.environ.get("GEMINI_CUSTOM_INSTRUCTIONS")
+    if raw_val is None:
+        raw_val = DEFAULT_CUSTOM_INSTRUCTIONS_PATH
+
+    raw_val = raw_val.strip()
+    if not raw_val:
+        return ""
+
+    is_default = raw_val == DEFAULT_CUSTOM_INSTRUCTIONS_PATH
+
+    # Candidate file paths to check
+    candidate_paths = [raw_val]
+    if is_default:
+        candidate_paths.append(FALLBACK_CUSTOM_INSTRUCTIONS_PATH)
+
+    workspace_root = os.path.realpath(".")
+
+    for candidate in candidate_paths:
+        norm_candidate = candidate.replace("/", os.sep).replace("\\", os.sep)
+        full_path = os.path.realpath(norm_candidate)
+        try:
+            if os.path.commonpath([workspace_root, full_path]) != workspace_root:
+                print(
+                    f"Warning: Access denied for custom instructions path '{candidate}' (path traversal blocked).",
+                    file=sys.stderr,
+                )
+                return ""
+        except Exception:
+            return ""
+
+        if os.path.exists(full_path) and os.path.isfile(full_path):
+            try:
+                print(f"Loading custom review instructions from {candidate}...", file=sys.stderr)
+                with open(full_path, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            except Exception as e:
+                print(f"Warning: Failed to read custom instructions from {candidate}: {e}", file=sys.stderr)
+                return ""
+
+    # If the user explicitly provided input that is not a default candidate path
+    if not is_default:
+        # Multi-line string is definitely inline text instructions
+        if "\n" in raw_val:
+            return raw_val
+
+        # If it looks like a path but wasn't found, warn and return empty
+        if (
+            raw_val.startswith(("./", "../", ".github/"))
+            or raw_val.endswith((".md", ".txt", ".markdown"))
+            or (os.sep in raw_val and not raw_val.startswith("-"))
+        ):
+            print(f"Warning: Custom instructions file '{raw_val}' not found.", file=sys.stderr)
+            return ""
+
+        # Otherwise, treat it as single-line inline instruction text
+        return raw_val
+
+    return ""
+
+
+def load_system_instruction(
+    repository: str | None,
+    pr_number: int,
+    config: dict,
+    custom_instructions: str = "",
+) -> str:
     """Load system instructions for Gemini code & technical reviews.
 
     Sets base_prompt to either the custom prompt template from gemini-review.toml
@@ -115,6 +192,9 @@ def load_system_instruction(repository: str | None, pr_number: int, config: dict
     is defined. In both cases, the configured reviewer persona prompt (e.g. 'straight',
     'thorough') is appended to base_prompt afterwards.
     """
+    instructions_text = custom_instructions.strip() if custom_instructions else ""
+    appended_instructions = False
+
     prompt = config.get("prompt", "")
     if not prompt:
         # Fallback base prompt if gemini-review.toml does not define a custom prompt key
@@ -133,10 +213,19 @@ def load_system_instruction(repository: str | None, pr_number: int, config: dict
         # Custom prompt from gemini-review.toml: perform dynamic template variable substitutions
         prompt = prompt.replace("!{echo $REPOSITORY}", repository or "unknown")
         prompt = prompt.replace("!{echo $PULL_REQUEST_NUMBER}", str(pr_number))
-        prompt = prompt.replace("!{echo $ADDITIONAL_CONTEXT}", "")
+
+        if "!{echo $ADDITIONAL_CONTEXT}" in prompt:
+            prompt = prompt.replace("!{echo $ADDITIONAL_CONTEXT}", instructions_text)
+            appended_instructions = bool(instructions_text)
+        else:
+            prompt = prompt.replace("!{echo $ADDITIONAL_CONTEXT}", "")
 
         language = os.environ.get("GEMINI_LANGUAGE", "English (UK)")
         base_prompt = prompt.replace("!{echo $LANGUAGE}", language)
+
+    # If custom instructions are provided and haven't already been substituted into !{echo $ADDITIONAL_CONTEXT}
+    if instructions_text and not appended_instructions:
+        base_prompt = f"{base_prompt}\n\n## Additional Review Instructions & Guardrails:\n{instructions_text}"
 
     # Append inline suggestion guidance regarding line-range alignment
     suggestion_instruction = (

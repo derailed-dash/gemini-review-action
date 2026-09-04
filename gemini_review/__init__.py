@@ -49,6 +49,7 @@ from .prompts import (
     build_codebase_context,
     build_pr_diff_prompt,
     build_prompt,
+    load_custom_instructions,
     load_system_instruction,
     select_dynamic_context_files,
 )
@@ -129,6 +130,7 @@ __all__ = [
     "is_text_file",
     "list_available_skills",
     "load_config",
+    "load_custom_instructions",
     "load_skill_instructions",
     "load_system_instruction",
     "load_workspace_rules",
