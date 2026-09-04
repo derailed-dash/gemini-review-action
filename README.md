@@ -171,13 +171,19 @@ If your repository mixes upstream skills with custom local skills inside `.agent
   When declared, the updater will explicitly acknowledge them in the terminal summary and confirm they are preserved locally without touching upstream Git repositories.
 
 ##### Synchronising Upstream Skills in Consumer Repositories
-If your team wants to pull and track curated agent skills directly in your project's `.agents/skills/` directory from official upstream repositories (such as `google/skills` or `google/agents-cli`), you can place a `skills-manifest.json` inside `.agents/` (or `.github/`) and run the skills synchroniser:
+If your team wants to pull and track curated agent skills directly in your project's `.agents/skills/` directory from official upstream repositories (such as `google/skills` or `google/agents-cli`), you do not need to construct a manifest from scratch:
+1. **Copy the updater script:** Copy `scripts/update_skills.py` into your repository's `scripts/` folder.
+2. **Initialise or copy the manifest:**
+   - **Automatic:** Run `uv run scripts/update_skills.py --init` to automatically fetch the canonical manifest into `.agents/skills-manifest.json`.
+   - **Manual:** Copy the starter [skills-manifest.json](starter-examples/skills/skills-manifest.json) into `.agents/skills-manifest.json` (or if you already copied `starter-examples/skills/` into `.agents/skills/`, it is already included).
+3. **Customise (optional):** Prune any skill names or repositories your project does not need, or list custom local skills under `"local_skills"`.
+4. **Run the synchroniser** (PEP 723 script metadata ensures `rich` is handled automatically):
 ```bash
 # Preview what would be synced into .agents/skills/
-uv run python scripts/update_skills.py --dry-run
+uv run scripts/update_skills.py --dry-run
 
 # Synchronise upstream skills into .agents/skills/
-uv run python scripts/update_skills.py
+uv run scripts/update_skills.py
 ```
 The updater automatically detects consumer repositories and defaults target paths to `.agents/skills/`.
 

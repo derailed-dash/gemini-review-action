@@ -8,6 +8,7 @@ path resolution across repository modes, dry-run previewing, and error resilienc
 from __future__ import annotations
 
 import json
+import urllib.error
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,6 +16,7 @@ import pytest
 
 from scripts.update_skills import (
     fetch_and_sync_remote_repo,
+    init_manifest,
     is_directory_identical,
     load_manifest,
     resolve_manifest_path,
@@ -160,6 +162,15 @@ class TestSyncSkillDirectory:
         (dir_b / "f1.txt").write_text("hello", encoding="utf-8")
         (dir_b / "f2.txt").write_text("extra", encoding="utf-8")
         assert is_directory_identical(dir_a, dir_b) is False
+
+        # Clutter (.DS_Store, __pycache__, *.pyc) should be ignored during equality check
+        (dir_b / "f2.txt").unlink()
+        (dir_b / ".DS_Store").write_bytes(b"\x00\x00")
+        pycache_dir = dir_b / "__pycache__"
+        pycache_dir.mkdir()
+        (pycache_dir / "helper.cpython-313.pyc").write_bytes(b"\x00\x01")
+        (dir_b / "cached.pyc").write_bytes(b"\x00\x02")
+        assert is_directory_identical(dir_a, dir_b) is True
 
 
 class TestUpdateFromLocalCache:
@@ -314,3 +325,62 @@ class TestPathResolution:
         # No manifest exists anywhere and starter-examples does not exist
         resolved = resolve_manifest_path(tmp_path)
         assert resolved == tmp_path / ".agents" / "skills-manifest.json"
+
+
+class TestInitManifest:
+    def test_init_manifest_from_local_template(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        starter = repo_root / "starter-examples" / "skills" / "skills-manifest.json"
+        starter.parent.mkdir(parents=True)
+        starter.write_text('{"version": "1.0", "repositories": []}', encoding="utf-8")
+
+        target_manifest = repo_root / ".agents" / "skills-manifest.json"
+        success = init_manifest(target_manifest, repo_root)
+        assert success is True
+        assert target_manifest.exists()
+        assert json.loads(target_manifest.read_text(encoding="utf-8"))["version"] == "1.0"
+
+    def test_init_manifest_already_exists_no_force(self, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        target_manifest = repo_root / ".agents" / "skills-manifest.json"
+        target_manifest.parent.mkdir(parents=True)
+        target_manifest.write_text("existing", encoding="utf-8")
+
+        success = init_manifest(target_manifest, repo_root, force=False)
+        assert success is False
+        assert target_manifest.read_text(encoding="utf-8") == "existing"
+
+        # Overwrite with force
+        starter = repo_root / "starter-examples" / "skills" / "skills-manifest.json"
+        starter.parent.mkdir(parents=True)
+        starter.write_text("overwritten", encoding="utf-8")
+
+        success_force = init_manifest(target_manifest, repo_root, force=True)
+        assert success_force is True
+        assert target_manifest.read_text(encoding="utf-8") == "overwritten"
+
+    @patch("urllib.request.urlopen")
+    def test_init_manifest_download(self, mock_urlopen: MagicMock, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        target_manifest = repo_root / ".agents" / "skills-manifest.json"
+
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"version": "1.0", "repositories": []}'
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        success = init_manifest(target_manifest, repo_root)
+        assert success is True
+        assert target_manifest.exists()
+        assert json.loads(target_manifest.read_text(encoding="utf-8"))["version"] == "1.0"
+
+    @patch("urllib.request.urlopen")
+    def test_init_manifest_download_failure(self, mock_urlopen: MagicMock, tmp_path: Path):
+        repo_root = tmp_path / "repo"
+        target_manifest = repo_root / ".agents" / "skills-manifest.json"
+
+        mock_urlopen.side_effect = urllib.error.URLError("Connection refused")
+
+        success = init_manifest(target_manifest, repo_root)
+        assert success is False
+        assert not target_manifest.exists()

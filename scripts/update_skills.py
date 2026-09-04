@@ -1,3 +1,8 @@
+# /// script
+# dependencies = [
+#   "rich>=13.0.0",
+# ]
+# ///
 """
 Update Skills Utility.
 
@@ -28,6 +33,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from rich.console import Console
@@ -35,6 +42,11 @@ from rich.panel import Panel
 from rich.table import Table
 
 console = Console()
+
+DEFAULT_MANIFEST_URL = (
+    "https://raw.githubusercontent.com/derailed-dash/gemini-review-action/main/"
+    "starter-examples/skills/skills-manifest.json"
+)
 
 
 def resolve_target_dir(repo_root: Path, explicit_target: Path | None = None) -> Path:
@@ -99,6 +111,59 @@ def resolve_manifest_path(repo_root: Path, explicit_manifest: Path | None = None
     return candidates[1]
 
 
+def init_manifest(
+    manifest_path: Path,
+    repo_root: Path,
+    force: bool = False,
+) -> bool:
+    """Initialise a skills-manifest.json file in the repository.
+
+    Copies from starter-examples/skills/skills-manifest.json if present locally,
+    or downloads the canonical manifest from the gemini-review-action main branch.
+
+    Args:
+        manifest_path: Target path where the manifest will be written.
+        repo_root: Root directory of the repository.
+        force: If True, overwrite an existing manifest file.
+
+    Returns:
+        True if successfully initialised, False otherwise.
+    """
+    if manifest_path.exists() and not force:
+        console.print(f"[bold yellow]Manifest already exists:[/] {manifest_path}\n[dim]Use --force to overwrite.[/]")
+        return False
+
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    local_starter = repo_root / "starter-examples" / "skills" / "skills-manifest.json"
+    if local_starter.is_file() and local_starter.resolve() != manifest_path.resolve():
+        shutil.copyfile(local_starter, manifest_path)
+        console.print(
+            f"[bold green]✓ Initialised skills manifest from local template:[/] {manifest_path}\n"
+            f"[dim]Run 'uv run scripts/update_skills.py' to synchronise upstream skills.[/]"
+        )
+        return True
+
+    console.print(f"[cyan]Downloading default manifest from GitHub...[/]\n[dim]{DEFAULT_MANIFEST_URL}[/]")
+    try:
+        req = urllib.request.Request(
+            DEFAULT_MANIFEST_URL,
+            headers={"User-Agent": "gemini-review-action/update_skills"},
+        )
+        with urllib.request.urlopen(req, timeout=15) as response:
+            content = response.read().decode("utf-8")
+        json.loads(content)
+        manifest_path.write_text(content, encoding="utf-8")
+        console.print(
+            f"[bold green]✓ Successfully downloaded and initialised skills manifest at:[/] {manifest_path}\n"
+            f"[dim]Run 'uv run scripts/update_skills.py' to synchronise upstream skills.[/]"
+        )
+        return True
+    except Exception as e:
+        console.print(f"[bold red]Failed to download manifest:[/] {e}")
+        return False
+
+
 def load_manifest(manifest_path: Path) -> dict:
     """Load and validate the skills manifest JSON file.
 
@@ -124,6 +189,17 @@ def load_manifest(manifest_path: Path) -> dict:
     return data
 
 
+IGNORED_SYNC_PARTS = {".DS_Store", "__pycache__"}
+
+
+def is_ignored_sync_file(path: Path) -> bool:
+    """Determine whether a file path should be ignored during synchronisation.
+
+    Ignores common OS clutter (.DS_Store) and compiled Python bytecode (__pycache__, *.pyc).
+    """
+    return bool(IGNORED_SYNC_PARTS & set(path.parts)) or path.name.endswith(".pyc")
+
+
 def is_directory_identical(source: Path, target: Path) -> bool:
     """Check whether all files in source and target match in relative paths and content.
 
@@ -137,8 +213,8 @@ def is_directory_identical(source: Path, target: Path) -> bool:
     if not target.is_dir():
         return False
 
-    source_files = {p.relative_to(source): p for p in source.rglob("*") if p.is_file()}
-    target_files = {p.relative_to(target): p for p in target.rglob("*") if p.is_file()}
+    source_files = {p.relative_to(source): p for p in source.rglob("*") if p.is_file() and not is_ignored_sync_file(p)}
+    target_files = {p.relative_to(target): p for p in target.rglob("*") if p.is_file() and not is_ignored_sync_file(p)}
 
     if set(source_files.keys()) != set(target_files.keys()):
         return False
@@ -193,8 +269,8 @@ def sync_skill_directory(
             "note": "Missing SKILL.md in source directory",
         }
 
-    # Count files to copy
-    source_files = [p for p in source_skill_path.rglob("*") if p.is_file()]
+    # Count files to copy (excluding OS clutter and bytecode)
+    source_files = [p for p in source_skill_path.rglob("*") if p.is_file() and not is_ignored_sync_file(p)]
     file_count = len(source_files)
 
     target_skill_path = target_dir / skill_name
@@ -217,7 +293,11 @@ def sync_skill_directory(
     try:
         if target_skill_path.exists():
             shutil.rmtree(target_skill_path)
-        shutil.copytree(source_skill_path, target_skill_path)
+        shutil.copytree(
+            source_skill_path,
+            target_skill_path,
+            ignore=shutil.ignore_patterns(".DS_Store", "__pycache__", "*.pyc"),
+        )
         return {
             "skill": skill_name,
             "status": "updated",
@@ -462,6 +542,16 @@ def main() -> int:
         help="Optional repository name filter (e.g. 'google/skills').",
     )
     parser.add_argument(
+        "--init",
+        action="store_true",
+        help="Initialise default skills-manifest.json (copied from starter-examples or downloaded from GitHub).",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite existing skills-manifest.json when running with --init.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Simulate the update process without modifying target directories.",
@@ -471,6 +561,9 @@ def main() -> int:
 
     manifest_path = resolve_manifest_path(repo_root, args.manifest)
     target_dir = resolve_target_dir(repo_root, args.target_dir)
+
+    if args.init:
+        return 0 if init_manifest(manifest_path, repo_root, force=args.force) else 1
 
     is_action_repo = (repo_root / "starter-examples" / "skills").is_dir()
     repo_type_label = (
@@ -492,8 +585,9 @@ def main() -> int:
     except FileNotFoundError:
         console.print(
             f"[bold red]Skills manifest not found:[/] {manifest_path}\n"
-            f"[yellow]To configure skills in this repository, create a manifest at '{manifest_path}' "
-            f"(or copy 'starter-examples/skills/skills-manifest.json').[/]"
+            "[yellow]To initialise the default curated manifest, run:\n"
+            "  uv run scripts/update_skills.py --init\n"
+            "Or copy 'starter-examples/skills/skills-manifest.json' from gemini-review-action.[/]"
         )
         return 1
     except Exception as e:
