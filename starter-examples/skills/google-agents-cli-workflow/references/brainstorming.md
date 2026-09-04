@@ -5,8 +5,10 @@ Turn the user's idea into an agreed `.agents-cli-spec.md` through a collaborativ
 
 ## HARD-GATE
 
-Do NOT study samples, scaffold, run `agents-cli create`, or write any code until the user has
-approved the spec. This applies even to "obvious" agents — unexamined assumptions cause the most
+Do NOT clone a sample, scaffold, run `agents-cli create`, or write any code until the user has
+approved the spec. **Reading the recipe index is exempt** — it is not "studying a sample". Scan it
+before your first reply and name any matching recipe there, even when that reply is only a
+clarifying question. This applies even to "obvious" agents — unexamined assumptions cause the most
 wasted work.
 
 ## Scale to complexity
@@ -43,8 +45,8 @@ spec body**. Always check the axes users most often leave implicit: **data sourc
 schedule/cadence, and which model.**
 
 Non-interactive ≠ skip the thinking. For non-trivial agents you must still record the approaches you
-weighed and the one you chose, flag oversized scope, and route any retrieval need to the RAG recipe —
-then commit to a design. The user-review gate is how they catch a wrong assumption.
+weighed and the one you chose, flag oversized scope, and route any capability the scaffold doesn't
+ship to its recipe (`/google-agents-cli-adk-code` → `references/samples.md`) — then commit to a design. The user-review gate is how they catch a wrong assumption.
 
 ## Propose 2–3 approaches (non-trivial agents)
 
@@ -56,12 +58,13 @@ or override. Typical axes:
 - **Single-agent vs multi-agent / orchestration** — one agent with tools, or a coordinator delegating
   to sub-agents.
 - **Tool / integration choices** — which APIs or data sources, and how auth is handled.
-- **Retrieval / RAG** — if any capability is "search / look up over our docs, incidents, tickets, or
-  knowledge base", that is retrieval: route it to the `rag-vector-search` / `rag-agent-search`
-  clone-and-study recipes and list the recipe in the spec's Reference Samples (RAG is not a scaffold
-  flag, and is never a removed `agentic_rag` template / `--datastore` / `infra datastore`). Don't
-  silently downgrade a stated retrieval need to a plain tool call, and flag retrieval even when it's
-  deferred to a later phase.
+- **Capabilities the scaffold doesn't ship** — retrieval ("search / look up over our docs, incidents,
+  tickets, or knowledge base"), sandboxed shell or code execution, memory across sessions, approval
+  gates before risky actions, OAuth consent, safety guardrails, event-driven or scheduled runs. Each
+  is a **clone-and-study recipe, never a scaffold flag**: look the need up in the topic index in
+  `/google-agents-cli-adk-code` → `references/samples.md` and list every matching recipe in the spec's
+  Reference Samples, to study in Phase 1. Don't silently downgrade a stated need to a plain tool
+  call, and flag it even when it's deferred to a later phase.
 - **Deployment shape** — prototype-first (recommended) vs a deployment target.
 
 ## Present the design in sections

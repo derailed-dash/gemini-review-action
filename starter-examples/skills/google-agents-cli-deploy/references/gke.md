@@ -38,6 +38,8 @@ This lets pods authenticate as `app_sa` without service account keys — same se
 
 ## Session Types
 
+> **ADK projects.** The session wiring below (`shared://session`, `app_utils/services.py`) is ADK scaffold behavior. The Cloud SQL infrastructure it uses is framework-agnostic.
+
 | Type | Configuration | Use Case |
 |------|--------------|----------|
 | **In-memory** | Default (`shared://session` resolved by `app_utils/services.py` (in-memory)) | Local dev only; lost on pod restart |
@@ -50,9 +52,13 @@ Cloud SQL in GKE uses a **proxy sidecar container** in the pod (unlike Cloud Run
 
 ## FastAPI Endpoints
 
-Scaffolded apps serve the ADK HTTP surface (`/run_sse`, `/apps/...`), A2A routes under `/a2a/{app_name}` (JSON-RPC + agent card — A2A is built into every ADK agent), and `/feedback`. Exact routes vary by template; check `app/fast_api_app.py`.
+Every scaffolded Python project serves `uvicorn app.fast_api_app:app` on port 8080; which routes that app exposes depends on the framework, so check `app/fast_api_app.py`.
+
+> **ADK projects.** The app serves the ADK HTTP surface (`/run_sse`, `/apps/...`) plus A2A routes under `/a2a/{app_name}` (JSON-RPC + agent card — A2A is built into every ADK agent).
 
 ## Testing Your Deployed Agent
+
+> **ADK projects.** The session + `/run_sse` calls below are the ADK HTTP surface. On other frameworks, port-forward the same way and call your app's own routes (e.g. the A2A endpoint).
 
 GKE LoadBalancer services are **internal by default** — they are not accessible from outside the VPC. Use `kubectl port-forward` to access the service locally:
 

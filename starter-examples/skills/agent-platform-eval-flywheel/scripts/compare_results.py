@@ -80,7 +80,9 @@ def compare(
             "candidate_pass": cv.get("pass_rate"),
             "delta_pass": d_pass,
         }
-        is_regression = (d_mean is not None and d_mean < -threshold) or (d_pass is not None and d_pass < -threshold)
+        is_regression = (d_mean is not None and d_mean < -threshold) or (
+            d_pass is not None and d_pass < -threshold
+        )
         row["regressed"] = is_regression
         if is_regression:
             regressed = True
@@ -108,7 +110,11 @@ def _format_table(rows: list[dict[str, Any]]) -> str:
         if isinstance(v, bool):
             return "YES" if v else ""
         if isinstance(v, float):
-            return f"{v:.4f}" if key not in ("delta_mean", "delta_pass") else _format_signed(v)
+            return (
+                f"{v:.4f}"
+                if key not in ("delta_mean", "delta_pass")
+                else _format_signed(v)
+            )
         if v is None:
             return "—"
         return str(v)
@@ -130,12 +136,16 @@ def _format_table(rows: list[dict[str, Any]]) -> str:
 
     line1 = "  ".join(c.ljust(widths[c]) for c in header)
     line2 = "  ".join("-" * widths[c] for c in header)
-    body = "\n".join("  ".join(_cell(r, name_map[c]).ljust(widths[c]) for c in header) for r in rows)
+    body = "\n".join(
+        "  ".join(_cell(r, name_map[c]).ljust(widths[c]) for c in header) for r in rows
+    )
     return f"{line1}\n{line2}\n{body}\n"
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Diff two Agent Platform Eval result JSON files side by side.")
+    parser = argparse.ArgumentParser(
+        description="Diff two Agent Platform Eval result JSON files side by side."
+    )
     parser.add_argument(
         "--baseline",
         "-b",
@@ -183,7 +193,8 @@ def main():
         print(_format_table(rows))
         if not ok:
             print(
-                f"REGRESSION: at least one metric dropped by more than {args.threshold:+.4f} vs. baseline.",
+                f"REGRESSION: at least one metric dropped by more than"
+                f" {args.threshold:+.4f} vs. baseline.",
                 file=sys.stderr,
             )
 

@@ -192,7 +192,7 @@ class DraftOutput(BaseModel):
 
 writer = LlmAgent(
     name="writer",
-    model="gemini-flash-latest",
+    model="gemini-3.7-flash",
     instruction="Write a draft based on the user's request.",
     output_schema=DraftOutput,  # Always set for structured output
     output_key="draft",         # Also store in state['draft']

@@ -104,7 +104,9 @@ def _extract_agent_configs(
     return configs
 
 
-def _segment_into_turns(events: list[dict[str, Any]], default_agent_id: str) -> list[dict[str, Any]]:
+def _segment_into_turns(
+    events: list[dict[str, Any]], default_agent_id: str
+) -> list[dict[str, Any]]:
     """Segment a flat event list into ConversationTurns.
 
     A new turn starts with each user message (matching AgentData.from_session()
@@ -206,7 +208,9 @@ def parse_file(filepath: str) -> list[dict[str, Any]]:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Parse ADK session traces into Agent Platform Eval dataset format.")
+    parser = argparse.ArgumentParser(
+        description="Parse ADK session traces into Agent Platform Eval dataset format."
+    )
     parser.add_argument(
         "--input",
         "-i",
@@ -239,7 +243,9 @@ def main():
         if not os.path.isdir(args.input_dir):
             print(f"ERROR: Directory not found: {args.input_dir}", file=sys.stderr)
             sys.exit(1)
-        json_files = sorted(f for f in os.listdir(args.input_dir) if f.endswith(".json"))
+        json_files = sorted(
+            f for f in os.listdir(args.input_dir) if f.endswith(".json")
+        )
         if not json_files:
             print(f"ERROR: No .json files in {args.input_dir}", file=sys.stderr)
             sys.exit(1)

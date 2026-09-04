@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "1.0",
+  "description": "Upstream tracking manifest for curated starter skills in gemini-review-action",
+  "repositories": [
+    {
+      "name": "google/skills",
+      "url": "https://github.com/google/skills.git",
+      "branch": "main",
+      "skills_root": "skills/cloud",
+      "skills": [
+        "agent-platform-deploy",
+        "agent-platform-endpoint-management",
+        "agent-platform-eval-flywheel",
+        "agent-platform-migrate-from-ai-studio",
+        "agent-platform-model-registry",
+        "agent-platform-prompt-management",
+        "agent-platform-rag-engine-management",
+        "agent-platform-skill-registry",
+        "agent-platform-tuning",
+        "bigquery-basics",
+        "cloud-run-basics",
+        "gemini-agents-api",
+        "gemini-interactions-api",
+        "gke-basics",
+        "google-cloud-recipe-auth",
+        "google-cloud-waf-operational-excellence",
+        "google-cloud-waf-performance-optimization",
+        "google-cloud-waf-reliability",
+        "google-cloud-waf-security"
+      ]
+    },
+    {
+      "name": "google/agents-cli",
+      "url": "https://github.com/google/agents-cli.git",
+      "branch": "main",
+      "skills_root": "skills",
+      "skills": [
+        "google-agents-cli-adk-code",
+        "google-agents-cli-deploy",
+        "google-agents-cli-eval",
+        "google-agents-cli-observability",
+        "google-agents-cli-publish",
+        "google-agents-cli-scaffold",
+        "google-agents-cli-workflow"
+      ]
+    },
+    {
+      "name": "google-gemini/gemini-skills",
+      "url": "https://github.com/google-gemini/gemini-skills.git",
+      "branch": "main",
+      "skills_root": "skills",
+      "skills": [
+        "gemini-api-dev"
+      ]
+    }
+  ],
+  "local_skills": [
+    {
+      "name": "bigquery",
+      "description": "Composite BigQuery routing and standards skill maintained directly in this repository."
+    }
+  ]
+}

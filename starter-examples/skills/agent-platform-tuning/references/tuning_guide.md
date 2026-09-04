@@ -32,7 +32,7 @@ The size and quality of your dataset should dictate your parameter choices. Refe
 
 - **Overfitting**: If validation loss starts increasing while training loss decreases, you are overfitting. Reduce epochs or decrease the learning rate.
 - **Underfitting**: If both training and validation loss remain high, increase the learning rate or use more epochs.
-- **Validation**: Always use a validation set to monitor performance. If not provided, a 10-20% split is highly recommended.
+- **Validation**: Always use a validation set to monitor performance. If not provided, a 10% split is highly recommended; do not go above it, for the reason given in [Data Preparation Guide](data_prep.md#sizing-the-validation-split).
 - **Checkpoints**: The final model is always saved to `<output_uri>/postprocess/node-0/checkpoints/final`.
 
 ## Hardware and Limitations

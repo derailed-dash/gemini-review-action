@@ -1,8 +1,8 @@
 # BigQuery Agent Analytics Plugin
 
-> **Opt-in.** Enable with `--bq-analytics` at scaffold time, or add manually to `app/agent.py`.
+> **ADK projects. Opt-in.** Enable with `--bq-analytics` at scaffold time, or add manually to `app/agent.py`.
 
-An optional plugin that logs structured agent events directly to BigQuery via the Storage Write API. Enables:
+An optional ADK plugin that logs structured agent events directly to BigQuery via the Storage Write API. Enables:
 
 - **Conversational analytics** — session flows, user interaction patterns
 - **LLM-as-judge evals** — structured data for evaluation pipelines

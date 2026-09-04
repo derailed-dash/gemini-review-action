@@ -8,21 +8,24 @@ Agent Runtime uses **container-based deployment**: `agents-cli deploy` packages 
 
 File selection honors the project-root `.gcloudignore`, else the project-root `.gitignore` (nested `.gitignore` files are not consulted).
 
-**App object:** `fast_api_app.py` builds a single FastAPI `app` via
-`get_fast_api_app(web=True, lifespan=...)`. The lifespan builds one `Runner`
-from the shared session/artifact services (`app_utils/services.py`) and mounts
-A2A routes (`attach_a2a_routes`); `attach_reasoning_engine_routes(app)` adds the
-reasoning_engine contract routes. There is no top-level `AgentEngineApp`/`AdkApp`
-deployment entrypoint anymore — the container serves HTTP directly (the
-reasoning_engine adapter still constructs an `AdkApp` internally to dispatch the
-native `:streamQuery`/`:query` contract).
+**App object:** the container runs `uvicorn app.fast_api_app:app`, the same
+entrypoint as Cloud Run and GKE — there is no top-level `AgentEngineApp`/`AdkApp`
+deployment entrypoint anymore, the container serves HTTP directly. Which routes
+that app exposes depends on the framework; check `app/fast_api_app.py`.
+`agents-cli deploy` always labels the deployment `agent_framework = "google-adk"`
+(see `service.tf`) — that label picks the Console playground, it does not
+constrain the container.
 
-The container serves the ADK HTTP surface (`/run_sse`, `/apps/...`), the A2A
-routes under `/a2a/{app_name}` (JSON-RPC + agent card), `/feedback`, and the
-reasoning_engine adapter routes `/api/reasoning_engine` +
-`/api/stream_reasoning_engine` (the native `:streamQuery`/`:query` contract used
-by the Console Playground and Gemini Enterprise ADK registration). It deploys as
-the `google-adk` agent framework (see `service.tf`).
+> **ADK projects.** `fast_api_app.py` builds the FastAPI `app` via
+> `get_fast_api_app(web=True, lifespan=...)`. The lifespan builds one `Runner`
+> from the shared session/artifact services (`app_utils/services.py`) and mounts
+> A2A routes (`attach_a2a_routes`); `attach_reasoning_engine_routes(app)` adds
+> the reasoning_engine contract routes (the adapter constructs an `AdkApp`
+> internally to dispatch the native `:streamQuery`/`:query` contract). So the
+> container serves the ADK HTTP surface (`/run_sse`, `/apps/...`), the A2A routes
+> under `/a2a/{app_name}` (JSON-RPC + agent card), and the reasoning_engine
+> adapter routes `/api/reasoning_engine` + `/api/stream_reasoning_engine` (used
+> by the Console Playground and Gemini Enterprise ADK registration).
 
 ### The `/api` HTTP passthrough
 
@@ -44,9 +47,10 @@ https://{location}-aiplatform.googleapis.com/reasoningEngines/v1/{resource}/api/
 `{agent_directory}` is the app name (the project's `agent_directory`, recorded in
 `deployment_metadata.json`). This is the exact URL `deploy` advertises on
 success and `run` constructs for `--mode a2a` against an Agent Runtime URL — both
-authenticate with your Google credentials. On Agent Runtime, `publish` registers
-with **ADK** (`:streamQuery` against the reasoning-engine resource name), not
-this card URL.
+authenticate with your Google credentials. On Agent Runtime, `publish` defaults
+to **ADK** registration (`:streamQuery` against the reasoning-engine resource
+name) rather than this card URL; pass `--registration-type a2a` if your container
+serves only A2A.
 
 ## Deploying
 
@@ -97,7 +101,7 @@ If deployment times out but the engine was created, manually populate this file 
 # Local mode (uses local agent instance)
 agents-cli playground
 
-# Query your deployed Agent Runtime remotely (ADK agent)
+# Query your deployed Agent Runtime remotely (ADK projects; use --mode a2a otherwise)
 agents-cli run --url https://LOCATION-aiplatform.googleapis.com/v1/projects/PROJECT/locations/LOCATION/reasoningEngines/ID --mode adk "Hello, what can you do?"
 ```
 
@@ -106,9 +110,9 @@ agents-cli run --url https://LOCATION-aiplatform.googleapis.com/v1/projects/PROJ
 To query Agent Runtime programmatically:
 
 ```python
-import vertexai
+import agentplatform
 
-client = vertexai.Client(location="us-east1")
+client = agentplatform.Client(location="us-east1")
 agent = client.agent_engines.get(name="projects/PROJECT/locations/LOCATION/reasoningEngines/ENGINE_ID")
 
 async for event in agent.async_stream_query(message="Hello!", user_id="test"):
@@ -116,6 +120,10 @@ async for event in agent.async_stream_query(message="Hello!", user_id="test"):
 ```
 
 ## Session & Artifact Services
+
+> **ADK projects.** The two paragraphs below are the ADK scaffold's session and
+> artifact wiring. The environment-variable sources at the end of this section
+> apply to any framework.
 
 Agent Runtime always uses in-memory sessions at scaffold time; at runtime `app_utils/services.py` upgrades to `VertexAiSessionService` when Agent Engine injects `GOOGLE_CLOUD_AGENT_ENGINE_ID`. `get_fast_api_app` receives the `shared://session` URI, resolved by `services.py`.
 
@@ -125,7 +133,7 @@ Environment variables set during deployment come from `agents-cli deploy` (the C
 
 ### Memory Bank
 
-To enable cross-session memory on Agent Runtime, configure `memory_bank_config` via `context_spec`. See the [`memory-bank` sample](https://github.com/google/adk-samples/tree/main/python/agents/memory-bank) for the full pattern.
+To enable cross-session memory on Agent Runtime, configure `memory_bank_config` via `context_spec`. See the ADK [`cross-session-memory` recipe](https://github.com/google/adk-samples/tree/main/core/python/cross-session-memory) for the full pattern.
 
 ## Networking (PSC Interface)
 

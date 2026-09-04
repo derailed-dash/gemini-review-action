@@ -19,7 +19,10 @@ Specific rules — not just generic statements.
 Measurable outcomes for evaluation.
 
 ## Reference Samples
-Check the Notable Samples in Phase 1 — list any that match this use case.
+Recipes to study in Phase 1, from the topic index (`/google-agents-cli-adk-code` →
+`references/samples.md`). List every one that looks relevant — several is normal and better than
+guessing at one.
+- `core/python/<recipe>` — <what you expect to take from it>
 ```
 
 Optional sections for more detailed specs: **Edge Cases to Handle**, **Architecture & Sub-Agents**, **Data Sources & Auth**, **Non-Functional Requirements**.

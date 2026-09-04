@@ -3,8 +3,8 @@
 Canonical formats for evaluation datasets in the Agent Platform Evaluation
 SDK. The summary below covers the type tree as of the version this skill
 targets — for the live, authoritative definitions see the public SDK source:
-[`types/evals.py`](https://github.com/googleapis/python-aiplatform/blob/main/vertexai/_genai/types/evals.py)
-and [`types/common.py`](https://github.com/googleapis/python-aiplatform/blob/main/vertexai/_genai/types/common.py).
+[`types/evals.py`](https://github.com/googleapis/python-aiplatform/blob/main/agentplatform/_genai/types/evals.py)
+and [`types/common.py`](https://github.com/googleapis/python-aiplatform/blob/main/agentplatform/_genai/types/common.py).
 
 ## Core Types
 
@@ -15,9 +15,10 @@ EvaluationDataset
 EvalCase
 ├── prompt: Content                          # Single-turn: the user query
 ├── responses: list[ResponseCandidate]       # Single-turn: model response(s); list to support multi-candidate eval
-├── reference: ResponseCandidate             # Ground truth (for reference-based metrics)
+├── reference: ResponseCandidate             # Ground truth, needed by `final_response_match`
+├── context: str | Content                   # Source text, needed by `grounding`
 ├── agent_data: AgentData                    # Multi-turn: full conversation trajectory
-├── rubric_groups: dict[str, RubricGroup]    # Per-case rubrics; key is referenced from LLMMetric.rubric_group_name
+├── rubric_groups: dict[str, RubricGroup]    # Per-case rubrics; graded by managed rubric metrics
 └── (extra fields allowed)                   # Custom fields for custom metrics
 
 ResponseCandidate
@@ -195,7 +196,7 @@ and use one entry in `agents`.
 
 ## Per-Case Rubrics (`rubric_groups`)
 
-`EvalCase.rubric_groups` is a dict of named rubric groups attached to a specific eval case. Use this when you want a rubric-based `LLMMetric` to evaluate against case-specific criteria rather than a globally-defined rubric. The metric references a group by name via `LLMMetric.rubric_group_name`; the **name on the metric must match a key under `rubric_groups`** in the matching `EvalCase`.
+`EvalCase.rubric_groups` attaches case-specific criteria, graded one pass/fail verdict per rubric by a managed rubric metric (see `metrics-guide.md`). Write them on the inference-input dataset; `eval generate` carries them onto the trace.
 
 ```json
 {
@@ -206,8 +207,7 @@ and use one entry in `agents`.
       "rubric_groups": {
         "booking_rubrics": {
           "rubrics": [
-            {"rubric_id": "confirmation_check", "content": {"property": {"description": "The model must confirm the booking and provide a reference number."}}},
-            {"rubric_id": "no_speculation",     "content": {"property": {"description": "The response must not speculate about prices or availability beyond what tools returned."}}}
+            {"rubric_id": "confirmation_check", "content": {"property": {"description": "The model must confirm the booking and provide a reference number."}}}
           ]
         }
       }
@@ -216,17 +216,14 @@ and use one entry in `agents`.
 }
 ```
 
-In `eval_config.yaml`, an `LLMMetric` then references the group by name:
+List a managed rubric metric in `metrics_to_run`; with more than one group per case, select it with `metric_spec_parameters.rubric_group_key` (see *Managed Metric Parameters* in `metrics-guide.md`). Results carry `rubric_verdicts` per metric (`evaluated_rubric.rubric_id`, `verdict`, `reasoning`); the score is the fraction passed.
 
-```yaml
-custom_metrics:
-  - name: booking_quality
-    rubric_group_name: booking_rubrics    # must match the key above
-    prompt_template: |
-      ...
-```
+Service constraints:
 
-If `rubric_group_name` is omitted on the metric, the metric runs without per-case rubrics. If the name is set but doesn't match any key in the case's `rubric_groups`, the rubrics for that case are simply not applied (no error).
+- 400 when the key is not on the case: `rubric_group_key '<name>' not found in instance.rubric_groups`.
+- 400 with more than one group and no key: `Multiple rubric groups provided in instance but no rubric_group_key specified in metric spec`.
+- Single-turn only: a single-turn metric on a multi-turn trace 400s with `Single-turn metric '<name>_v1' received agent_eval_data with N turns`, and `multi_turn_task_success` accepts the key but grades its own rubrics (hash IDs). Grade multi-turn criteria with a local `custom_function_file` judge (`metrics-guide.md`); it receives `rubric_groups` in `instance`.
+- Metrics apply to every case, so split single-turn and multi-turn cases into separate dataset + config pairs.
 
 ## Common Mistakes
 

@@ -71,7 +71,7 @@ custom_metrics:
       Image: {response}
 
       Return JSON: {"score": <0.0-1.0>, "explanation": "<reason>"}
-    judge_model: gemini-flash-latest
+    judge_model: gemini-3.7-flash
     judge_model_sampling_count: 3
 ```
 
@@ -125,18 +125,18 @@ custom_metrics:
 
       User input: {prompt}
       Agent response: {response}
-    judge_model: gemini-flash-latest
+    judge_model: gemini-3.7-flash
     judge_model_sampling_count: 3
 ```
 
-Run with `agents-cli eval grade --config tests/eval/eval_config.yaml`.
+Run with `agents-cli eval run --config tests/eval/eval_config.yaml`.
 
 ---
 
 ## Notes
 
 - **Built-in adaptive metrics (`final_response_quality`, etc.) skip media parts.** They extract only `.text` parts when constructing the judge prompt. Use a custom `LLMMetric` for true multimodal grading.
-- **Choose a vision-capable `judge_model`.** `gemini-flash-latest` and `gemini-pro-latest` both handle images and video; verify capability before relying on it.
+- **Choose a vision-capable `judge_model`.** `gemini-3.7-flash` handles images and video; verify capability before relying on it.
 - **Sampling count** (`judge_model_sampling_count`) of 3–5 reduces variance for multimodal judges, which can be noisier than text-only.
 
 For the full custom-metric field reference, see `references/metrics-guide.md`. For dataset schema and the `inline_data` / `file_data` part types, see `references/dataset_schema.md`.

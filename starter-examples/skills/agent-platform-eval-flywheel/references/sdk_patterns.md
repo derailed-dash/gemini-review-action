@@ -1,6 +1,6 @@
 # Agent Platform Evaluation SDK Patterns
 
-Code patterns for common evaluation scenarios using `agentplatform._genai.evals`.
+Code patterns for common evaluation scenarios using `agentplatform._genai.evals`
 
 ## Initialization
 
@@ -10,6 +10,10 @@ from agentplatform import types
 from google.genai import types as genai_types
 
 client = agentplatform.Client(project="{PROJECT_ID}", location="{LOCATION}")
+
+# EvalCase prompt/reference/response values are Content objects, not plain
+# strings. Use genai_types.UserContent(str) / ModelContent(str), which wrap
+# the string in a Part and set the role. Each pattern below is self-contained.
 ```
 
 For Gemini 3+ models, use `location="global"`.
@@ -21,9 +25,13 @@ Simplest case — evaluate prompt/response pairs against predefined metrics.
 ```python
 dataset = types.EvaluationDataset(eval_cases=[
     types.EvalCase(
-        prompt="What causes rain?",
-        response="Rain is caused by water evaporating...",
-        reference="Rain forms when water vapor condenses...",
+        prompt=genai_types.UserContent("What causes rain?"),
+        responses=[types.ResponseCandidate(
+            response=genai_types.ModelContent(
+                "Rain is caused by water evaporating..."))],
+        reference=types.ResponseCandidate(
+            response=genai_types.ModelContent(
+                "Rain forms when water vapor condenses...")),
     ),
 ])
 
@@ -103,7 +111,7 @@ Generate user scenarios when no eval data exists.
 
 ```python
 # Step 1: Generate scenarios
-scenarios = client.evals.generate_user_scenarios(
+scenarios = client.evals.generate_conversation_scenarios(
     agents={
         "agent": types.evals.AgentConfig(
             agent_id="agent",
@@ -196,10 +204,16 @@ Compare two models using `calculate_win_rates()`.
 ```python
 # Same dataset, two different model responses
 dataset_a = types.EvaluationDataset(eval_cases=[
-    types.EvalCase(prompt="Explain quantum computing", response="Model A response..."),
+    types.EvalCase(prompt=genai_types.UserContent("Explain quantum computing"),
+                   responses=[types.ResponseCandidate(
+                       response=genai_types.ModelContent(
+                           "Model A response..."))]),
 ])
 dataset_b = types.EvaluationDataset(eval_cases=[
-    types.EvalCase(prompt="Explain quantum computing", response="Model B response..."),
+    types.EvalCase(prompt=genai_types.UserContent("Explain quantum computing"),
+                   responses=[types.ResponseCandidate(
+                       response=genai_types.ModelContent(
+                           "Model B response..."))]),
 ])
 
 result_a = client.evals.evaluate(dataset=dataset_a, metrics=[types.RubricMetric.GENERAL_QUALITY])
@@ -214,6 +228,9 @@ win_rates = calculate_win_rates(result_a, result_b)
 
 ```python
 result = client.evals.evaluate(dataset=dataset, metrics=metrics)
+
+# Interactive HTML report (recommended)
+result.show()
 
 # Summary level
 for summary in result.summary_metrics:
@@ -231,6 +248,75 @@ for case in result.eval_case_results:
                 for v in metric_result.rubric_verdicts:
                     print(f"    rubric {v.evaluated_rubric.rubric_id}: "
                           f"{'PASS' if v.verdict else 'FAIL'} - {v.reasoning}")
+```
+
+## Pattern 8: Managed Agent Evaluation (Gemini Agents API)
+
+Evaluate agents built with the
+[Managed Agents API](https://docs.cloud.google.com/gemini-enterprise-agent-platform/build/managed-agents).
+This pattern covers the full workflow: generate scenarios, run inference,
+and evaluate — all using the agent's resource name.
+
+```python
+import agentplatform
+from agentplatform import types
+
+client = agentplatform.Client(project="PROJECT_ID", location="global")
+
+AGENT_RESOURCE = "projects/PROJECT_ID/locations/global/agents/AGENT_ID"
+
+# Step 1: Generate conversation scenarios from the agent's configuration.
+scenarios = client.evals.generate_conversation_scenarios(
+    agent=AGENT_RESOURCE,
+    config={
+        "user_scenario_count": 5,
+        "simulation_instruction": "Create agent scenarios",
+    },
+)
+scenarios.show()
+
+# Step 2: Run inference, execute the agent against each scenario.
+inference_results = client.evals.run_inference(
+    agent=AGENT_RESOURCE,
+    src=scenarios,
+    config={"user_simulator_config": {"max_turn": 3}},
+)
+inference_results.show()
+
+# Step 3: Evaluate the conversation traces.
+result = client.evals.evaluate(
+    dataset=inference_results,
+    metrics=[types.RubricMetric.MULTI_TURN_TASK_SUCCESS],
+    agent=AGENT_RESOURCE,
+)
+result.show()
+```
+
+### Evaluate existing interactions
+
+You can also evaluate interactions already recorded via the Interactions API,
+without re-running inference.
+
+```python
+interactions_dataset = types.EvaluationDataset(
+    eval_cases=[
+        types.EvalCase(
+            interactions_data_source=types.InteractionsDataSource(
+                interaction="projects/PROJECT_ID/locations/global/interactions/INTERACTION_ID",
+                gemini_agent_config=types.GeminiAgentConfig(
+                    gemini_agent=AGENT_RESOURCE,
+                ),
+            ),
+        ),
+    ]
+)
+
+result = client.evals.evaluate(
+    dataset=interactions_dataset,
+    metrics=[types.RubricMetric.MULTI_TURN_TASK_SUCCESS],
+    agent=AGENT_RESOURCE,
+)
+result.show()
 ```
 
 ## Error Handling

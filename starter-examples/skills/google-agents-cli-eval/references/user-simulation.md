@@ -1,5 +1,7 @@
 # User Simulation for Dynamic Evaluation
 
+> **ADK projects.** `agents-cli eval dataset synthesize` loads and runs the agent through ADK, so it is unavailable on other frameworks. The rest of the eval loop (`eval generate`, `eval grade`, metrics, dataset schema) is framework-agnostic.
+
 > File paths below reference the scaffolded layout. Adjust for your project structure if not using `/google-agents-cli-scaffold`.
 
 ## When to Use
@@ -67,27 +69,21 @@ If `synthesize` fails for some scenarios, the failing cases land in the output w
 
 ## Compatible Metrics
 
-Simulated conversations have no ground-truth response, so only reference-free metrics work:
+Synthesized traces are multi-turn and have no ground-truth response, so only the three multi-turn metrics apply (every other built-in 400s on a multi-turn trace, and reference-based metrics have nothing to match against):
 
 | Metric | Why it works |
 |--------|--------------|
-| `hallucination` | Reference-free; checks claims against tool output |
-| `safety` | Reference-free; static-rubric policy check |
-| `final_response_reference_free` | Reference-free by design |
-| `tool_use_quality` | Adaptive rubric — no expected trajectory needed |
 | `multi_turn_task_success` | Adaptive rubric judges whether the simulated user's goal was met |
 | `multi_turn_trajectory_quality` | Adaptive rubric on agent reasoning across turns |
 | `multi_turn_tool_use_quality` | Adaptive rubric on tool calls across turns |
-
-Reference-required metrics (e.g., `final_response_match`) cannot be used: simulated conversations have no ground-truth response to match against.
 
 Example `tests/eval/eval_config.yaml` for grading synthesized traces:
 
 ```yaml
 metrics_to_run:
-  - hallucination
-  - safety
   - multi_turn_task_success
+  - multi_turn_trajectory_quality
+  - multi_turn_tool_use_quality
 ```
 
 Run with:
@@ -96,7 +92,7 @@ Run with:
 agents-cli eval grade --config tests/eval/eval_config.yaml
 ```
 
-The `eval_config.yaml` file is read by `eval grade` only — `eval dataset synthesize` ignores it.
+The `eval_config.yaml` file is read by `eval run`, `eval grade`, and `eval submit`. `eval dataset synthesize` ignores it.
 
 ---
 

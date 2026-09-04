@@ -16,9 +16,13 @@ Scaffolded projects include a `Dockerfile` using single-stage build with `uv` fo
 
 ## FastAPI Endpoints
 
-Scaffolded apps serve the ADK HTTP surface (`/run_sse`, `/apps/...`), A2A routes under `/a2a/{app_name}` (JSON-RPC + agent card — A2A is built into every ADK agent), and `/feedback`. Exact routes vary by template; check `app/fast_api_app.py`.
+Every scaffolded Python project serves `uvicorn app.fast_api_app:app` on port 8080; which routes that app exposes depends on the framework, so check `app/fast_api_app.py`.
+
+> **ADK projects.** The app serves the ADK HTTP surface (`/run_sse`, `/apps/...`) plus A2A routes under `/a2a/{app_name}` (JSON-RPC + agent card — A2A is built into every ADK agent).
 
 ## Session Types
+
+> **ADK projects.** The session wiring below (`shared://session`, `app_utils/services.py`) is ADK scaffold behavior. The Cloud SQL infrastructure it uses is framework-agnostic.
 
 | Type | Configuration | Use Case |
 |------|--------------|----------|

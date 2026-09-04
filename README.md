@@ -135,6 +135,8 @@ The action comes pre-packaged with a comprehensive set of default skills that ar
 *   **Google Cloud Best Practices**: Official architecture patterns, operational excellence, reliability, performance, security, and GCS/Cloud Run/GKE setup.
 *   **Data Analytics**: BigQuery query optimization, BigFrames, property graphs, and time-series forecasting.
 
+All curated starter skills are tracked declaratively in [skills-manifest.json](starter-examples/skills/skills-manifest.json) and can be updated from their upstream sources using `uv run python scripts/update_skills.py`.
+
 #### 2. Adding Custom Skills to Your Repository
 To add project-specific coding standards or team rules that your PR reviewer should check against:
 1.  Create a folder named `.agents/skills/` at the root of your repository.
@@ -149,6 +151,35 @@ To add project-specific coding standards or team rules that your PR reviewer sho
     Write your detailed rules here...
     ```
 4.  Commit and push these files. The PR review agent will automatically detect your project's custom guidelines and invoke them when reviewing relevant code changes.
+
+##### Coexistence with Upstream Skills & `local_skills`
+If your repository mixes upstream skills with custom local skills inside `.agents/skills/`:
+- **Unmanaged Directories Are Safe:** `scripts/update_skills.py` only synchronises the specific skills listed under `"skills"` for each configured repository. It never deletes, overwrites, or alters custom skill directories.
+- **Declaring `local_skills` in the Manifest:** You can optionally document locally maintained skills under `"local_skills"` in your `skills-manifest.json`:
+  ```json
+  {
+    "version": "1.0",
+    "repositories": [ ... ],
+    "local_skills": [
+      {
+        "name": "my-react-rules",
+        "description": "Internal team standards maintained directly in this repository."
+      }
+    ]
+  }
+  ```
+  When declared, the updater will explicitly acknowledge them in the terminal summary and confirm they are preserved locally without touching upstream Git repositories.
+
+##### Synchronising Upstream Skills in Consumer Repositories
+If your team wants to pull and track curated agent skills directly in your project's `.agents/skills/` directory from official upstream repositories (such as `google/skills` or `google/agents-cli`), you can place a `skills-manifest.json` inside `.agents/` (or `.github/`) and run the skills synchroniser:
+```bash
+# Preview what would be synced into .agents/skills/
+uv run python scripts/update_skills.py --dry-run
+
+# Synchronise upstream skills into .agents/skills/
+uv run python scripts/update_skills.py
+```
+The updater automatically detects consumer repositories and defaults target paths to `.agents/skills/`.
 
 ### PR Comment History & Discussion Thread Tracking
 
@@ -697,7 +728,8 @@ Here is an overview of the directory tree and the purpose of each file:
 │   ├── prompts.py           # Prompt builders and system instruction loader
 │   ├── skills.py            # Workspace skill discovery & instruction loader
 │   └── utils.py             # File filtering, diff parsing, token counter & git utils
-├── starter-examples/        # Starter workflow files and default prompt templates
+├── scripts/                 # Developer and maintenance utility scripts
+├── starter-examples/        # Starter workflow files, default prompt templates, and skills manifest
 ├── tests/                   # Unit tests
 ├── action.yml               # GitHub Action definition (inputs, environment, and steps)
 ├── CONTRIBUTING.md          # Collaboration guidelines for developers
@@ -732,6 +764,24 @@ This project uses `uv` for python environment and dependency management. To conf
    Run the unit test suite with `pytest`:
    ```bash
    uv run pytest
+   ```
+
+4. **Refreshing Skills from Upstream (Action & Consumer Repositories):**
+   The skills updater script includes automatic repository detection:
+   - **In this Action Repository:** Updates starter skills bundled in `starter-examples/skills/` based on [skills-manifest.json](starter-examples/skills/skills-manifest.json).
+   - **In Consumer Repositories:** Auto-detects consumer projects (checking `.agents/skills-manifest.json` or `.github/skills-manifest.json`) and synchronises upstream skills directly into `.agents/skills/`.
+   ```bash
+   # Preview updates without writing files
+   uv run python scripts/update_skills.py --dry-run
+
+   # Update all skills from upstream Git repositories
+   uv run python scripts/update_skills.py
+
+   # Or optionally sync from a local skills cache (e.g. ~/.agents/skills)
+   uv run python scripts/update_skills.py --from-local-cache ~/.agents/skills
+
+   # Custom manifest or target directory overrides
+   uv run python scripts/update_skills.py --manifest path/to/manifest.json --target-dir path/to/skills
    ```
 
 ### Deploying & Publishing Updates

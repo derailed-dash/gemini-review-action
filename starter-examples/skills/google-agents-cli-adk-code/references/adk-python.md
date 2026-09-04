@@ -44,7 +44,7 @@ def get_weather(city: str) -> dict:
 
 my_agent = Agent(
     name="weather_agent",
-    model="gemini-flash-latest",
+    model="gemini-3.7-flash",
     instruction="You help users check the weather. Use the get_weather tool.",
     description="Provides weather information.",  # Important for multi-agent delegation
     tools=[get_weather]
@@ -59,7 +59,7 @@ from google.adk.agents import Agent
 
 agent = Agent(
     name="my_agent",
-    model="gemini-flash-latest",
+    model="gemini-3.7-flash",
     instruction="Your instructions here. Use {state_key} for dynamic injection.",
     description="Description for delegation.",
 
@@ -109,7 +109,7 @@ class Evaluation(BaseModel):
 
 evaluator = Agent(
     name="evaluator",
-    model="gemini-flash-latest",
+    model="gemini-3.7-flash",
     instruction="Evaluate the input and provide structured feedback.",
     output_schema=Evaluation,
     output_key="evaluation_result",
@@ -147,14 +147,14 @@ from google.adk.agents import SequentialAgent, Agent
 
 summarizer = Agent(
     name="summarizer",
-    model="gemini-flash-latest",
+    model="gemini-3.7-flash",
     instruction="Summarize the input.",
     output_key="summary"
 )
 
 question_gen = Agent(
     name="question_generator",
-    model="gemini-flash-latest",
+    model="gemini-3.7-flash",
     instruction="Generate questions based on: {summary}"
 )
 
@@ -202,7 +202,7 @@ refinement_loop = LoopAgent(
 )
 ```
 
-For a production LoopAgent with EscalationChecker, BuiltInPlanner, and grounding citations, see `/google-agents-cli-workflow` Phase 1.
+For a production LoopAgent with EscalationChecker, BuiltInPlanner, and grounding citations, look it up in the topic index in `references/samples.md`.
 
 ---
 
@@ -240,13 +240,13 @@ For a production LoopAgent with EscalationChecker, BuiltInPlanner, and grounding
 
     researcher = Agent(
         name="researcher",
-        model="gemini-flash-latest",
+        model="gemini-3.7-flash",
         mode="task",                        # 'chat' (default) | 'task' | 'single_turn'
         output_schema=ResearchOutput,
         description="Researches a topic.",  # required for delegation
         instruction="Research the topic, then call finish_task.",
     )
-    coordinator = Agent(name="coordinator", model="gemini-flash-latest", sub_agents=[researcher])
+    coordinator = Agent(name="coordinator", model="gemini-3.7-flash", sub_agents=[researcher])
     ```
     Modes: `task` (multi-turn, structured I/O) · `single_turn` (autonomous, no user turn). Sub-agents need a `description`; default I/O schemas (`goal`/`background` in, `result` out) are used if none set. Disabled inside graph `Workflow`s.
 
@@ -304,7 +304,7 @@ class EscalationChecker(BaseAgent):
 # Vertex AI (prod)
 # Set: GOOGLE_CLOUD_PROJECT, GOOGLE_CLOUD_LOCATION, GOOGLE_GENAI_USE_VERTEXAI=True
 
-agent = Agent(model="gemini-flash-latest", ...)
+agent = Agent(model="gemini-3.7-flash", ...)
 ```
 
 ### Other Models via LiteLLM
@@ -323,7 +323,7 @@ agent = Agent(model=LiteLlm(model="ollama_chat/llama3:instruct"), ...)
 from google.adk.models import Gemini
 
 # Vertex AI hosted Gemini (set GOOGLE_GENAI_USE_VERTEXAI=True)
-agent = Agent(model=Gemini(model="gemini-flash-latest"), ...)
+agent = Agent(model=Gemini(model="gemini-3.7-flash"), ...)
 ```
 
 Provider guides: [Anthropic](https://adk.dev/agents/models/anthropic/index.md), [Ollama](https://adk.dev/agents/models/ollama/index.md), [vLLM](https://adk.dev/agents/models/vllm/index.md), [LiteLLM](https://adk.dev/agents/models/litellm/index.md)
@@ -405,13 +405,14 @@ agent = Agent(tools=[load_web_page], ...)
 # Code execution (model-internal)
 agent = Agent(code_executor=BuiltInCodeExecutor(), ...)
 
-# Managed sandbox (Vertex AI Code Interpreter) — see /google-agents-cli-workflow Phase 1
+# Managed sandbox (Vertex AI Code Interpreter). For a per-user sandbox an agent works
+# in across sessions, this primitive is not it — see the topic index in references/samples.md
 # from google.adk.code_executors import VertexAiCodeExecutor
 # agent = Agent(code_executor=VertexAiCodeExecutor(optimize_data_file=True, stateful=True), ...)
 
 ```
 
-> **`google_search` is model-internal grounding, not a regular tool.** Mixing it with FunctionTools disables Automatic Function Calling (AFC) for all tools. If you need search alongside custom tools, consider a sub-agent architecture or a custom search function — see the [deep-search sample](https://github.com/google/adk-samples/tree/main/python/agents/deep-search) for a working pattern. For eval implications, see the eval guide's `builtin-tools-eval` reference.
+> **`google_search` is model-internal grounding, not a regular tool.** Mixing it with FunctionTools disables Automatic Function Calling (AFC) for all tools. If you need search alongside custom tools, consider a sub-agent architecture or a custom search function — see the [deep-search sample](https://github.com/google/adk-samples/tree/main/core/python/deep-search) for a working pattern. For eval implications, see the eval guide's `builtin-tools-eval` reference.
 
 ### Tool Confirmation
 
@@ -469,11 +470,11 @@ Pass `auth_scheme` + `auth_credential` from the auth helpers above for authentic
 
 ### MCP Tools
 
-Connect to MCP servers to use external tools. Use `StdioConnectionParams` for local dev, `SseConnectionParams` for production.
+Connect to MCP servers to use external tools (needs the `mcp` extra: scaffolded projects ship `google-adk[gcp,otel-gcp]`, so add `mcp` and re-sync). Use `StdioConnectionParams` for local dev, `StreamableHTTPConnectionParams` for remote HTTP servers.
 
 ```python
 from google.adk.tools.mcp_tool import McpToolset
-from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams, SseConnectionParams
+from google.adk.tools.mcp_tool.mcp_session_manager import StdioConnectionParams, StreamableHTTPConnectionParams
 from mcp import StdioServerParameters
 
 # Local MCP server via stdio
@@ -493,9 +494,17 @@ agent = Agent(
     ...
 )
 
-# Remote MCP server via SSE (production)
+# Remote MCP server, e.g. Cloud Run with --no-allow-unauthenticated. ID tokens
+# expire in ~1h, so mint per call via `header_provider` (ADK calls it on every
+# tool call); a static `headers` dict goes stale. Audience = root, not /mcp.
+from google.auth.transport.requests import Request
+from google.oauth2.id_token import fetch_id_token
+
 McpToolset(
-    connection_params=SseConnectionParams(url="https://mcp.example.com/sse"),
+    connection_params=StreamableHTTPConnectionParams(url=f"{MCP_SERVER_URL}/mcp"),
+    header_provider=lambda ctx: {
+        "Authorization": f"Bearer {fetch_id_token(Request(), MCP_SERVER_URL)}"
+    },
 )
 ```
 
@@ -603,7 +612,7 @@ results = await memory_service.search_memory(app_name=app_name, user_id=user_id,
 
 #### Memory Bank (Long-term Memory)
 
-Managed cross-session memory that persists user preferences, remembers facts across sessions, and learns from conversations over time. See the [`memory-bank` sample](https://github.com/google/adk-samples/tree/main/python/agents/memory-bank) for a complete implementation.
+Managed cross-session memory that persists user preferences, remembers facts across sessions, and learns from conversations over time. See the [`cross-session-memory` recipe](https://github.com/google/adk-samples/tree/main/core/python/cross-session-memory) for a complete implementation.
 
 ```python
 from google.adk.agents.callback_context import CallbackContext
@@ -647,7 +656,7 @@ app = App(
 
 ### Context Compaction
 
-Prevent context overflow on long sessions by summarizing older events in a sliding window:
+Prevent context overflow on long sessions by compacting older events into summaries. Use **token-based** compaction: it triggers on actual prompt-token volume, so it handles unpredictable inputs (pasted code, large tool results) better than a fixed turn count.
 
 ```python
 from google.adk.apps import App
@@ -659,10 +668,10 @@ app = App(
     name="my_app",
     root_agent=root_agent,
     events_compaction_config=EventsCompactionConfig(
-        compaction_interval=20,  # summarize every 20 events
-        overlap_size=3,          # include last 3 events in next window for continuity
+        token_threshold=32000,   # compact once prompt tokens reach this
+        event_retention_size=5,  # keep the last 5 raw events un-compacted
         # Optional: custom summarizer model
-        summarizer=LlmEventSummarizer(llm=Gemini(model="gemini-flash-latest")),
+        summarizer=LlmEventSummarizer(llm=Gemini(model="gemini-3.7-flash")),
     ),
 )
 ```
@@ -796,7 +805,7 @@ manager = A2uiSchemaManager(...)        # loads catalog(s) + few-shot examples
 instruction = manager.generate_system_prompt(...)
 
 # 2. Use it as the agent instruction
-root_agent = Agent(name="ui_agent", model="gemini-flash-latest", instruction=instruction)
+root_agent = Agent(name="ui_agent", model="gemini-3.7-flash", instruction=instruction)
 
 # 3. Validate the model's JSON output, then wrap as an A2A DataPart
 #    (MIME application/a2ui+json) via a2ui.a2a before streaming to the client.
@@ -842,7 +851,56 @@ Sessions are ephemeral by default (`InMemorySessionService`); use `DatabaseSessi
 
 Since ambient agents have no interactive user, route outputs via structured logging (JSON stdout → Cloud Logging → Cloud Monitoring alerts), Pub/Sub, or tool-based integrations (email, Jira, Slack).
 
-**Before implementing an ambient agent, clone and study the production sample** — it covers trigger wiring, middleware, structured logging, and Terraform. See the Notable Samples catalog in `/google-agents-cli-workflow` Phase 1. [Full docs](https://adk.dev/runtime/ambient-agents/).
+**Before implementing an ambient agent, clone and study the production sample** — it covers trigger wiring, middleware, structured logging, and Terraform. Look it up in the topic index in `references/samples.md`. [Full docs](https://adk.dev/runtime/ambient-agents/).
+
+---
+
+## 13. Managed Agents (server-hosted, first-party)
+
+> **Requires ADK ≥ 2.4.0.** `ManagedAgent` connects to Google's first-party, server-hosted agents (e.g. the Antigravity agent) via the Managed Agents API: reasoning, tools, and execution all run in Google's managed environment, so there's no local sandbox to provision. It's a `BaseAgent`, so a standard `Runner` runs it like any other agent.
+
+### When to use it
+
+- **Managed agent** — powerful out-of-the-box capabilities (server-side web search, code execution) without operating the environment yourself. Trade-off: predefined server-side toolset, no client-side tools, runs only in the managed environment.
+- **`LlmAgent` (§2)** — when you need control over the model, instructions, custom/MCP tools, or where execution happens.
+
+### Setup
+
+Two backends — satisfy the prerequisites for whichever you use, then supply an `agent_id`:
+- **Gemini API:** set `GEMINI_API_KEY`. Use an out-of-the-box id (e.g. `antigravity-preview-05-2026`) or create your own (see below).
+- **Agent Platform (GEAP, formerly Vertex):** authenticate with ADC (`gcloud auth application-default login`). The Managed Agents API is served only from the `global` location, and `ManagedAgent` enforces it.
+
+### Create & use
+
+```python
+from google import genai
+from google.adk.agents import ManagedAgent
+from google.adk.tools import google_search
+
+# Create your own agent (google-genai SDK, NOT ADK — ManagedAgent has no create()).
+# Get-or-create keeps it idempotent; or skip entirely and use an out-of-the-box id like "antigravity-preview-05-2026".
+client = genai.Client()
+if "researcher" not in {a.id for a in (client.agents.list().agents or [])}:  # id must be unique, no gemini-/google-/... prefixes
+    client.agents.create(
+        id="researcher", base_agent="antigravity-preview-05-2026",
+        system_instruction="Answer with fresh, grounded info from the web.",
+    )
+
+# Connect + use. A ManagedAgent is a BaseAgent: set it as root_agent, drop it in a
+# workflow, or wrap it as AgentTool. Only server-side tools are allowed.
+managed = ManagedAgent(
+    name="researcher", agent_id="researcher",
+    environment={"type": "remote"},        # tools run in the managed sandbox
+    tools=[google_search],                 # or types.Tool(code_execution=types.ToolCodeExecution())
+)
+```
+
+### Limits
+
+- **Client-side tools raise `NotImplementedError`:** Python functions/callables and client-side MCP (`McpToolset`). Server-side tools work — ADK built-ins, raw `types.Tool` configs, and server-side remote MCP via `RemoteMcpServer`.
+- **Backends differ:** the Gemini API and GEAP behave slightly differently today — test against your target backend.
+
+Docs: [Gemini API agents](https://ai.google.dev/gemini-api/docs/agents) · [Agent Platform managed agents](https://docs.cloud.google.com/gemini-enterprise-agent-platform/build/managed-agents) · [Interactions API](https://ai.google.dev/gemini-api/docs/interactions-overview) · [building custom agents](https://ai.google.dev/gemini-api/docs/custom-agents). Samples: [basic](https://github.com/google/adk-python/tree/main/contributing/samples/managed_agent/basic), [code execution](https://github.com/google/adk-python/tree/main/contributing/samples/managed_agent/code_execution).
 
 ---
 
@@ -900,7 +958,7 @@ Data flows between sequential sub-agents via conversation history and `output_ke
 
 - [ADK Documentation](https://adk.dev/llms.txt)
 - [ADK Samples](https://github.com/google/adk-samples)
-- `/google-agents-cli-workflow` Phase 1 — curated production patterns (VertexAiCodeExecutor, BuiltInPlanner, grounding metadata, rate limiting, state capture)
+- `references/samples.md` — topic index of the reference recipes, and how to clone one
 
 ---
 

@@ -44,6 +44,7 @@ resource "google_eventarc_trigger" "storage_trigger" {
     cloud_run_service {
       service = google_cloud_run_v2_service.app.name
       region  = var.region
+      # ADK trigger-source route; on other frameworks point this at your app's own path
       path    = "/apps/${var.project_name}/trigger/eventarc"
     }
   }
@@ -111,6 +112,8 @@ agents-cli infra single-project  # Runs terraform apply in deployment/terraform/
 ```
 
 ## Common Patterns
+
+> The `/apps/{app_name}/trigger/*` paths below are ADK's trigger-source routes. The Terraform is the same on any framework — point it at whatever path your app serves.
 
 **Cloud Storage trigger (Eventarc):**
 - Create bucket in Terraform

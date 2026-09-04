@@ -33,15 +33,45 @@ Suitable for base models or simple completion tasks.
 - **File Type**: Must be `.jsonl`.
 - **Encoding**: UTF-8.
 - **Location**: Must be in a GCS bucket (e.g., `gs://my-bucket/train.jsonl`).
-- **Validation Split**: A separate validation file is optional but recommended. It must be no more than 25% of the training dataset size.
+- **Validation Split**: A separate validation file is optional but recommended. It must be no more than 25% of the training dataset **file size in bytes**, and no more than 5000 rows.
+
+### Sizing the validation split
+
+The 25% ceiling is measured against the training file, not against the whole
+dataset, so a split fraction `s` has to satisfy `s / (1 - s) <= 0.25`, i.e.
+`s <= 0.2`. An 80/20 split therefore sits exactly on the limit and is rejected
+as soon as the held-out rows are slightly longer than average -- observed
+overshoots run from 25.03% to 26.45%. Use `--validation_split 0.1`, which
+leaves the validation file at about 11% of the training file.
+
+`scripts/prepare_dataset.py` measures the written files and fails before
+upload if the ratio is over the limit, so a rejection here never costs a
+tuning job submission.
 
 ## Bucket Considerations
 
-If a bucket does not exist, create one in the same region as your tuning job:
+Artifacts must live in a bucket the user has chosen. **Never invent a bucket
+name, derive one from the project number, or create a bucket unprompted.**
+Creating a bucket is a mutating action and requires explicit Tier M
+confirmation.
+
+If the user has not named a bucket, stop and ask which one they want to use, and
+offer to create one for them as one of the options. Only once they have
+confirmed the exact name and location should you run the create command.
+
+Because the default tuning location is `global` — the service picks whichever
+region has GPU capacity — a new bucket should be a multi-region so it stays
+reachable wherever the job lands. Propose `US` (or `EU` if the data must stay in
+Europe):
 
 ```bash
-gcloud storage buckets create gs://YOUR_BUCKET_NAME --location=YOUR_LOCATION
+# Run only after the user has confirmed the bucket name and location.
+# Substitute the confirmed name; never run this with the placeholder as-is.
+gcloud storage buckets create gs://CONFIRMED_BUCKET_NAME --location=US
 ```
+
+Only pin the bucket to a single region when the tuning job itself is pinned to
+that region.
 
 ## Formatting Best Practices
 

@@ -4,26 +4,26 @@ description: >
   This skill should be used when the user wants to "create an agent project",
   "start a new ADK project", "build me a new agent", "add CI/CD to my project",
   "add deployment", "enhance my project", or "upgrade my project".
-  Part of the Google ADK (Agent Development Kit) skills suite.
+  Part of the agents-cli skills suite.
   Covers `agents-cli scaffold create`, `scaffold enhance`, and `scaffold upgrade` commands,
   template options, deployment targets, and the prototype-first workflow.
-  Do NOT use for writing agent code (use google-agents-cli-adk-code) or
+  Do NOT use for writing agent code (ADK projects: use google-agents-cli-adk-code) or
   deployment operations (use google-agents-cli-deploy).
 metadata:
   author: Google
   license: Apache-2.0
-  version: 1.1.0
+  version: 1.5.0
   requires:
     bins:
       - agents-cli
     install: "uv tool install google-agents-cli"
 ---
 
-# ADK Project Scaffolding Guide
+# Project Scaffolding Guide
 
 > **Requires:** `agents-cli` (`uv tool install google-agents-cli`) — [install uv](https://docs.astral.sh/uv/getting-started/installation/index.md) first if needed.
 
-Use the `agents-cli` CLI to create new ADK agent projects or enhance existing ones with deployment, CI/CD, and infrastructure scaffolding.
+Use the `agents-cli` CLI to create new agent projects or enhance existing ones with deployment, CI/CD, and infrastructure scaffolding.
 
 ---
 
@@ -39,8 +39,8 @@ Use the `agents-cli` CLI to create new ADK agent projects or enhance existing on
 
 | Choice | CLI flag |
 |--------|----------|
-| RAG (vector or document search) | Not a scaffold flag — clone-and-study `rag-vector-search` / `rag-agent-search` (see `/google-agents-cli-workflow` Phase 1) |
-| A2A protocol | built into every ADK agent — scaffold normally (`--agent adk`) |
+| Retrieval/RAG, sandboxed execution, cross-session memory, OAuth consent, guardrails, scheduled runs | **No flag** — these come from clone-and-study recipes. **ADK:** see the topic index in `/google-agents-cli-adk-code` → `references/samples.md`; on other frameworks, see the sample index the framework template ships |
+| A2A protocol | built into the scaffolded app — scaffold normally (**ADK:** `--agent adk`, the default) |
 | Prototype (no deployment) | `--prototype` |
 | Deployment target | `--deployment-target <agent_runtime\|cloud_run\|gke>` |
 | CI/CD runner | `--cicd-runner <github_actions\|google_cloud_build>` |
@@ -52,7 +52,10 @@ Older names → CLI values (`vertexai` SDK package name unchanged):
 
 - Agent Engine / Vertex AI Agent Engine → `--deployment-target agent_runtime`
 - Agent Engine sessions / Agent Platform Sessions → `--session-type agent_platform_sessions`
-- Vertex AI Search / Vertex AI Vector Search / RAG → clone-and-study recipe, not a flag (see `/google-agents-cli-workflow` Phase 1)
+- Vertex AI Search / Vertex AI Vector Search / RAG → clone-and-study recipe, not a flag
+
+> **Removed flags.** `--datastore`, the `agentic_rag` template, and `agents-cli infra datastore` /
+> `agents-cli data-ingestion` no longer exist. If you reach for one, you want a recipe instead.
 
 ---
 
@@ -124,9 +127,13 @@ agents-cli scaffold enhance . --cicd-runner github_actions
 |----------|------------|-------------|
 | `adk` | Agent Runtime, Cloud Run, GKE | Standard ADK agent (default); A2A protocol built in |
 
-> **RAG is a clone-and-study recipe, not a template.** Build it by studying `rag-vector-search` or
-> `rag-agent-search` and adapting the sample into your project — see `/google-agents-cli-workflow`
-> Phase 1.
+> **`adk` is the only built-in template.** Other frameworks ship as template repos you scaffold
+> from directly: `--agent google/agents-cli/extensions/langchain/template@v1.5.0`, with nothing installed. The first-party LangChain
+> template is `extensions/langchain/template/` in the agents-cli repo; see
+> `/google-agents-cli-workflow` → `references/extension.md` to publish your own. Capabilities
+> beyond the template — retrieval, sandboxed execution, memory, OAuth, guardrails — are
+> clone-and-study recipes, not templates. **ADK:** see the topic index in
+> `/google-agents-cli-adk-code` → `references/samples.md`.
 
 ---
 
@@ -164,15 +171,13 @@ When using `agent_runtime` as the deployment target, Agent Runtime manages sessi
 After scaffolding, immediately load `/google-agents-cli-workflow` — it contains the development workflow, coding guidelines, and operational rules you must follow when implementing the agent.
 
 **Key files to customize:** `app/agent.py` (instruction, tools, model), `app/tools.py` (custom tool functions), `.env` (project ID, location, API keys).
-**Files to preserve:** `agents-cli-manifest.yaml` (CLI reads this), deployment configs under `deployment/`, `Makefile`, `app/__init__.py` (the `App(name=...)` must match the directory name — default `app`), and the generated runtime/A2A infra (`app/fast_api_app.py`, `app/app_utils/a2a.py`, `app/app_utils/services.py`, `Dockerfile`) — these wire up serving, sessions, and the built-in A2A surface; don't hand-edit them.
+**Files to preserve:** `agents-cli-manifest.yaml` (CLI reads this), deployment configs under `deployment/`, `Makefile`, and the generated runtime/A2A infra (`app/fast_api_app.py`, `Dockerfile`, and whatever your template puts under `app/app_utils/`) — these wire up serving, sessions, and the built-in A2A surface; don't hand-edit them. **ADK:** `app/__init__.py` (the `App(name=...)` must match the directory name — default `app`), `app/app_utils/a2a.py`, `app/app_utils/services.py`.
 
-**RAG projects — clone-and-study, not a template:**
-RAG isn't a scaffold option. Build it by studying `rag-vector-search` or `rag-agent-search` (see
-`/google-agents-cli-workflow` Phase 1) and adapting the sample's `app/`, `infra/terraform/`, and
-ingestion into your project. Provisioning and ingestion run from the sample's own `Makefile`
-(`make setup-infra`, `make data-ingestion`).
+**Adapting a recipe:** copy its `app/`, `infra/terraform/`, and any ingestion or provisioning into
+your scaffolded project, then run provisioning from the recipe's own `Makefile` (e.g.
+`make setup-infra`). Start from its `AGENTS.md`.
 
-**Verifying your agent works:** Use `agents-cli run "test prompt"` for quick smoke tests, then `agents-cli eval generate` and `agents-cli eval grade` for systematic validation. Do NOT write pytest tests that assert on LLM response content — that belongs in eval.
+**Verifying your agent works:** Use `agents-cli run "test prompt"` for quick smoke tests, then `agents-cli eval run` for systematic validation. Do NOT write pytest tests that assert on LLM response content, that belongs in eval.
 
 ---
 
@@ -181,7 +186,7 @@ ingestion into your project. Provisioning and ingestion run from the sample's ow
 When you need specific files (Terraform, CI/CD workflows, Dockerfile) but don't want to scaffold the current project directly, create a temporary reference project in `/tmp/`:
 
 ```bash
-agents-cli scaffold create /tmp/ref-project \
+agents-cli scaffold create ref-project --output-dir /tmp \
   --agent adk \
   --deployment-target cloud_run
 ```
@@ -205,7 +210,7 @@ This is useful for:
 - **Agent Runtime clears session_type** — if deploying to `agent_runtime`, remove any `session_type` setting from your code
 - **Start with `--prototype`** for quick iteration — add deployment later with `enhance`
 - **Project names** must be ≤26 characters, lowercase, letters/numbers/hyphens only
-- **NEVER write A2A code from scratch** — A2A is built into every Python ADK agent (`adk`); the A2A Python API surface (import paths, `AgentCard` schema, `to_a2a()` signature) is non-trivial and changes across versions. Scaffold normally; never hand-write the A2A surface.
+- **NEVER write A2A code from scratch** — A2A is built into the scaffolded app (the `adk` template and framework templates alike); the A2A Python API surface (import paths, `AgentCard` schema, `to_a2a()` signature) is non-trivial and changes across versions. Scaffold normally; never hand-write the A2A surface.
 
 ---
 
@@ -214,7 +219,7 @@ This is useful for:
 Using scaffold as reference:
 User says: "I need a Dockerfile for my non-standard project"
 Actions:
-1. Create temp project: `agents-cli scaffold create /tmp/ref --agent adk --deployment-target cloud_run`
+1. Create temp project: `agents-cli scaffold create ref --output-dir /tmp --agent adk --deployment-target cloud_run`
 2. Copy relevant files (Dockerfile, etc.) from /tmp/ref
 3. Delete temp project
 Result: Infrastructure files adapted to the actual project
@@ -241,6 +246,6 @@ See `/google-agents-cli-workflow` → **Setup** section.
 ## Related Skills
 
 - `/google-agents-cli-workflow` — Development workflow, coding guidelines, and the build-evaluate-deploy lifecycle
-- `/google-agents-cli-adk-code` — ADK Python API quick reference for writing agent code
+- `/google-agents-cli-adk-code` — ADK Python API quick reference for writing agent code (ADK projects)
 - `/google-agents-cli-deploy` — Deployment targets, CI/CD pipelines, and production workflows
 - `/google-agents-cli-eval` — Evaluation methodology, dataset schema, and the eval-fix loop

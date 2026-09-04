@@ -1,5 +1,7 @@
 # Evaluating Agents with `google_search` and Built-in Tools
 
+> **ADK naming.** Tool classes and code snippets below are ADK's. The behavior generalizes: in any framework, Gemini's built-in grounding, retrieval, and code-execution tools run inside the model and never surface as function calls in a trace.
+
 ## google_search Behavior (IMPORTANT)
 
 `google_search` is NOT a regular tool — it's a **model-internal grounding feature**.
@@ -131,7 +133,7 @@ types.Tool(function_declarations=[...])
 
 ### Model thinking mode may bypass tools
 
-Models with "thinking" enabled may decide they have sufficient information and skip tool calls. Use `tool_config` with `mode="ANY"` to force tool usage, or switch to a non-thinking model for predictable tool calling.
+Models with "thinking" enabled may decide they have sufficient information and skip tool calls. Force tool usage through the model's tool-choice config (**ADK:** `tool_config` with `mode="ANY"`), or switch to a non-thinking model for predictable tool calling.
 
 ### Mock mode for external APIs
 

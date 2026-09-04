@@ -1,8 +1,10 @@
 # Batch Inference (Cloud Run)
 
-Invoke an ADK agent as a BigQuery Remote Function for batch inference over table rows. This requires a custom `POST /` endpoint since BQ cannot use URL paths.
+Invoke your agent as a BigQuery Remote Function for batch inference over table rows. This requires a custom `POST /` endpoint since BQ cannot use URL paths.
 
-> For event-driven triggers (Pub/Sub, Eventarc), use ADK's native `trigger_sources` — see `/google-agents-cli-adk-code`.
+> **ADK projects.** The BigQuery request/response contract and the Terraform below apply to any framework; the handler code uses the ADK `Runner`, so swap in your framework's invocation.
+
+> For event-driven triggers (Pub/Sub, Eventarc) on ADK, use its native `trigger_sources` — see `/google-agents-cli-adk-code`.
 
 ## BigQuery Remote Function
 
