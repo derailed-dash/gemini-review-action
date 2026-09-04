@@ -168,7 +168,7 @@ def load_custom_instructions(custom_input: str | None = None) -> str:
         if (
             raw_val.startswith(("./", "../", ".github/"))
             or raw_val.endswith((".md", ".txt", ".markdown"))
-            or (os.sep in raw_val and not raw_val.startswith("-"))
+            or (os.sep in raw_val and " " not in raw_val and not raw_val.startswith("-"))
         ):
             print(f"Warning: Custom instructions file '{raw_val}' not found.", file=sys.stderr)
             return ""

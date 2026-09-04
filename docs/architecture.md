@@ -43,7 +43,7 @@ The PR review workflow is designed to retrieve PR details, collect local codebas
 ### 2. Hybrid Codebase Context Engine
 To provide Gemini with project-wide awareness, the script traverses the workspace to find all tracked files via `get_all_repo_files()`. It then sums the file sizes (excluding the changed PR files) to determine the context mode:
 
-* **Per-File Content Truncation (`cap_file_content`):** To prevent a single abnormally large file (e.g. bundled assets, minified scripts, or large test fixtures) from monopolising the context budget, individual text files attached to the prompt are capped at 200 KB with a truncation notice.
+* **Per-File Content Truncation (`cap_file_content`):** To prevent a single abnormally large file (e.g. bundled assets, minified scripts, or large test fixtures) from monopolising the context budget, individual text files attached to the prompt are capped at 128 KB with a truncation notice.
 * **Full Context Mode (≤ 1.5 MB):**
   If the rest of the text files in the repository fit within the size limit, the script reads their full contents using `get_file_content()` and appends them to the prompt under the section `=== Repository Context (Full Codebase) ===`.
 * **Sparse Context Mode (> 1.5 MB):**

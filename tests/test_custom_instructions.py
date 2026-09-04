@@ -66,6 +66,22 @@ class TestCustomInstructions:
         content = load_custom_instructions(raw_text)
         assert content == raw_text
 
+    def test_load_custom_instructions_single_line_with_slashes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """Verify that single-line prose containing forward slashes is not treated as a file path."""
+        monkeypatch.chdir(tmp_path)
+        prose = "Ensure all /api endpoints validate query parameters and client/server models"
+
+        content = load_custom_instructions(prose)
+        assert content == prose
+
+    def test_load_custom_instructions_nonexistent_file_returns_empty(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Verify that a path-like string that does not exist returns an empty string."""
+        monkeypatch.chdir(tmp_path)
+        content = load_custom_instructions("missing_dir/custom_rules.md")
+        assert content == ""
+
     def test_load_custom_instructions_path_traversal_blocked(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         """Verify path traversal outside workspace is blocked."""
         monkeypatch.chdir(tmp_path)
