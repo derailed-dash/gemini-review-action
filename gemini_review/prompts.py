@@ -4,6 +4,7 @@ Constructs review prompts, parses PR diffs, executes
 dynamic context file selection using the primary Gemini model, and merges discussion thread history.
 """
 
+import fnmatch
 import json
 import os
 import sys
@@ -12,7 +13,14 @@ from typing import Any
 from google.genai import types
 
 from gemini_review.budget import cap_file_content, max_file_bytes, report_capped
-from gemini_review.config import get_default_model
+from gemini_review.config import (
+    build_thinking_config,
+    get_context_diff_directories_only,
+    get_context_exclude_patterns,
+    get_default_model,
+    get_extra_context_files,
+    get_max_candidate_files,
+)
 from gemini_review.personas import get_persona_prompt, resolve_persona_name
 from gemini_review.schemas import DynamicContextSelection
 from gemini_review.utils import (
@@ -24,6 +32,7 @@ from gemini_review.utils import (
     get_file_content,
     is_core_file,
     is_text_file,
+    rank_and_bound_candidates,
 )
 
 
@@ -33,10 +42,11 @@ def select_dynamic_context_files(
     files: list[dict],
     candidate_files: list[str],
     max_files: int = 8,
-) -> tuple[list[str], str]:
+    thinking_level: str | int | None = None,
+) -> tuple[list[str], str, dict[str, Any]]:
     """Dynamically select the most relevant repository files for PR review context."""
     if not client or not candidate_files:
-        return [], ""
+        return [], "", {}
 
     # Build concise diff/change summary for modified files
     modified_summary = []
@@ -71,22 +81,67 @@ def select_dynamic_context_files(
         "Provide a concise justification for your selection in 'reasoning'."
     )
 
+    # Context selector defaults to 'low' thinking to prevent token waste
+    eff_thinking_level = (
+        thinking_level if thinking_level is not None else (os.environ.get("GEMINI_THINKING_LEVEL") or "low")
+    )
+    thinking_cfg = build_thinking_config(eff_thinking_level)
+
     try:
         print(
             f"Dynamic context selection: evaluating {len(candidate_files)} candidate files with '{model}'...",
             file=sys.stderr,
         )
-        response = client.models.generate_content(
-            model=model,
-            contents=prompt,
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=DynamicContextSelection,
-                temperature=0.0,
-            ),
+
+        gen_config = types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_schema=DynamicContextSelection,
+            temperature=0.0,
+            thinking_config=thinking_cfg,
         )
 
-        raw_text = response.text or "{}"
+        try:
+            response = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=gen_config,
+            )
+        except Exception as api_err:
+            # If the model rejects thinking_config, retry without thinking_config for backward/forward compatibility
+            err_msg = str(api_err).lower()
+            if thinking_cfg is not None and (
+                "thinking" in err_msg or "400" in err_msg or "invalid_argument" in err_msg
+            ):
+                print(
+                    f"Warning: thinking_config not supported by model '{model}' ({api_err}). "
+                    "Retrying without thinking_config...",
+                    file=sys.stderr,
+                )
+                gen_config.thinking_config = None
+                response = client.models.generate_content(
+                    model=model,
+                    contents=prompt,
+                    config=gen_config,
+                )
+            else:
+                raise
+
+        usage_dict: dict[str, Any] = {
+            "prompt_tokens": 0,
+            "candidates_tokens": 0,
+            "thoughts_tokens": 0,
+            "total_tokens": 0,
+        }
+        if hasattr(response, "usage_metadata") and response.usage_metadata:
+            u = response.usage_metadata
+            usage_dict["prompt_tokens"] = getattr(u, "prompt_token_count", 0) or 0
+            usage_dict["candidates_tokens"] = getattr(u, "candidates_token_count", 0) or 0
+            usage_dict["thoughts_tokens"] = getattr(u, "thoughts_token_count", 0) or 0
+            usage_dict["total_tokens"] = getattr(u, "total_token_count", 0) or (
+                usage_dict["prompt_tokens"] + usage_dict["candidates_tokens"] + usage_dict["thoughts_tokens"]
+            )
+
+        raw_text = getattr(response, "text", "") or "{}"
         data = json.loads(raw_text)
         selection = DynamicContextSelection(**data)
 
@@ -101,23 +156,51 @@ def select_dynamic_context_files(
                 valid_selected.append(path)
 
         valid_selected = valid_selected[:max_files]
-        return valid_selected, selection.reasoning
+        return valid_selected, selection.reasoning, usage_dict
     except Exception as e:
         print(f"Warning: Dynamic context selection failed ({e}). Proceeding without dynamic files.", file=sys.stderr)
-        return [], ""
+        return [], "", {}
 
 
 DEFAULT_CUSTOM_INSTRUCTIONS_PATH = ".github/review-instruction-additions.md"
 FALLBACK_CUSTOM_INSTRUCTIONS_PATH = "review-instruction-additions.md"
 
 
+def _safe_read_instruction_file(candidate: str, workspace_root: str) -> str | None:
+    """Safely read instruction file ensuring no path traversal outside workspace root."""
+    norm_candidate = candidate.replace("/", os.sep).replace("\\", os.sep)
+    full_path = os.path.realpath(norm_candidate)
+    try:
+        if os.path.commonpath([workspace_root, full_path]) != workspace_root:
+            print(
+                f"Warning: Access denied for custom instructions path '{candidate}' (path traversal blocked).",
+                file=sys.stderr,
+            )
+            return None
+    except Exception:
+        return None
+
+    if os.path.exists(full_path) and os.path.isfile(full_path):
+        try:
+            print(f"Loading custom review instructions from {candidate}...", file=sys.stderr)
+            with open(full_path, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except Exception as e:
+            print(f"Warning: Failed to read custom instructions from {candidate}: {e}", file=sys.stderr)
+            return None
+    return None
+
+
 def load_custom_instructions(custom_input: str | None = None) -> str:
-    """Load custom review instructions and guardrails from a file path or inline text.
+    """Load custom review instructions and guardrails for the PR review agent.
 
     Supports reading from custom_input argument, GEMINI_CUSTOM_INSTRUCTIONS environment
-    variable, or falling back to convention-based file locations (.github/review-instruction-additions.md
-    or review-instruction-additions.md at repository root). Safely prevents path traversal.
-    If the default file does not exist, returns an empty string without raising an error.
+    variable, or convention-based file locations:
+    .github/review-instruction-additions.md (preferred) or review-instruction-additions.md at repository root.
+    Safely prevents path traversal. If the default file does not exist, returns an empty string.
+
+    Note: General repository rule files (e.g. AGENTS.md, GEMINI.md) provide project context for diffs
+    and are attached separately in codebase context, not as reviewer instructions.
     """
     raw_val = custom_input if custom_input is not None else os.environ.get("GEMINI_CUSTOM_INSTRUCTIONS")
     if raw_val is None:
@@ -128,55 +211,35 @@ def load_custom_instructions(custom_input: str | None = None) -> str:
         return ""
 
     is_default = raw_val == DEFAULT_CUSTOM_INSTRUCTIONS_PATH
-
-    # Candidate file paths to check
-    candidate_paths = [raw_val]
-    if is_default:
-        candidate_paths.append(FALLBACK_CUSTOM_INSTRUCTIONS_PATH)
-
     workspace_root = os.path.realpath(".")
 
-    for candidate in candidate_paths:
-        norm_candidate = candidate.replace("/", os.sep).replace("\\", os.sep)
-        full_path = os.path.realpath(norm_candidate)
-        try:
-            if os.path.commonpath([workspace_root, full_path]) != workspace_root:
-                print(
-                    f"Warning: Access denied for custom instructions path '{candidate}' (path traversal blocked).",
-                    file=sys.stderr,
-                )
-                return ""
-        except Exception:
-            return ""
+    if is_default:
+        for candidate in [DEFAULT_CUSTOM_INSTRUCTIONS_PATH, FALLBACK_CUSTOM_INSTRUCTIONS_PATH]:
+            content = _safe_read_instruction_file(candidate, workspace_root)
+            if content:
+                return content
+        return ""
 
-        if os.path.exists(full_path) and os.path.isfile(full_path):
-            try:
-                print(f"Loading custom review instructions from {candidate}...", file=sys.stderr)
-                with open(full_path, "r", encoding="utf-8") as f:
-                    return f.read().strip()
-            except Exception as e:
-                print(f"Warning: Failed to read custom instructions from {candidate}: {e}", file=sys.stderr)
-                return ""
+    # Explicit custom input provided
+    content = _safe_read_instruction_file(raw_val, workspace_root)
+    if content:
+        return content
 
-    # If the user explicitly provided input that is not a default candidate path
-    if not is_default:
-        # Multi-line string is definitely inline text instructions
-        if "\n" in raw_val:
-            return raw_val
-
-        # If it looks like a path but wasn't found, warn and return empty
-        if (
-            raw_val.startswith(("./", "../", ".github/"))
-            or raw_val.endswith((".md", ".txt", ".markdown"))
-            or (os.sep in raw_val and " " not in raw_val and not raw_val.startswith("-"))
-        ):
-            print(f"Warning: Custom instructions file '{raw_val}' not found.", file=sys.stderr)
-            return ""
-
-        # Otherwise, treat it as single-line inline instruction text
+    # Multi-line string is definitely inline text instructions
+    if "\n" in raw_val:
         return raw_val
 
-    return ""
+    # If it looks like a path but wasn't found, warn and return empty
+    if (
+        raw_val.startswith(("./", "../", ".github/"))
+        or raw_val.endswith((".md", ".txt", ".markdown"))
+        or (os.sep in raw_val and " " not in raw_val and not raw_val.startswith("-"))
+    ):
+        print(f"Warning: Custom instructions file '{raw_val}' not found.", file=sys.stderr)
+        return ""
+
+    # Otherwise, treat it as single-line inline instruction text
+    return raw_val
 
 
 def load_system_instruction(
@@ -305,6 +368,7 @@ def build_codebase_context(
     config: dict,
     client: Any = None,
     model: str | None = None,
+    context_telemetry: dict[str, Any] | None = None,
 ) -> str:
     """Build the repository codebase context (Full or Sparse mode) for Gemini code review."""
     fn_get_all_repo_files = _get_pr_review_func("get_all_repo_files", get_all_repo_files)
@@ -312,9 +376,10 @@ def build_codebase_context(
     fn_is_core_file = _get_pr_review_func("is_core_file", is_core_file)
     fn_generate_file_tree = _get_pr_review_func("generate_file_tree", generate_file_tree)
     fn_select_dynamic_context_files = _get_pr_review_func("select_dynamic_context_files", select_dynamic_context_files)
+    fn_is_text_file = _get_pr_review_func("is_text_file", is_text_file)
 
     prompt_parts = []
-    pr_filenames = {f["filename"] for f in files}
+    pr_filenames = {f["filename"] if isinstance(f, dict) else str(f) for f in files}
 
     max_context_bytes = config.get("max_context_bytes", 1500 * 1024)
     if "GEMINI_MAX_CONTEXT_BYTES" in os.environ:
@@ -367,66 +432,42 @@ def build_codebase_context(
             "*helper*",
             "*helpers*",
             "*base*",
-            # Python
+            # Language manifests & dependencies
+            "package.json",
+            "requirements*.txt",
             "pyproject.toml",
             "setup.py",
-            "setup.cfg",
-            "requirements.txt",
-            "Pipfile",
-            # JavaScript / TypeScript / Node
-            "package.json",
-            "tsconfig.json",
-            # Go
             "go.mod",
-            # Rust
             "Cargo.toml",
-            # Java / Kotlin
-            "pom.xml",
-            "build.gradle",
-            "build.gradle.kts",
-            "settings.gradle",
-            # Ruby
             "Gemfile",
-            "*.gemspec",
-            # PHP
             "composer.json",
-            # C# / .NET
-            "*.csproj",
-            "*.sln",
-            # Swift / Objective-C
-            "Package.swift",
-            "Podfile",
-            # Docker / Infrastructure
-            "Dockerfile",
-            "docker-compose.yml",
-            # Configuration
-            "gemini-review.toml",
+            "pom.xml",
+            "build.gradle*",
+            # Orchestration & Infrastructure
+            "Dockerfile*",
+            "docker-compose*.yml",
             "action.yml",
+            "action.yaml",
+            ".github/workflows/*.yml",
+            ".github/workflows/*.yaml",
+            "*.tf",
         ],
     )
 
-    repo_files = fn_get_all_repo_files()
-    other_files = [f for f in repo_files if f not in pr_filenames]
-    print(
-        f"Codebase context: found {len(repo_files)} total tracked files, {len(other_files)} other files"
-        " (excluding PR diff files).",
-        file=sys.stderr,
-    )
+    all_files = fn_get_all_repo_files()
+    other_files = [f for f in all_files if f not in pr_filenames and fn_is_text_file(f)]
 
     if other_files:
         total_size = 0
-        file_sizes = {}
         for f in other_files:
             try:
-                size = os.path.getsize(f)
-                file_sizes[f] = size
-                total_size += size
+                total_size += os.path.getsize(f)
             except Exception:
-                continue
+                pass
 
         print(
-            f"Codebase context: total size of other text files is {total_size} bytes"
-            f" (limit is {max_context_bytes} bytes).",
+            f"Codebase context: found {len(other_files)} additional repository files (total size {total_size} bytes,"
+            f" limit {max_context_bytes} bytes).",
             file=sys.stderr,
         )
 
@@ -465,30 +506,52 @@ def build_codebase_context(
             core_files_included = []
             core_capped: list[str] = []
             core_bytes_used = 0
-            for f in other_files:
-                if fn_is_core_file(f, core_patterns):
-                    try:
-                        f_size = os.path.getsize(f)
-                    except Exception:
-                        f_size = 0
-                    if core_bytes_used + f_size <= max_core_context_bytes:
-                        content = fn_get_file_content(f)
-                        if content:
-                            content, was_capped = cap_file_content(content, f, file_byte_limit)
-                            if was_capped:
-                                core_capped.append(f)
-                                f_size = min(f_size, file_byte_limit)
-                            prompt_parts.append(f"--- File: {f} ---")
-                            prompt_parts.append(content)
-                            prompt_parts.append("-----------------\n")
-                            core_files_included.append(f)
-                            core_bytes_used += f_size
-                    else:
-                        print(
-                            f"Codebase context: skipping core file '{f}' (exceeds max_core_context_bytes limit of"
-                            f" {max_core_context_bytes} bytes).",
-                            file=sys.stderr,
-                        )
+
+            # Prioritise standard agent rules and architectural documentation first
+            priority_core_patterns = [
+                "README*",
+                "AGENTS.md",
+                ".github/AGENTS.md",
+                "GEMINI.md",
+                ".github/GEMINI.md",
+                "CLAUDE.md",
+                ".github/CLAUDE.md",
+                "docs/architecture*",
+            ]
+
+            def _core_sort_key(file_path: str) -> tuple[int, str]:
+                norm_p = file_path.replace("\\", "/").removeprefix("./")
+                for idx, pat in enumerate(priority_core_patterns):
+                    if fnmatch.fnmatch(norm_p, pat) or fnmatch.fnmatch(os.path.basename(norm_p), pat):
+                        return (idx, norm_p)
+                return (len(priority_core_patterns), norm_p)
+
+            candidate_core_files = sorted(
+                [f for f in other_files if fn_is_core_file(f, core_patterns)], key=_core_sort_key
+            )
+            for f in candidate_core_files:
+                try:
+                    f_size = os.path.getsize(f)
+                except Exception:
+                    f_size = 0
+                if core_bytes_used + f_size <= max_core_context_bytes:
+                    content = fn_get_file_content(f)
+                    if content:
+                        content, was_capped = cap_file_content(content, f, file_byte_limit)
+                        if was_capped:
+                            core_capped.append(f)
+                            f_size = min(f_size, file_byte_limit)
+                        prompt_parts.append(f"--- File: {f} ---")
+                        prompt_parts.append(content)
+                        prompt_parts.append("-----------------\n")
+                        core_files_included.append(f)
+                        core_bytes_used += f_size
+                else:
+                    print(
+                        f"Codebase context: skipping core file '{f}' (exceeds max_core_context_bytes limit of"
+                        f" {max_core_context_bytes} bytes).",
+                        file=sys.stderr,
+                    )
             report_capped(core_capped, file_byte_limit)
             if core_files_included:
                 print(
@@ -500,39 +563,88 @@ def build_codebase_context(
                 prompt_parts.append("(No additional key configuration or documentation files found.)\n")
                 print("Codebase context: no core files matched or found.", file=sys.stderr)
 
-            # Dynamic context selection via model
-            dynamic_candidates = [f for f in other_files if f not in core_files_included]
-            if client and dynamic_candidates:
-                effective_model = get_default_model(model)
-                selected_files, reasoning = fn_select_dynamic_context_files(
-                    client=client,
-                    model=effective_model,
-                    files=files,
-                    candidate_files=dynamic_candidates,
+            # Check for static extra_context_files bypass
+            extra_files = get_extra_context_files(config)
+            if extra_files:
+                print(
+                    f"Codebase context: attaching {len(extra_files)} static extra context file(s)...",
+                    file=sys.stderr,
                 )
-                if selected_files:
-                    print(
-                        f"Dynamic context selection: selected {len(selected_files)} relevant file(s) using"
-                        f" '{effective_model}': {', '.join(selected_files)}",
-                        file=sys.stderr,
+                prompt_parts.append("--- Relevant Codebase Context (Static Extra Files) ---")
+                extra_capped: list[str] = []
+                for ef in extra_files:
+                    content = fn_get_file_content(ef)
+                    if content:
+                        content, was_capped = cap_file_content(content, ef, file_byte_limit)
+                        if was_capped:
+                            extra_capped.append(ef)
+                        prompt_parts.append(f"--- File: {ef} ---")
+                        prompt_parts.append(content)
+                        prompt_parts.append("-----------------\n")
+                report_capped(extra_capped, file_byte_limit)
+            else:
+                # Dynamic context selection via model
+                dynamic_candidates = [f for f in other_files if f not in core_files_included]
+                if client and dynamic_candidates:
+                    max_candidates = get_max_candidate_files(config)
+                    diff_dirs_only = get_context_diff_directories_only(config)
+                    exclude_patterns = get_context_exclude_patterns(config)
+                    orig_count = len(dynamic_candidates)
+                    bounded_candidates = rank_and_bound_candidates(
+                        dynamic_candidates,
+                        files,
+                        max_candidates=max_candidates,
+                        diff_dirs_only=diff_dirs_only,
+                        exclude_patterns=exclude_patterns,
                     )
+                    if len(bounded_candidates) < orig_count:
+                        print(
+                            f"Dynamic context selection: bounded candidate pool from {orig_count} "
+                            f"to {len(bounded_candidates)} files (max: {max_candidates}).",
+                            file=sys.stderr,
+                        )
 
-                    if reasoning:
-                        print(f"Dynamic context selection reasoning: {reasoning}", file=sys.stderr)
-                    prompt_parts.append("--- Relevant Codebase Context (Dynamically Selected) ---")
-                    if reasoning:
-                        prompt_parts.append(f"Selection Rationale: {reasoning}\n")
-                    dynamic_capped: list[str] = []
-                    for sf in selected_files:
-                        content = fn_get_file_content(sf)
-                        if content:
-                            content, was_capped = cap_file_content(content, sf, file_byte_limit)
-                            if was_capped:
-                                dynamic_capped.append(sf)
-                            prompt_parts.append(f"--- File: {sf} ---")
-                            prompt_parts.append(content)
-                            prompt_parts.append("-----------------\n")
-                    report_capped(dynamic_capped, file_byte_limit)
+                    effective_model = get_default_model(model)
+                    res = fn_select_dynamic_context_files(
+                        client=client,
+                        model=effective_model,
+                        files=files,
+                        candidate_files=bounded_candidates,
+                    )
+                    if isinstance(res, tuple) and len(res) == 3:
+                        selected_files, reasoning, sel_usage = res
+                    elif isinstance(res, tuple) and len(res) == 2:
+                        selected_files, reasoning = res
+                        sel_usage = {}
+                    else:
+                        selected_files, reasoning, sel_usage = [], "", {}
+
+                    if context_telemetry is not None and isinstance(context_telemetry, dict):
+                        context_telemetry.update(sel_usage)
+
+                    if selected_files:
+                        print(
+                            f"Dynamic context selection: selected {len(selected_files)} relevant file(s) using"
+                            f" '{effective_model}': {', '.join(selected_files)}",
+                            file=sys.stderr,
+                        )
+
+                        if reasoning:
+                            print(f"Dynamic context selection reasoning: {reasoning}", file=sys.stderr)
+                        prompt_parts.append("--- Relevant Codebase Context (Dynamically Selected) ---")
+                        if reasoning:
+                            prompt_parts.append(f"Selection Rationale: {reasoning}\n")
+                        dynamic_capped: list[str] = []
+                        for sf in selected_files:
+                            content = fn_get_file_content(sf)
+                            if content:
+                                content, was_capped = cap_file_content(content, sf, file_byte_limit)
+                                if was_capped:
+                                    dynamic_capped.append(sf)
+                                prompt_parts.append(f"--- File: {sf} ---")
+                                prompt_parts.append(content)
+                                prompt_parts.append("-----------------\n")
+                        report_capped(dynamic_capped, file_byte_limit)
 
             prompt_parts.append("==========================================\n")
 
@@ -545,16 +657,28 @@ def build_prompt(
     comment_history: str = "",
     client: Any = None,
     model: str | None = None,
+    context_telemetry: dict[str, Any] | None = None,
 ) -> str:
     """Consolidate file patches, PR comment history, and file contents into a single review context."""
     fn_build_pr_diff_prompt = _get_pr_review_func("build_pr_diff_prompt", build_pr_diff_prompt)
     fn_build_codebase_context = _get_pr_review_func("build_codebase_context", build_codebase_context)
 
-    pr_prompt = fn_build_pr_diff_prompt(files, config)
-    parts = [pr_prompt]
+    diff_context = fn_build_pr_diff_prompt(files, config)
+    try:
+        codebase_context = fn_build_codebase_context(
+            files,
+            config,
+            client=client,
+            model=model,
+            context_telemetry=context_telemetry,
+        )
+    except TypeError:
+        # Fallback for custom or mocked fn_build_codebase_context that don't accept context_telemetry
+        codebase_context = fn_build_codebase_context(files, config, client=client, model=model)
+
+    parts = [diff_context]
     if comment_history:
         parts.append(comment_history)
-    codebase_ctx = fn_build_codebase_context(files, config, client=client, model=model)
-    if codebase_ctx:
-        parts.append(codebase_ctx)
+    if codebase_context:
+        parts.append(codebase_context)
     return "\n\n".join(parts)

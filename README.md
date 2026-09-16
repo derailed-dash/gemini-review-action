@@ -458,15 +458,48 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 | `persona` | Reviewer persona overlay (`straight`, `dazbo`, `palpatine`, `rick`). | No | `straight` |
 | `custom_instructions` | Custom instructions or guardrails to extend the review prompt. Can be inline text or a file path in the repository (e.g. `.github/review-instruction-additions.md`). | No | `.github/review-instruction-additions.md` |
 | `skip_inline_suggestions` | Whether to skip automated re-reviews when a commit is created by accepting an inline suggestion via GitHub UI. | No | `'true'` |
+| `thinking_level` | Thinking level or token budget for reasoning models (`low`, `medium`, `high`, `off`, or integer token budget). When omitted, the model's native default thinking behaviour applies. See [Reasoning & Thinking Budget Control](#reasoning--thinking-budget-control). | No | `''` |
+| `max_candidate_files` | Maximum candidate non-core files to present to Dynamic Context Selection in Sparse Mode (default: 500). | No | `500` |
+| `extra_context_files` | Comma-separated list of repository file paths to attach as additional context, bypassing Dynamic Context Selection. | No | `''` |
+| `context_diff_directories_only` | Whether to restrict candidate context files in Sparse Mode strictly to directories containing modified files from the PR diff. | No | `'false'` |
+| `context_exclude_patterns` | Comma-separated glob patterns to exclude from candidate context files in addition to default exclusions (lockfiles, minified files, test snapshots, and binaries). | No | `''` |
 | `timeout` | Timeout for API requests in seconds. | No | `60` |
+
+### Reasoning & Thinking Budget Control
+
+When using reasoning models (such as `gemini-2.5-flash` or `gemini-2.5-pro`), Gemini uses internal reasoning ("thinking") tokens to analyse code diffs, architectural implications, and complex issue triage before outputting a response.
+
+* **Default Behaviour (when omitted)**:
+  If `thinking_level` is left blank (the default), no thinking configuration override is passed to the Gemini API (`thinking_config=None`). The model's native default behaviour applies:
+  * For reasoning models (e.g. Gemini 2.5), thinking is **enabled dynamically** by default.
+  * For non-reasoning models, the request executes normally without thinking tokens.
+* **Disabling Thinking (`off`)**:
+  To disable reasoning tokens completely—reducing latency and token costs (especially recommended for fast issue triage)—set `thinking_level` to `'off'`, `'false'`, `'disabled'`, or `0`. This explicitly sets `thinking_budget=0`.
+* **Constraining Reasoning**:
+  * **Categorical Levels**: `'low'`, `'medium'`, or `'high'` to guide reasoning depth without hard token caps.
+  * **Explicit Token Budgets**: A positive integer (e.g. `1024`, `2048`, `4096`) capping the maximum reasoning tokens.
+
+Thinking token usage and its associated cost are tracked and reported separately in the comment telemetry summary alongside prompt and candidate tokens (priced at the model's standard output rate), allowing you to monitor reasoning overhead and costs accurately.
+
+```yaml
+        with:
+          # Turn off thinking for fast, lightweight issue triage
+          thinking_level: 'off'
+          # Or set a lightweight thinking level or token budget for PR reviews
+          # thinking_level: 'low'
+          # thinking_level: '2048'
+```
 
 ### Codebase Context Configuration
 
 By default, the action uses an intelligent hybrid context engine to feed relevant repository context to the model during review:
 *   **max_context_bytes** (Default: `1500000` / 1.5 MB): The total size of all other text files in the repository. At ~375,000 tokens, 1.5 MB safely fits within Gemini's 1M+ token window while leaving plenty of headroom for the PR diff/patch and structured reviews. If the repository is smaller than this limit, the action runs in *Full Context Mode* and includes all files. If the repository exceeds this limit, it switches to *Sparse Context Mode*.
 *   **max_core_context_bytes** (Default: `500000` / 500 KB): In *Sparse Context Mode*, limits the maximum cumulative size of static core documentation and manifest files attached to the prompt. Any core files beyond this budget are deferred to Dynamic Context Selection.
-*   **Dynamic Context Selection**: In *Sparse Context Mode*, the action uses the configured Gemini model (e.g. `gemini-3.8-flash`) to evaluate modified files/diffs against a 4-tier architectural prioritization framework and select up to 8 of the most relevant candidate repository files (such as imported modules, sister classes, shared utilities, domain/algorithmic precedents, or tests) to attach directly into the review prompt alongside the file tree.
-*   **core_file_patterns**: A list of glob patterns matching project manifests, build definitions, root documentation, templates, and shared utilities (e.g. `README*`, `CONTRIBUTING*`, `ARCHITECTURE*`, `DESIGN*`, `SPEC*`, `DEPLOYMENT*`, `INSTALL*`, `PRODUCT*`, `SDD*`, `TDD*`, `TODO*`, `GEMINI.md`, `*template*`, `*shared*`, `*util*`, `*common*`, `*core*`, `pyproject.toml`, `package.json`) that are prioritized in *Sparse Context Mode*.
+*   **Dynamic Context Selection**: In *Sparse Context Mode*, the action evaluates modified files/diffs against candidate non-core repository files to attach up to 8 of the most relevant sister modules, utilities, domain/algorithmic precedents, or tests.
+    *   **Candidate Bounding**: To safeguard large monorepos against context selection token bloat or quota exhaustion, candidates are bounded to `max_candidate_files` (default 500) using proximity and import ranking heuristics. You can also restrict candidates strictly to directories touched by the PR diff with `context_diff_directories_only: 'true'`.
+    *   **Built-in & Custom Exclusions**: Binary assets, package manager lockfiles (`pnpm-lock.yaml`, `yarn.lock`, `Cargo.lock`, `uv.lock`, `go.sum`, etc.), minified bundles (`.min.js`, `.min.css`), source maps (`.map`), and test snapshots are automatically excluded from context candidates. You can supply additional glob patterns using `context_exclude_patterns`.
+    *   **Static Context Override**: If you know exactly which additional files Gemini needs, specify `extra_context_files` to attach them directly and bypass Dynamic Context Selection entirely.
+*   **core_file_patterns**: A list of glob patterns matching project manifests, build definitions, root documentation, templates, and shared utilities (e.g. `README*`, `CONTRIBUTING*`, `ARCHITECTURE*`, `DESIGN*`, `SPEC*`, `DEPLOYMENT*`, `INSTALL*`, `PRODUCT*`, `SDD*`, `TDD*`, `TODO*`, `GEMINI.md`, `*template*`, `*shared*`, `*util*`, `*common*`, `*core*`, `pyproject.toml`, `package.json`) that are prioritised in *Sparse Context Mode*.
 
 You can configure these settings by adding the following keys to your custom `.github/commands/gemini-review.toml` configuration (or via `GEMINI_MAX_CONTEXT_BYTES` and `GEMINI_MAX_CORE_CONTEXT_BYTES`):
 
@@ -597,12 +630,14 @@ Whenever a review run finishes, the action provides token telemetry in two place
    | **Input Tokens (uncached)** | 14,414 |
    | **Input Tokens (cached)** | 250,985 (⚡ 94.4% cached) |
    | **PR Comments History Tokens** | 450 |
+   | **Thinking / Reasoning Tokens** | 2,048 |
    | **Output Tokens** | 210 |
-   | **Total Session Tokens** | **267,701** |
-   | **Cost (uncached input)** | $0.0111 |
+   | **Total Session Tokens** | **268,107** |
+   | **Cost (uncached input)** | $0.0108 |
    | **Cost (cached input)** | $0.0188 |
-   | **Cost (output)** | $0.0008 |
-   | **Estimated Total Cost** | **$0.0307** |
+   | **Cost (thinking / reasoning)** | $0.0077 |
+   | **Cost (response output)** | $0.0008 |
+   | **Estimated Total Cost** | **$0.0381** |
 
    > Gemini 3.8 Flash: introductory rate $0.75/$3.75 per 1M applied; reverts to $1.5/$7.5 after 2026-12-31.
    > Context-cache STORAGE is billed per token-hour and is not reported here, so the figure runs slightly low on repositories reviewed infrequently.
@@ -612,7 +647,7 @@ Whenever a review run finishes, the action provides token telemetry in two place
 2. **Workflow Execution Logs**: A concise single-line token summary log printed to the runner `stderr`:
 
 ```text
-Token Usage: 14,414 input tokens (94.4% cached), 210 output tokens. Total: 267,701 tokens. Estimated cost: $0.0307.
+Token Usage: 14,414 input tokens (94.4% cached), 2,048 thinking tokens, 210 output tokens. Total: 268,107 tokens. Estimated cost: $0.0381.
 ```
 
 ### Metrics Explained
@@ -621,8 +656,10 @@ Token Usage: 14,414 input tokens (94.4% cached), 210 output tokens. Total: 267,7
 * **Cached Context Tokens (`├── Cached Context Tokens`)**: The portion of input tokens stored in Gemini's server-side context cache. Context caching applies **exclusively to input tokens**, providing an **automatic 90% rate discount** on cached input tokens.
 * **PR Comments History Tokens (`├── PR Comments History Tokens`)**: The exact token count consumed by historical inline review threads and conversation comments fetched via the GitHub API and included in the dynamic review context.
 * **Un-cached Fresh Tokens (`└── Un-cached Fresh Tokens`)**: The newly introduced PR diff lines and dynamic skill instructions, billed at standard input rates.
-* **Output (Candidates) Tokens**: The number of tokens generated by Gemini in its structured review response JSON. Context caching does not apply to output tokens, which are billed at standard model output rates.
-* **Total Session Tokens**: The combined total of prompt and output tokens processed during the review.
+* **Thinking / Reasoning Tokens**: The internal reasoning tokens consumed by thinking models (such as Gemini 2.5) while evaluating complex logic and diffs.
+* **Output Tokens**: The final structured review tokens (markdown comments and suggestions) returned by the model.
+* **Cost (thinking / reasoning) & Cost (response output)**: Under the Google Gemini API pricing model, reasoning/thinking tokens are billed at the **standard output rate** (`rate.output`). Whenever thinking tokens are generated, the cost report transparently splits out the cost of reasoning from the cost of final response candidates, giving you full visibility into the cost impact of your chosen `thinking_level`.
+* **Total Session Tokens**: The combined total of prompt, thinking, and candidate output tokens processed during the review.
 * **Estimated Total Cost**: The token counts above priced at the model's published rate. **A model with no entry in the rate table reports tokens and no cost** rather than borrowing another model's rate, because a missing number is obvious and a wrong one is not. Where a model has a time-boxed introductory rate, the end date is part of the table, so the figure stays correct on both sides of it and a note says which rate was applied.
 * **Cost caveats**: Rendered as quoted lines under the table rather than left to documentation — the introductory-rate note, and the fact that context-cache **storage** (billed per token-hour) is not counted, so the estimate runs slightly low.
 

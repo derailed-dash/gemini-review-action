@@ -235,6 +235,7 @@ def post_with_retry(url: str, headers: dict, json_payload: dict, timeout: int) -
     retry would have delivered most of it.
     """
     last_error: Exception | None = None
+    response: Any = None
     for attempt in range(POST_RETRIES + 1):
         try:
             response = requests.post(url, headers=headers, json=json_payload, timeout=timeout)
@@ -278,8 +279,9 @@ def post_review(
             body_parts.append(f"```suggestion\n{c.code_suggestion}\n```")
 
         comment_dict = {"path": c.path, "line": c.line, "side": c.side, "body": "\n\n".join(body_parts)}
-        if getattr(c, "start_line", None) and c.start_line < c.line:
-            comment_dict["start_line"] = c.start_line
+        start_line = getattr(c, "start_line", None)
+        if start_line is not None and start_line < c.line:
+            comment_dict["start_line"] = start_line
             comment_dict["start_side"] = c.side
 
         comments_payload.append(comment_dict)
@@ -297,8 +299,14 @@ def post_review(
         fresh_tokens = usage_metadata.get("fresh_tokens", 0)
         comment_history_tokens = usage_metadata.get("comment_history_tokens", 0)
         candidates_tokens = usage_metadata.get("candidates_tokens", 0)
+        thoughts_tokens = usage_metadata.get("thoughts_tokens", 0)
         total_tokens = usage_metadata.get("total_tokens", 0)
         cache_percentage = usage_metadata.get("cache_percentage", 0.0)
+
+        ctx_prompt_tokens = usage_metadata.get("context_selection_prompt_tokens", 0)
+        ctx_candidates_tokens = usage_metadata.get("context_selection_candidates_tokens", 0)
+        ctx_thoughts_tokens = usage_metadata.get("context_selection_thoughts_tokens", 0)
+        ctx_total_tokens = ctx_prompt_tokens + ctx_candidates_tokens + ctx_thoughts_tokens
 
         cache_str = f" (⚡ {cache_percentage:.1f}% cached)" if cached_tokens > 0 else ""
 
@@ -309,12 +317,12 @@ def post_review(
             table_rows.append(f"| **Input Tokens (cached)** | {cached_tokens:,d}{cache_str} |")
         if comment_history_tokens > 0:
             table_rows.append(f"| **PR Comments History Tokens** | {comment_history_tokens:,d} |")
-        table_rows.extend(
-            [
-                f"| **Output Tokens** | {candidates_tokens:,d} |",
-                f"| **Total Session Tokens** | **{total_tokens:,d}** |",
-            ]
-        )
+        if thoughts_tokens > 0:
+            table_rows.append(f"| **Thinking / Reasoning Tokens** | {thoughts_tokens:,d} |")
+        table_rows.append(f"| **Output Tokens** | {candidates_tokens:,d} |")
+        if ctx_total_tokens > 0:
+            table_rows.append(f"| **Dynamic Context Selection Tokens** | {ctx_total_tokens:,d} |")
+        table_rows.append(f"| **Total Session Tokens** | **{total_tokens:,d}** |")
 
         # Cost, from the same counts. A model with no rate entry renders tokens only —
         # borrowing another model's rate would produce a confident wrong figure.
@@ -326,12 +334,14 @@ def post_review(
             ]
             if cached_tokens > 0:
                 cost_rows.append(f"| **Cost (cached input)** | {usd(cost.cached_input)} |")
-            cost_rows.extend(
-                [
-                    f"| **Cost (output)** | {usd(cost.output)} |",
-                    f"| **Estimated Total Cost** | **{usd(cost.total)}** |",
-                ]
-            )
+            if thoughts_tokens > 0 and cost.thinking > 0:
+                cost_rows.append(f"| **Cost (thinking / reasoning)** | {usd(cost.thinking)} |")
+                cost_rows.append(f"| **Cost (response output)** | {usd(cost.candidates_output)} |")
+            else:
+                cost_rows.append(f"| **Cost (output)** | {usd(cost.output)} |")
+            if cost.context_selection > 0:
+                cost_rows.append(f"| **Cost (context selection)** | {usd(cost.context_selection)} |")
+            cost_rows.append(f"| **Estimated Total Cost** | **{usd(cost.total)}** |")
 
         caveat_md = ""
         if cost.caveats:
