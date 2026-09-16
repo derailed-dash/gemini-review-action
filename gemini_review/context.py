@@ -451,7 +451,7 @@ def build_codebase_context(
             print("Codebase context: no core files matched or found.", file=sys.stderr)
 
         # Check for static extra_context_files bypass
-        if extra_files:
+            extra_capped: list[str] = []
             print(
                 f"Codebase context: attaching {len(extra_files)} static extra context file(s)...",
                 file=sys.stderr,
