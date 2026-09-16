@@ -458,12 +458,37 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 | `persona` | Reviewer persona overlay (`straight`, `dazbo`, `palpatine`, `rick`). | No | `straight` |
 | `custom_instructions` | Custom instructions or guardrails to extend the review prompt. Can be inline text or a file path in the repository (e.g. `.github/review-instruction-additions.md`). | No | `.github/review-instruction-additions.md` |
 | `skip_inline_suggestions` | Whether to skip automated re-reviews when a commit is created by accepting an inline suggestion via GitHub UI. | No | `'true'` |
-| `thinking_level` | Thinking level or token budget for reasoning models (`low`, `medium`, `high`, `off`, or integer token budget). Default model behavior applies when omitted. | No | `''` |
+| `thinking_level` | Thinking level or token budget for reasoning models (`low`, `medium`, `high`, `off`, or integer token budget). When omitted, the model's native default thinking behaviour applies. See [Reasoning & Thinking Budget Control](#reasoning--thinking-budget-control). | No | `''` |
 | `max_candidate_files` | Maximum candidate non-core files to present to Dynamic Context Selection in Sparse Mode (default: 500). | No | `500` |
 | `extra_context_files` | Comma-separated list of repository file paths to attach as additional context, bypassing Dynamic Context Selection. | No | `''` |
 | `context_diff_directories_only` | Whether to restrict candidate context files in Sparse Mode strictly to directories containing modified files from the PR diff. | No | `'false'` |
 | `context_exclude_patterns` | Comma-separated glob patterns to exclude from candidate context files in addition to default exclusions (lockfiles, minified files, test snapshots, and binaries). | No | `''` |
 | `timeout` | Timeout for API requests in seconds. | No | `60` |
+
+### Reasoning & Thinking Budget Control
+
+When using reasoning models (such as `gemini-2.5-flash` or `gemini-2.5-pro`), Gemini uses internal reasoning ("thinking") tokens to analyse code diffs, architectural implications, and complex issue triage before outputting a response.
+
+* **Default Behaviour (when omitted)**:
+  If `thinking_level` is left blank (the default), no thinking configuration override is passed to the Gemini API (`thinking_config=None`). The model's native default behaviour applies:
+  * For reasoning models (e.g. Gemini 2.5), thinking is **enabled dynamically** by default.
+  * For non-reasoning models, the request executes normally without thinking tokens.
+* **Disabling Thinking (`off`)**:
+  To disable reasoning tokens completely—reducing latency and token costs (especially recommended for fast issue triage)—set `thinking_level` to `'off'`, `'false'`, `'disabled'`, or `0`. This explicitly sets `thinking_budget=0`.
+* **Constraining Reasoning**:
+  * **Categorical Levels**: `'low'`, `'medium'`, or `'high'` to guide reasoning depth without hard token caps.
+  * **Explicit Token Budgets**: A positive integer (e.g. `1024`, `2048`, `4096`) capping the maximum reasoning tokens.
+
+Thinking token usage is tracked and reported separately in the comment telemetry summary alongside prompt and candidate tokens, allowing you to monitor reasoning overhead and costs accurately.
+
+```yaml
+        with:
+          # Turn off thinking for fast, lightweight issue triage
+          thinking_level: 'off'
+          # Or set a lightweight thinking level or token budget for PR reviews
+          # thinking_level: 'low'
+          # thinking_level: '2048'
+```
 
 ### Codebase Context Configuration
 
