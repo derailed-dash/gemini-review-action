@@ -1,10 +1,3 @@
-# /// script
-# dependencies = [
-#   "google-genai>=2.12.1",
-#   "requests",
-#   "pydantic",
-# ]
-# ///
 #!/usr/bin/env python3
 """
 Description: Runs a Pull Request code review using the Google GenAI SDK.

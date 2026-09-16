@@ -158,9 +158,9 @@ runs:
         GITHUB_EVENT_NAME: ${{ github.event_name }}
       run: |
         if [ "${{ inputs.command }}" = "triage" ]; then
-          uv run ${{ github.action_path }}/gemini_issue_triage.py
+          uv run --project ${{ github.action_path }} python ${{ github.action_path }}/gemini_issue_triage.py
         else
-          uv run ${{ github.action_path }}/gemini_pr_review.py
+          uv run --project ${{ github.action_path }} python ${{ github.action_path }}/gemini_pr_review.py
         fi
 
 branding:
