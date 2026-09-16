@@ -319,7 +319,11 @@ def main():
                         except Exception:
                             parsed_tools = None
 
-                    cache_contents = [codebase_context] + codebase_multimodal_parts
+                    cache_contents: Any = (
+                        [codebase_context] + codebase_multimodal_parts
+                        if codebase_multimodal_parts
+                        else codebase_context
+                    )
                     cache_obj = client.caches.create(
                         model=model_name,
                         config=types.CreateCachedContentConfig(
