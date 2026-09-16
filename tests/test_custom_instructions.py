@@ -128,3 +128,32 @@ class TestCustomInstructions:
         assert "You are a world-class software engineering and technical review agent" in result
         assert "## Additional Review Instructions & Guardrails:" in result
         assert "Ensure all API calls have timeouts." in result
+
+    def test_load_custom_instructions_does_not_load_agents_md(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """AGENTS.md provides project context for diffs and is NOT loaded as reviewer custom instructions."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("GEMINI_CUSTOM_INSTRUCTIONS", raising=False)
+
+        agents_file = tmp_path / "AGENTS.md"
+        agents_file.write_text("Rule: Target Python >=3.13 and use PEP 585 type hints.", encoding="utf-8")
+
+        content = load_custom_instructions()
+        assert content == ""
+
+    def test_load_custom_instructions_only_loads_from_github_folder(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """Review agent instructions are strictly loaded from .github/review-instruction-additions.md."""
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("GEMINI_CUSTOM_INSTRUCTIONS", raising=False)
+
+        github_dir = tmp_path / ".github"
+        github_dir.mkdir()
+        (github_dir / "review-instruction-additions.md").write_text(
+            "Review rule: check test coverage.", encoding="utf-8"
+        )
+        (tmp_path / "AGENTS.md").write_text("Project rule: English (UK) spelling.", encoding="utf-8")
+
+        content = load_custom_instructions()
+        assert content == "Review rule: check test coverage."
+        assert "Project rule" not in content

@@ -45,5 +45,6 @@ jobs:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gemini_model: 'gemini-3.8-flash'
+          thinking_level: 'low'
           language: 'English (UK)'
           persona: 'dazbo'  # Optional: straight (default), dazbo, palpatine, rick

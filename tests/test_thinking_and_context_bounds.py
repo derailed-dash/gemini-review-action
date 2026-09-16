@@ -51,6 +51,22 @@ def test_build_thinking_config_numeric_budget():
     assert cfg_zero is not None
     assert cfg_zero.thinking_budget == 0
 
+    cfg_off = build_thinking_config("off")
+    assert cfg_off is not None
+    assert cfg_off.thinking_budget == 0
+    assert cfg_off.thinking_level is None
+
+    cfg_false = build_thinking_config("false")
+    assert cfg_false is not None
+    assert cfg_false.thinking_budget == 0
+
+    cfg_disabled = build_thinking_config("disabled")
+    assert cfg_disabled is not None
+    assert cfg_disabled.thinking_budget == 0
+
+    assert build_thinking_config("none") is None
+    assert build_thinking_config("default") is None
+
 
 # ==============================================================================
 # 2. Expanded File Exclusions Tests
@@ -136,6 +152,12 @@ def test_extract_import_references():
 +)
 """,
         },
+        {
+            "filename": "native/render.cpp",
+            "patch": """
++#include "engine/renderer.h"
+""",
+        },
     ]
 
     refs = extract_import_references(files)
@@ -143,8 +165,12 @@ def test_extract_import_references():
     assert any("AuthService" in r or "auth" in r for r in refs)
     assert any("models" in r or "User" in r for r in refs)
     assert any("Button" in r for r in refs)
+    assert any("components/Button" in r for r in refs)
     assert any("api" in r for r in refs)
+    assert any("utils/api" in r for r in refs)
     assert any("storage" in r for r in refs)
+    assert any("renderer" in r for r in refs)
+    assert any("engine/renderer" in r for r in refs)
 
 
 # ==============================================================================
@@ -232,6 +258,42 @@ def test_build_codebase_context_with_extra_context_files(mocker, tmp_path):
     assert "Detailed architecture notes." in context
     assert "extra_schema.json" in context
     assert '{"type": "object"}' in context
+
+
+def test_build_codebase_context_includes_agents_md_as_project_context(mocker):
+    """AGENTS.md and GEMINI.md should always be included as project context when looking at diffs."""
+    mocker.patch(
+        "gemini_review.get_all_repo_files",
+        return_value=["main.py", "AGENTS.md", "README.md", "GEMINI.md", "service.py"],
+    )
+    mocker.patch("os.path.getsize", return_value=5000)
+    mocker.patch("gemini_review.get_file_content", side_effect=lambda f: f"# Content of {f}")
+    mocker.patch("gemini_review.select_dynamic_context_files", return_value=([], ""))
+
+    mock_client = MagicMock()
+    files = [{"filename": "main.py", "status": "modified", "patch": "diff"}]
+
+    # In full context mode
+    context_full = build_codebase_context(
+        files,
+        {"max_context_bytes": 1000000},
+        client=mock_client,
+        model="gemini-3.7-flash",
+    )
+    assert "AGENTS.md" in context_full
+    assert "# Content of AGENTS.md" in context_full
+    assert "GEMINI.md" in context_full
+
+    # In sparse context mode
+    context_sparse = build_codebase_context(
+        files,
+        {"max_context_bytes": 1000, "max_core_context_bytes": 50000},
+        client=mock_client,
+        model="gemini-3.7-flash",
+    )
+    assert "AGENTS.md" in context_sparse
+    assert "# Content of AGENTS.md" in context_sparse
+    assert "GEMINI.md" in context_sparse
 
 
 # ==============================================================================

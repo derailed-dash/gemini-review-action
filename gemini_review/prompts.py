@@ -4,6 +4,7 @@ Constructs review prompts, parses PR diffs, executes
 dynamic context file selection using the primary Gemini model, and merges discussion thread history.
 """
 
+import fnmatch
 import json
 import os
 import sys
@@ -165,13 +166,41 @@ DEFAULT_CUSTOM_INSTRUCTIONS_PATH = ".github/review-instruction-additions.md"
 FALLBACK_CUSTOM_INSTRUCTIONS_PATH = "review-instruction-additions.md"
 
 
+def _safe_read_instruction_file(candidate: str, workspace_root: str) -> str | None:
+    """Safely read instruction file ensuring no path traversal outside workspace root."""
+    norm_candidate = candidate.replace("/", os.sep).replace("\\", os.sep)
+    full_path = os.path.realpath(norm_candidate)
+    try:
+        if os.path.commonpath([workspace_root, full_path]) != workspace_root:
+            print(
+                f"Warning: Access denied for custom instructions path '{candidate}' (path traversal blocked).",
+                file=sys.stderr,
+            )
+            return None
+    except Exception:
+        return None
+
+    if os.path.exists(full_path) and os.path.isfile(full_path):
+        try:
+            print(f"Loading custom review instructions from {candidate}...", file=sys.stderr)
+            with open(full_path, "r", encoding="utf-8") as f:
+                return f.read().strip()
+        except Exception as e:
+            print(f"Warning: Failed to read custom instructions from {candidate}: {e}", file=sys.stderr)
+            return None
+    return None
+
+
 def load_custom_instructions(custom_input: str | None = None) -> str:
-    """Load custom review instructions and guardrails from a file path or inline text.
+    """Load custom review instructions and guardrails for the PR review agent.
 
     Supports reading from custom_input argument, GEMINI_CUSTOM_INSTRUCTIONS environment
-    variable, or falling back to convention-based file locations (.github/review-instruction-additions.md
-    or review-instruction-additions.md at repository root). Safely prevents path traversal.
-    If the default file does not exist, returns an empty string without raising an error.
+    variable, or convention-based file locations:
+    .github/review-instruction-additions.md (preferred) or review-instruction-additions.md at repository root.
+    Safely prevents path traversal. If the default file does not exist, returns an empty string.
+
+    Note: General repository rule files (e.g. AGENTS.md, GEMINI.md) provide project context for diffs
+    and are attached separately in codebase context, not as reviewer instructions.
     """
     raw_val = custom_input if custom_input is not None else os.environ.get("GEMINI_CUSTOM_INSTRUCTIONS")
     if raw_val is None:
@@ -182,55 +211,35 @@ def load_custom_instructions(custom_input: str | None = None) -> str:
         return ""
 
     is_default = raw_val == DEFAULT_CUSTOM_INSTRUCTIONS_PATH
-
-    # Candidate file paths to check
-    candidate_paths = [raw_val]
-    if is_default:
-        candidate_paths.append(FALLBACK_CUSTOM_INSTRUCTIONS_PATH)
-
     workspace_root = os.path.realpath(".")
 
-    for candidate in candidate_paths:
-        norm_candidate = candidate.replace("/", os.sep).replace("\\", os.sep)
-        full_path = os.path.realpath(norm_candidate)
-        try:
-            if os.path.commonpath([workspace_root, full_path]) != workspace_root:
-                print(
-                    f"Warning: Access denied for custom instructions path '{candidate}' (path traversal blocked).",
-                    file=sys.stderr,
-                )
-                return ""
-        except Exception:
-            return ""
+    if is_default:
+        for candidate in [DEFAULT_CUSTOM_INSTRUCTIONS_PATH, FALLBACK_CUSTOM_INSTRUCTIONS_PATH]:
+            content = _safe_read_instruction_file(candidate, workspace_root)
+            if content:
+                return content
+        return ""
 
-        if os.path.exists(full_path) and os.path.isfile(full_path):
-            try:
-                print(f"Loading custom review instructions from {candidate}...", file=sys.stderr)
-                with open(full_path, "r", encoding="utf-8") as f:
-                    return f.read().strip()
-            except Exception as e:
-                print(f"Warning: Failed to read custom instructions from {candidate}: {e}", file=sys.stderr)
-                return ""
+    # Explicit custom input provided
+    content = _safe_read_instruction_file(raw_val, workspace_root)
+    if content:
+        return content
 
-    # If the user explicitly provided input that is not a default candidate path
-    if not is_default:
-        # Multi-line string is definitely inline text instructions
-        if "\n" in raw_val:
-            return raw_val
-
-        # If it looks like a path but wasn't found, warn and return empty
-        if (
-            raw_val.startswith(("./", "../", ".github/"))
-            or raw_val.endswith((".md", ".txt", ".markdown"))
-            or (os.sep in raw_val and " " not in raw_val and not raw_val.startswith("-"))
-        ):
-            print(f"Warning: Custom instructions file '{raw_val}' not found.", file=sys.stderr)
-            return ""
-
-        # Otherwise, treat it as single-line inline instruction text
+    # Multi-line string is definitely inline text instructions
+    if "\n" in raw_val:
         return raw_val
 
-    return ""
+    # If it looks like a path but wasn't found, warn and return empty
+    if (
+        raw_val.startswith(("./", "../", ".github/"))
+        or raw_val.endswith((".md", ".txt", ".markdown"))
+        or (os.sep in raw_val and " " not in raw_val and not raw_val.startswith("-"))
+    ):
+        print(f"Warning: Custom instructions file '{raw_val}' not found.", file=sys.stderr)
+        return ""
+
+    # Otherwise, treat it as single-line inline instruction text
+    return raw_val
 
 
 def load_system_instruction(
@@ -497,30 +506,52 @@ def build_codebase_context(
             core_files_included = []
             core_capped: list[str] = []
             core_bytes_used = 0
-            for f in other_files:
-                if fn_is_core_file(f, core_patterns):
-                    try:
-                        f_size = os.path.getsize(f)
-                    except Exception:
-                        f_size = 0
-                    if core_bytes_used + f_size <= max_core_context_bytes:
-                        content = fn_get_file_content(f)
-                        if content:
-                            content, was_capped = cap_file_content(content, f, file_byte_limit)
-                            if was_capped:
-                                core_capped.append(f)
-                                f_size = min(f_size, file_byte_limit)
-                            prompt_parts.append(f"--- File: {f} ---")
-                            prompt_parts.append(content)
-                            prompt_parts.append("-----------------\n")
-                            core_files_included.append(f)
-                            core_bytes_used += f_size
-                    else:
-                        print(
-                            f"Codebase context: skipping core file '{f}' (exceeds max_core_context_bytes limit of"
-                            f" {max_core_context_bytes} bytes).",
-                            file=sys.stderr,
-                        )
+
+            # Prioritise standard agent rules and architectural documentation first
+            priority_core_patterns = [
+                "README*",
+                "AGENTS.md",
+                ".github/AGENTS.md",
+                "GEMINI.md",
+                ".github/GEMINI.md",
+                "CLAUDE.md",
+                ".github/CLAUDE.md",
+                "docs/architecture*",
+            ]
+
+            def _core_sort_key(file_path: str) -> tuple[int, str]:
+                norm_p = file_path.replace("\\", "/").removeprefix("./")
+                for idx, pat in enumerate(priority_core_patterns):
+                    if fnmatch.fnmatch(norm_p, pat) or fnmatch.fnmatch(os.path.basename(norm_p), pat):
+                        return (idx, norm_p)
+                return (len(priority_core_patterns), norm_p)
+
+            candidate_core_files = sorted(
+                [f for f in other_files if fn_is_core_file(f, core_patterns)], key=_core_sort_key
+            )
+            for f in candidate_core_files:
+                try:
+                    f_size = os.path.getsize(f)
+                except Exception:
+                    f_size = 0
+                if core_bytes_used + f_size <= max_core_context_bytes:
+                    content = fn_get_file_content(f)
+                    if content:
+                        content, was_capped = cap_file_content(content, f, file_byte_limit)
+                        if was_capped:
+                            core_capped.append(f)
+                            f_size = min(f_size, file_byte_limit)
+                        prompt_parts.append(f"--- File: {f} ---")
+                        prompt_parts.append(content)
+                        prompt_parts.append("-----------------\n")
+                        core_files_included.append(f)
+                        core_bytes_used += f_size
+                else:
+                    print(
+                        f"Codebase context: skipping core file '{f}' (exceeds max_core_context_bytes limit of"
+                        f" {max_core_context_bytes} bytes).",
+                        file=sys.stderr,
+                    )
             report_capped(core_capped, file_byte_limit)
             if core_files_included:
                 print(

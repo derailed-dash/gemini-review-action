@@ -703,9 +703,17 @@ def extract_import_references(files: list[dict]) -> set[str]:
                 for group in match.groups():
                     if not group:
                         continue
-                    cleaned = group.strip().replace("::", "/").replace(".", "/")
+                    cleaned = group.strip().replace("::", "/")
+                    if "/" not in cleaned:
+                        parts = cleaned.split(".")
+                        base = parts[-1]
+                        cleaned = "/".join(parts)
+                    else:
+                        norm = cleaned.lstrip("./").lstrip("/")
+                        base = os.path.splitext(os.path.basename(cleaned))[0]
+                        cleaned = os.path.splitext(norm)[0]
+
                     # Extract module basename (e.g. 'tokens' from 'src.auth.tokens')
-                    base = os.path.splitext(os.path.basename(cleaned))[0]
                     if base and len(base) > 1 and not base.isdigit():
                         refs.add(base)
                         refs.add(base.lower())

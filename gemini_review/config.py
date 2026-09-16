@@ -66,8 +66,13 @@ def build_thinking_config(thinking_level: str | int | None = None) -> types.Thin
         except ValueError:
             pass
 
-    # Treat as thinking level string (e.g. 'minimal', 'low', 'medium', 'high')
+    # Treat as thinking level string (e.g. 'minimal', 'low', 'medium', 'high', 'off')
     level_str = val.lower()
+    if level_str in ("off", "false", "disabled"):
+        return types.ThinkingConfig(thinking_budget=0)
+    if level_str in ("none", "default"):
+        return None
+
     try:
         return types.ThinkingConfig(thinking_level=level_str)
     except Exception as e:

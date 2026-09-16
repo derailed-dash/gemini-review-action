@@ -11,6 +11,18 @@ This repository contains the codebase for the **Gemini Code Review & Issue Triag
 - **Input Parameters in Workflow YAML**: All operational configuration parameters (such as `skip_inline_suggestions`, `include_comment_history`, `language`, `persona`, `timeout`) MUST be configured via action input parameters in `action.yml`, workflow `.yml` files, and environment variables (`GEMINI_*`).
 - **TOML Configuration Scope**: `gemini-review.toml` is strictly reserved for prompt text templates and custom system prompt overrides. Operational configuration parameters must NOT be placed in `gemini-review.toml`.
 
+## Review Agent Instructions vs Repository Project Context
+
+When designing or modifying review prompts and context assembly:
+- **Reviewer Custom Instructions (System Prompt)**:
+  - Custom instructions to guide the PR review agent (persona, tone, extra review rules) MUST strictly come from `.github/review-instruction-additions.md` (or root `review-instruction-additions.md` fallback).
+  - These are loaded via `load_custom_instructions()` and appended to Gemini's system instructions.
+  - General repository guideline files like `AGENTS.md` or `GEMINI.md` MUST NOT be loaded into `load_custom_instructions()` or the reviewer's system prompt.
+- **Repository Project Context (User Prompt / Diff Context)**:
+  - Files like `AGENTS.md`, `GEMINI.md`, and `CLAUDE.md` represent repository guidelines, coding standards, and project rules.
+  - They MUST be attached as **project context** alongside the diff (in `build_codebase_context()`) so the model understands the project's rules when evaluating code changes.
+  - In sparse context mode, they are prioritised at the very top of `candidate_core_files` so they are never squeezed out by byte limits.
+
 ## Python Guidelines
 
 - **Python Version**: Target Python >=3.13.
