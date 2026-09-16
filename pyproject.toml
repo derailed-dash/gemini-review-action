@@ -1,10 +1,15 @@
 [project]
 name = "gemini-review-action"
-version = "1.7.1"
+version = "1.8.0"
 description = "GitHub Action for code reviews and issue triage using Google Gemini"
 readme = "README.md"
 requires-python = ">=3.13"
-dependencies = ["google-genai>=2.12.1", "requests>=2.31.0", "pydantic>=2.6.0"]
+dependencies = [
+    "google-genai>=2.12.1",
+    "requests>=2.31.0",
+    "pydantic>=2.6.0",
+    "pillow>=10.0.0",
+]
 
 [dependency-groups]
 dev = [

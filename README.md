@@ -31,6 +31,7 @@ See the supporting blog post about this action [here](https://medium.com/google-
 - [Configuration](#configuration)
   - [Action Inputs](#action-inputs)
   - [Codebase Context Configuration](#codebase-context-configuration)
+  - [Multimodal Context & Visual PR Diffing](#multimodal-context--visual-pr-diffing)
   - [Custom Prompts / Instructions](#custom-prompts--instructions)
   - [Prompt Placeholders](#prompt-placeholders)
 - [Understanding the Token Usage & Cost Efficiency Report](#understanding-the-token-usage--cost-efficiency-report)
@@ -53,6 +54,7 @@ See the supporting blog post about this action [here](https://medium.com/google-
 - **Tokenomics & Cost Telemetry Report**: Appends a collapsible token usage and **estimated dollar cost** summary to each review, with the rate that was applied stated alongside it.
 - **Drop-in Migration**: Fully compatible as a direct, drop-in replacement for the deprecated `run-gemini-cli` action.
 - **Structured Outputs**: Error-free JSON response formatting using Pydantic schema validation.
+- **Multimodal Context & Visual PR Diffing**: Inspects repository visual assets and documents (PNG, JPEG, WebP, GIF, SVG, PDF). Local images referenced in Markdown docs are automatically extracted and attached to review context. When PRs modify images, Gemini performs side-by-side visual diffing between baseline and updated versions to catch visual regressions and layout issues. Includes intelligent deterministic downscaling (Pillow) to minimise token consumption and latency.
 - **Hybrid Codebase Context**: Automatically includes codebase context based on the overall size of the codebase. If the codebase isn't huge, the entire repo is loaded into context; but if it is huge, the agent reads the overall directory tree and judiciously includes a subset of the repo. (Note that it always reads markdown files, dependency files, packaging files, etc.)
 - **Interactive Suggestions**: Formats code recommendations inside native GitHub ` ```suggestion ` blocks for one-click merge applications.
 - **Triggers**: The action triggers automatically in response to PR events. It can also be triggered by posting a comment in the PR starting with `/gemini-review`.
@@ -463,6 +465,9 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 | `extra_context_files` | Comma-separated list of repository file paths to attach as additional context, bypassing Dynamic Context Selection. | No | `''` |
 | `context_diff_directories_only` | Whether to restrict candidate context files in Sparse Mode strictly to directories containing modified files from the PR diff. | No | `'false'` |
 | `context_exclude_patterns` | Comma-separated glob patterns to exclude from candidate context files in addition to default exclusions (lockfiles, minified files, test snapshots, and binaries). | No | `''` |
+| `max_multimodal_images` | Maximum number of multimodal images (markdown references, static attachments, visual diffs) attached to review context (default: 20). | No | `20` |
+| `image_trigger_bytes` | File size threshold in bytes above which raster images are downscaled before attachment (default: 614400 / 600 KB). | No | `614400` |
+| `image_target_bytes` | Target size in bytes when downscaling large raster images (default: 307200 / 300 KB). | No | `307200` |
 | `timeout` | Timeout for API requests in seconds. | No | `60` |
 
 ### Reasoning & Thinking Budget Control
@@ -514,7 +519,23 @@ core_file_patterns = [
 ]
 ```
 
+### Multimodal Context & Visual PR Diffing
 
+Gemini Review Action supports multimodal context inspection and side-by-side visual diffing for image assets and PDF documents:
+
+* **Automatic Markdown Image Reference Resolution**:
+  Whenever Markdown documentation (such as `README.md`, `DESIGN.md`, `ARCHITECTURE.md`, or newly added diff documentation) is included in the review context, any local repository images referenced via standard Markdown (`![alt](path/to/img.png)`) or HTML (`<img src="path/to/img.png">`) are automatically extracted, validated against path traversal, and attached as multimodal parts. This gives Gemini the complete visual context behind architecture diagrams, wireframes, and screenshots referenced in documentation.
+* **Side-by-Side Visual PR Diffing**:
+  When a Pull Request adds, deletes, or modifies visual assets (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.svg`), the action constructs structured visual diff parts for Gemini:
+  - For modified images, both the baseline version (`base_sha`) and the updated version (`head_sha`) are retrieved directly and presented side-by-side with clear labels.
+  - Gemini evaluates visual diffs for visual regressions, UI alignment, resolution degradation, icon consistency, and styling changes.
+* **Deterministic Pillow Downscaling**:
+  To protect token budgets and reduce inference latency, large raster graphics are automatically downscaled before being attached:
+  - Any raster image exceeding `image_trigger_bytes` (default: `614400` / 600 KB) is deterministically downscaled using high-quality Lanczos resampling and re-compressed towards `image_target_bytes` (default: `307200` / 300 KB).
+  - Scalable Vector Graphics (`image/svg+xml`) and PDF documents (`application/pdf`) bypass lossy compression to preserve full vector fidelity and textual clarity.
+* **Static Context Overrides & Safety Ceilings**:
+  - You can explicitly attach visual diagrams or design specifications using `extra_context_files` (e.g. `extra_context_files: 'docs/architecture.png,specs/api-spec.pdf'`).
+  - The `max_multimodal_images` input (default: `20`) provides a safety ceiling capping the total number of multimodal images attached across codebase context and visual diffs.
 
 ### Reviewer Personas
 
@@ -764,13 +785,22 @@ Here is an overview of the directory tree and the purpose of each file:
 ├── docs/                    # Technical documentation and architecture guides
 ├── gemini_review/           # Modular review engine package
 │   ├── __init__.py          # Package exports & public API facade bindings
+│   ├── billing_labels.py    # Google Cloud billing labels parsing & attribution
+│   ├── budget.py            # Token budget allocation & per-file content truncation
 │   ├── config.py            # Configuration loader and default settings
+│   ├── context.py           # Hybrid codebase context engine & dynamic context selection
 │   ├── developer_knowledge.py # Google Developer Knowledge API integration
+│   ├── diff.py              # Diff patch parsing, line numbering & suggestion alignment
 │   ├── github.py            # GitHub REST API interactions & review submission
+│   ├── multimodal.py        # Image/PDF MIME detection, Pillow downscaling & image extraction
+│   ├── personas.py          # Reviewer persona registry & prompt generation
+│   ├── pricing.py           # Token pricing calculation & review cost estimation
+│   ├── prompts.py           # Prompt builders, system instructions & visual diff assembly
+│   ├── repo.py              # File discovery, file tree generation & candidate bounding
 │   ├── schemas.py           # Pydantic schemas (InlineComment, ReviewResult)
-│   ├── prompts.py           # Prompt builders and system instruction loader
 │   ├── skills.py            # Workspace skill discovery & instruction loader
-│   └── utils.py             # File filtering, diff parsing, token counter & git utils
+│   ├── threads.py           # Discussion thread retrieval & automated resolution
+│   └── utils.py             # Core primitives (token estimation, rules loader) & facade re-exports
 ├── scripts/                 # Developer and maintenance utility scripts
 ├── starter-examples/        # Starter workflow files, default prompt templates, and skills manifest
 ├── tests/                   # Unit tests

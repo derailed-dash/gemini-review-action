@@ -23,17 +23,35 @@ from .config import (
     get_context_exclude_patterns,
     get_default_model,
     get_extra_context_files,
+    get_image_target_bytes,
+    get_image_trigger_bytes,
     get_max_candidate_files,
+    get_max_multimodal_images,
     load_config,
+)
+from .context import (
+    build_codebase_context,
+    select_dynamic_context_files,
 )
 from .developer_knowledge import (
     get_google_auth_headers,
     get_google_developer_documents,
     search_google_developer_knowledge,
 )
+from .diff import (
+    _auto_align_suggestion_indentation,
+    _auto_correct_suggestion_range,
+    filter_review_comments,
+    format_diff_patch_with_line_numbers,
+    format_file_content_with_line_numbers,
+    get_valid_changed_lines,
+    get_valid_diff_lines,
+    sanitize_code_suggestion,
+)
 from .github import (
     filter_comment_authors,
     format_pr_comment_history,
+    get_file_blob,
     get_pr_comments,
     get_pr_files,
     is_inline_suggestion_commit,
@@ -41,6 +59,15 @@ from .github import (
     post_commit_status,
     post_review,
     post_with_retry,
+)
+from .multimodal import (
+    SUPPORTED_IMAGE_EXTENSIONS,
+    SUPPORTED_MULTIMODAL_EXTENSIONS,
+    extract_markdown_image_references,
+    get_mime_type,
+    is_supported_image,
+    is_supported_multimodal_file,
+    optimize_image_bytes,
 )
 from .personas import (
     get_persona_prompt,
@@ -56,12 +83,22 @@ from .pricing import (
     usd,
 )
 from .prompts import (
-    build_codebase_context,
     build_pr_diff_prompt,
     build_prompt,
+    build_visual_diff_parts,
     load_custom_instructions,
     load_system_instruction,
-    select_dynamic_context_files,
+)
+from .repo import (
+    extract_import_references,
+    generate_file_tree,
+    get_all_repo_files,
+    get_file_content,
+    get_git_blob,
+    get_local_git_files,
+    is_core_file,
+    is_text_file,
+    rank_and_bound_candidates,
 )
 from .schemas import DynamicContextSelection, InlineComment, ResolvedItem, ReviewResult
 from .skills import (
@@ -73,22 +110,8 @@ from .threads import fetch_review_threads, resolve_addressed_threads, reviewer_l
 from .utils import (
     _normalize_model_name,
     count_text_tokens,
-    extract_import_references,
     extract_response_text_or_raise,
-    filter_review_comments,
-    format_diff_patch_with_line_numbers,
-    format_file_content_with_line_numbers,
-    generate_file_tree,
-    get_all_repo_files,
-    get_file_content,
-    get_local_git_files,
-    get_valid_changed_lines,
-    get_valid_diff_lines,
-    is_core_file,
-    is_text_file,
     load_workspace_rules,
-    rank_and_bound_candidates,
-    sanitize_code_suggestion,
 )
 
 __all__ = [
@@ -115,10 +138,13 @@ __all__ = [
     "reviewer_logins",
     "InlineComment",
     "ReviewResult",
+    "_auto_align_suggestion_indentation",
+    "_auto_correct_suggestion_range",
     "_normalize_model_name",
     "build_codebase_context",
     "build_pr_diff_prompt",
     "build_prompt",
+    "build_visual_diff_parts",
     "count_text_tokens",
     "extract_import_references",
     "extract_response_text_or_raise",
@@ -133,11 +159,17 @@ __all__ = [
     "get_context_diff_directories_only",
     "get_context_exclude_patterns",
     "get_extra_context_files",
+    "get_file_blob",
     "get_file_content",
+    "get_git_blob",
     "get_google_auth_headers",
     "get_google_developer_documents",
+    "get_image_target_bytes",
+    "get_image_trigger_bytes",
     "get_local_git_files",
     "get_max_candidate_files",
+    "get_max_multimodal_images",
+    "get_mime_type",
     "get_persona_prompt",
     "get_pr_comments",
     "get_pr_files",
@@ -145,6 +177,8 @@ __all__ = [
     "get_valid_diff_lines",
     "is_core_file",
     "is_inline_suggestion_commit",
+    "is_supported_image",
+    "is_supported_multimodal_file",
     "is_text_file",
     "list_available_skills",
     "load_config",
@@ -152,6 +186,10 @@ __all__ = [
     "load_skill_instructions",
     "load_system_instruction",
     "load_workspace_rules",
+    "optimize_image_bytes",
+    "extract_markdown_image_references",
+    "SUPPORTED_IMAGE_EXTENSIONS",
+    "SUPPORTED_MULTIMODAL_EXTENSIONS",
     "parse_skill_metadata",
     "post_commit_status",
     "post_review",
