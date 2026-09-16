@@ -74,7 +74,10 @@ def build_thinking_config(thinking_level: str | int | None = None) -> types.Thin
         return None
 
     try:
-        return types.ThinkingConfig(thinking_level=level_str)
+        level_enum = getattr(types.ThinkingLevel, level_str.upper(), None)
+        if level_enum is not None:
+            return types.ThinkingConfig(thinking_level=level_enum)
+        return types.ThinkingConfig(thinking_level=level_str)  # type: ignore[arg-type]
     except Exception as e:
         print(f"Warning: Failed to construct ThinkingConfig with thinking_level='{val}': {e}", file=sys.stderr)
         return None

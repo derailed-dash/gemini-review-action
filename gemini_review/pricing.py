@@ -136,6 +136,8 @@ class Cost:
     rate: Rate | None
     caveats: list[str]
     context_selection: float = 0.0
+    thinking: float = 0.0
+    candidates_output: float = 0.0
 
 
 def estimate_cost(usage: dict, model: str | None, config: dict | None = None, today: date | None = None) -> Cost:
@@ -157,7 +159,7 @@ def estimate_cost(usage: dict, model: str | None, config: dict | None = None, to
                 f"No rate entry for '{model or 'unknown model'}' — tokens only. "
                 "Set GEMINI_RATE_INPUT and GEMINI_RATE_OUTPUT to price it."
             )
-            return Cost(0.0, 0.0, 0.0, 0.0, None, caveats, 0.0)
+            return Cost(0.0, 0.0, 0.0, 0.0, None, caveats, 0.0, 0.0, 0.0)
         rate, promo_note = effective_rate(listed, today)
         if promo_note:
             caveats.append(f"{listed.label}: {promo_note}.")
@@ -166,12 +168,14 @@ def estimate_cost(usage: dict, model: str | None, config: dict | None = None, to
 
     full_price_input = max(0, usage.get("fresh_tokens", 0)) + max(0, usage.get("comment_history_tokens", 0))
     cached = max(0, usage.get("cached_tokens", 0))
+    candidates_tokens = max(0, usage.get("candidates_tokens", 0))
+    thoughts_tokens = max(0, usage.get("thoughts_tokens", 0))
     # Output tokens billed by Gemini include candidates_tokens AND thoughts_tokens
     output_tokens = max(
         0,
         usage.get(
             "total_output_tokens",
-            usage.get("candidates_tokens", 0) + usage.get("thoughts_tokens", 0),
+            candidates_tokens + thoughts_tokens,
         ),
     )
 
@@ -181,6 +185,8 @@ def estimate_cost(usage: dict, model: str | None, config: dict | None = None, to
     cache_multiplier = rate.cache_read if rate.cache_read is not None else DEFAULT_CACHE_READ_MULTIPLIER
     cached_cost = cached / 1e6 * rate.input * cache_multiplier
     output_cost = output_tokens / 1e6 * rate.output
+    thinking_cost = thoughts_tokens / 1e6 * rate.output
+    candidates_cost = candidates_tokens / 1e6 * rate.output
 
     # Context selection cost (when dynamic context selection ran as an auxiliary API call)
     ctx_prompt_tokens = max(0, usage.get("context_selection_prompt_tokens", 0))
@@ -213,6 +219,8 @@ def estimate_cost(usage: dict, model: str | None, config: dict | None = None, to
         rate=rate,
         caveats=caveats,
         context_selection=context_selection_cost,
+        thinking=thinking_cost,
+        candidates_output=candidates_cost,
     )
 
 

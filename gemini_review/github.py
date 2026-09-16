@@ -235,6 +235,7 @@ def post_with_retry(url: str, headers: dict, json_payload: dict, timeout: int) -
     retry would have delivered most of it.
     """
     last_error: Exception | None = None
+    response: Any = None
     for attempt in range(POST_RETRIES + 1):
         try:
             response = requests.post(url, headers=headers, json=json_payload, timeout=timeout)
@@ -278,8 +279,9 @@ def post_review(
             body_parts.append(f"```suggestion\n{c.code_suggestion}\n```")
 
         comment_dict = {"path": c.path, "line": c.line, "side": c.side, "body": "\n\n".join(body_parts)}
-        if getattr(c, "start_line", None) and c.start_line < c.line:
-            comment_dict["start_line"] = c.start_line
+        start_line = getattr(c, "start_line", None)
+        if start_line is not None and start_line < c.line:
+            comment_dict["start_line"] = start_line
             comment_dict["start_side"] = c.side
 
         comments_payload.append(comment_dict)
@@ -332,7 +334,11 @@ def post_review(
             ]
             if cached_tokens > 0:
                 cost_rows.append(f"| **Cost (cached input)** | {usd(cost.cached_input)} |")
-            cost_rows.append(f"| **Cost (output)** | {usd(cost.output)} |")
+            if thoughts_tokens > 0 and cost.thinking > 0:
+                cost_rows.append(f"| **Cost (thinking / reasoning)** | {usd(cost.thinking)} |")
+                cost_rows.append(f"| **Cost (response output)** | {usd(cost.candidates_output)} |")
+            else:
+                cost_rows.append(f"| **Cost (output)** | {usd(cost.output)} |")
             if cost.context_selection > 0:
                 cost_rows.append(f"| **Cost (context selection)** | {usd(cost.context_selection)} |")
             cost_rows.append(f"| **Estimated Total Cost** | **{usd(cost.total)}** |")

@@ -106,7 +106,7 @@ def apply_labels(
 def main():
     github_token = os.environ.get("GITHUB_TOKEN")
     gemini_api_key = os.environ.get("GEMINI_API_KEY")
-    repository = os.environ.get("GITHUB_REPOSITORY")
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
     event_path = os.environ.get("GITHUB_EVENT_PATH")
 
     use_vertexai = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "False").lower() in ("true", "1")

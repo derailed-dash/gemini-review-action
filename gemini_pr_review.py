@@ -36,7 +36,7 @@ def __getattr__(name: str):
 def main():
     github_token = os.environ.get("GITHUB_TOKEN")
     gemini_api_key = os.environ.get("GEMINI_API_KEY")
-    repository = os.environ.get("GITHUB_REPOSITORY")
+    repository = os.environ.get("GITHUB_REPOSITORY", "")
     event_path = os.environ.get("GITHUB_EVENT_PATH")
 
     use_vertexai = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "False").lower() in ("true", "1")
@@ -60,6 +60,7 @@ def main():
     is_dry_run = False
     pr_number = 1
     head_sha = "mock_head_sha"
+    event_name = os.environ.get("GITHUB_EVENT_NAME", "pull_request")
 
     if not event_path or not os.path.exists(event_path):
         print("Warning: GITHUB_EVENT_PATH not set or not found. Running in dry-run/mock mode.", file=sys.stderr)
@@ -292,8 +293,10 @@ def main():
                     parsed_tools = None
                     if tools:
                         try:
-                            parsed_cfg = client.models._parse_config(types.GenerateContentConfig(tools=tools))
-                            parsed_tools = parsed_cfg.tools
+                            parse_fn = getattr(client.models, "_parse_config", None)
+                            if callable(parse_fn):
+                                parsed_cfg = parse_fn(types.GenerateContentConfig(tools=tools))
+                                parsed_tools = getattr(parsed_cfg, "tools", None)
                         except Exception:
                             parsed_tools = None
 

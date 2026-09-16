@@ -315,6 +315,9 @@ def test_estimate_cost_includes_thinking_tokens():
     # Output tokens should be candidates (1,000) + thoughts (9,000) = 10,000 tokens
     # Output cost: 10,000 / 1e6 * 3.75 = 0.0375
     assert pytest.approx(cost.output, 0.0001) == 0.0375
+    assert pytest.approx(cost.thinking, 0.0001) == 0.03375
+    assert pytest.approx(cost.candidates_output, 0.0001) == 0.00375
+    assert pytest.approx(cost.output, 0.0001) == cost.thinking + cost.candidates_output
     # Total cost should reflect the full output cost
     expected_total = cost.uncached_input + cost.cached_input + 0.0375
     assert pytest.approx(cost.total, 0.0001) == expected_total
@@ -521,3 +524,33 @@ def test_huge_monorepo_simulation(mocker, monkeypatch):
     assert len(captured_candidates) > 0
     assert all(f.startswith("packages/pkg_12/src/") for f in captured_candidates)
     assert "packages/pkg_5/src/client.ts" not in captured_candidates
+
+
+def test_post_review_renders_thinking_cost_rows(mocker):
+    """post_review formats separate thinking and response output cost rows when thoughts_tokens > 0."""
+    from gemini_review.github import post_review
+    from gemini_review.schemas import ReviewResult
+
+    mock_post = mocker.patch("requests.post")
+    mock_post.return_value = mocker.Mock(status_code=200)
+
+    review = ReviewResult(summary="PR LGTM", general_feedback=[], comments=[])
+    usage_metadata = {
+        "model": "gemini-3.7-flash",
+        "fresh_tokens": 100_000,
+        "cached_tokens": 0,
+        "candidates_tokens": 1_000,
+        "thoughts_tokens": 9_000,
+        "total_tokens": 110_000,
+    }
+
+    post_review("owner/repo", 42, "head_sha", review, {"Authorization": "token abc"}, usage_metadata=usage_metadata)
+
+    assert mock_post.call_count == 1
+    body = mock_post.call_args[1]["json"]["body"]
+
+    assert "| **Thinking / Reasoning Tokens** | 9,000 |" in body
+    assert "| **Output Tokens** | 1,000 |" in body
+    assert "| **Cost (thinking / reasoning)** |" in body
+    assert "| **Cost (response output)** |" in body
+    assert "| **Estimated Total Cost** |" in body
