@@ -62,6 +62,11 @@ To execute `gemini_pr_review.py` or `gemini_issue_triage.py` locally for testing
 
 ALWAYS count exactly how many times you executed a review, to allow the user to cross reference invocations against costs and token usage.
 
+## Pushing to GitHub
+
+Before pushing a change of anything non-trival:
+- Update the version number in `pypoject.toml`. Verify your proposed new version number before proceeding.
+
 ## Release Notes & Tagging Standards
 
 When preparing GitHub releases:

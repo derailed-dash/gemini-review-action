@@ -135,6 +135,7 @@ class Cost:
     output: float
     rate: Rate | None
     caveats: list[str]
+    context_selection: float = 0.0
 
 
 def estimate_cost(usage: dict, model: str | None, config: dict | None = None, today: date | None = None) -> Cost:
@@ -143,6 +144,7 @@ def estimate_cost(usage: dict, model: str | None, config: dict | None = None, to
     `fresh_tokens` excludes cached tokens AND comment-history tokens, but comment history
     is ordinary input and bills at the full input rate — so it is added back here. Pricing
     `fresh_tokens` alone would undercount every run that read prior review threads.
+    Output tokens include both response candidate tokens and reasoning/thinking tokens.
     """
     config = config or {}
     caveats: list[str] = []
@@ -155,7 +157,7 @@ def estimate_cost(usage: dict, model: str | None, config: dict | None = None, to
                 f"No rate entry for '{model or 'unknown model'}' — tokens only. "
                 "Set GEMINI_RATE_INPUT and GEMINI_RATE_OUTPUT to price it."
             )
-            return Cost(0.0, 0.0, 0.0, 0.0, None, caveats)
+            return Cost(0.0, 0.0, 0.0, 0.0, None, caveats, 0.0)
         rate, promo_note = effective_rate(listed, today)
         if promo_note:
             caveats.append(f"{listed.label}: {promo_note}.")
@@ -164,7 +166,14 @@ def estimate_cost(usage: dict, model: str | None, config: dict | None = None, to
 
     full_price_input = max(0, usage.get("fresh_tokens", 0)) + max(0, usage.get("comment_history_tokens", 0))
     cached = max(0, usage.get("cached_tokens", 0))
-    output_tokens = max(0, usage.get("candidates_tokens", 0))
+    # Output tokens billed by Gemini include candidates_tokens AND thoughts_tokens
+    output_tokens = max(
+        0,
+        usage.get(
+            "total_output_tokens",
+            usage.get("candidates_tokens", 0) + usage.get("thoughts_tokens", 0),
+        ),
+    )
 
     uncached_cost = full_price_input / 1e6 * rate.input
     # `is not None` rather than `or`: a rate that legitimately sets cache_read=0.0, which is what a
@@ -172,6 +181,17 @@ def estimate_cost(usage: dict, model: str | None, config: dict | None = None, to
     cache_multiplier = rate.cache_read if rate.cache_read is not None else DEFAULT_CACHE_READ_MULTIPLIER
     cached_cost = cached / 1e6 * rate.input * cache_multiplier
     output_cost = output_tokens / 1e6 * rate.output
+
+    # Context selection cost (when dynamic context selection ran as an auxiliary API call)
+    ctx_prompt_tokens = max(0, usage.get("context_selection_prompt_tokens", 0))
+    ctx_output_tokens = max(
+        0,
+        usage.get(
+            "context_selection_output_tokens",
+            usage.get("context_selection_candidates_tokens", 0) + usage.get("context_selection_thoughts_tokens", 0),
+        ),
+    )
+    context_selection_cost = (ctx_prompt_tokens / 1e6 * rate.input) + (ctx_output_tokens / 1e6 * rate.output)
 
     if cached > 0:
         # Deliberately hedged. Cache STORAGE is a separate per-token-hour SKU for some model families
@@ -186,12 +206,13 @@ def estimate_cost(usage: dict, model: str | None, config: dict | None = None, to
         )
 
     return Cost(
-        total=uncached_cost + cached_cost + output_cost,
+        total=uncached_cost + cached_cost + output_cost + context_selection_cost,
         uncached_input=uncached_cost,
         cached_input=cached_cost,
         output=output_cost,
         rate=rate,
         caveats=caveats,
+        context_selection=context_selection_cost,
     )
 
 

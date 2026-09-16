@@ -27,7 +27,7 @@ from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
 
-from gemini_review import extract_response_text_or_raise, get_default_model
+from gemini_review import build_thinking_config, extract_response_text_or_raise, get_default_model
 
 DEFAULT_TIMEOUT = 60
 
@@ -171,15 +171,40 @@ def main():
 
     triage_prompt = load_triage_prompt(issue_title, issue_body, available_labels)
 
-    print("Running issue triage classification...", file=sys.stderr)
-    response = client.models.generate_content(
-        model=model_name,
-        contents=triage_prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            response_schema=TriageResult,
-        ),
+    thinking_level = os.environ.get("GEMINI_THINKING_LEVEL")
+    thinking_cfg = build_thinking_config(thinking_level)
+
+    triage_config = types.GenerateContentConfig(
+        response_mime_type="application/json",
+        response_schema=TriageResult,
+        thinking_config=thinking_cfg,
     )
+
+    print("Running issue triage classification...", file=sys.stderr)
+    try:
+        response = client.models.generate_content(
+            model=model_name,
+            contents=triage_prompt,
+            config=triage_config,
+        )
+    except Exception as gen_err:
+        err_msg = str(gen_err).lower()
+        if triage_config.thinking_config is not None and (
+            "thinking" in err_msg or "400" in err_msg or "invalid_argument" in err_msg
+        ):
+            print(
+                f"Warning: thinking_config not supported by model '{model_name}' ({gen_err}). "
+                "Retrying without thinking_config...",
+                file=sys.stderr,
+            )
+            triage_config.thinking_config = None
+            response = client.models.generate_content(
+                model=model_name,
+                contents=triage_prompt,
+                config=triage_config,
+            )
+        else:
+            raise
 
     result_text = extract_response_text_or_raise(response)
     result_data = json.loads(result_text)

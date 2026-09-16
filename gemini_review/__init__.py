@@ -15,7 +15,17 @@ from .budget import (
     max_file_bytes,
     prompt_token_budget,
 )
-from .config import DEFAULT_MODEL, DEFAULT_TIMEOUT, get_default_model, load_config
+from .config import (
+    DEFAULT_MODEL,
+    DEFAULT_TIMEOUT,
+    build_thinking_config,
+    get_context_diff_directories_only,
+    get_context_exclude_patterns,
+    get_default_model,
+    get_extra_context_files,
+    get_max_candidate_files,
+    load_config,
+)
 from .developer_knowledge import (
     get_google_auth_headers,
     get_google_developer_documents,
@@ -63,6 +73,7 @@ from .threads import fetch_review_threads, resolve_addressed_threads, reviewer_l
 from .utils import (
     _normalize_model_name,
     count_text_tokens,
+    extract_import_references,
     extract_response_text_or_raise,
     filter_review_comments,
     format_diff_patch_with_line_numbers,
@@ -76,6 +87,7 @@ from .utils import (
     is_core_file,
     is_text_file,
     load_workspace_rules,
+    rank_and_bound_candidates,
     sanitize_code_suggestion,
 )
 
@@ -94,6 +106,7 @@ __all__ = [
     "usd",
     "DEFAULT_MODEL",
     "DEFAULT_TIMEOUT",
+    "build_thinking_config",
     "get_default_model",
     "DynamicContextSelection",
     "ResolvedItem",
@@ -107,6 +120,7 @@ __all__ = [
     "build_pr_diff_prompt",
     "build_prompt",
     "count_text_tokens",
+    "extract_import_references",
     "extract_response_text_or_raise",
     "filter_review_comments",
     "format_diff_patch_with_line_numbers",
@@ -116,10 +130,14 @@ __all__ = [
     "parse_excluded_authors",
     "generate_file_tree",
     "get_all_repo_files",
+    "get_context_diff_directories_only",
+    "get_context_exclude_patterns",
+    "get_extra_context_files",
     "get_file_content",
     "get_google_auth_headers",
     "get_google_developer_documents",
     "get_local_git_files",
+    "get_max_candidate_files",
     "get_persona_prompt",
     "get_pr_comments",
     "get_pr_files",
@@ -137,6 +155,7 @@ __all__ = [
     "parse_skill_metadata",
     "post_commit_status",
     "post_review",
+    "rank_and_bound_candidates",
     "resolve_persona_name",
     "sanitize_code_suggestion",
     "search_google_developer_knowledge",

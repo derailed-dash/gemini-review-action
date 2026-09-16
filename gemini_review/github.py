@@ -297,8 +297,14 @@ def post_review(
         fresh_tokens = usage_metadata.get("fresh_tokens", 0)
         comment_history_tokens = usage_metadata.get("comment_history_tokens", 0)
         candidates_tokens = usage_metadata.get("candidates_tokens", 0)
+        thoughts_tokens = usage_metadata.get("thoughts_tokens", 0)
         total_tokens = usage_metadata.get("total_tokens", 0)
         cache_percentage = usage_metadata.get("cache_percentage", 0.0)
+
+        ctx_prompt_tokens = usage_metadata.get("context_selection_prompt_tokens", 0)
+        ctx_candidates_tokens = usage_metadata.get("context_selection_candidates_tokens", 0)
+        ctx_thoughts_tokens = usage_metadata.get("context_selection_thoughts_tokens", 0)
+        ctx_total_tokens = ctx_prompt_tokens + ctx_candidates_tokens + ctx_thoughts_tokens
 
         cache_str = f" (⚡ {cache_percentage:.1f}% cached)" if cached_tokens > 0 else ""
 
@@ -309,12 +315,12 @@ def post_review(
             table_rows.append(f"| **Input Tokens (cached)** | {cached_tokens:,d}{cache_str} |")
         if comment_history_tokens > 0:
             table_rows.append(f"| **PR Comments History Tokens** | {comment_history_tokens:,d} |")
-        table_rows.extend(
-            [
-                f"| **Output Tokens** | {candidates_tokens:,d} |",
-                f"| **Total Session Tokens** | **{total_tokens:,d}** |",
-            ]
-        )
+        if thoughts_tokens > 0:
+            table_rows.append(f"| **Thinking / Reasoning Tokens** | {thoughts_tokens:,d} |")
+        table_rows.append(f"| **Output Tokens** | {candidates_tokens:,d} |")
+        if ctx_total_tokens > 0:
+            table_rows.append(f"| **Dynamic Context Selection Tokens** | {ctx_total_tokens:,d} |")
+        table_rows.append(f"| **Total Session Tokens** | **{total_tokens:,d}** |")
 
         # Cost, from the same counts. A model with no rate entry renders tokens only —
         # borrowing another model's rate would produce a confident wrong figure.
@@ -326,12 +332,10 @@ def post_review(
             ]
             if cached_tokens > 0:
                 cost_rows.append(f"| **Cost (cached input)** | {usd(cost.cached_input)} |")
-            cost_rows.extend(
-                [
-                    f"| **Cost (output)** | {usd(cost.output)} |",
-                    f"| **Estimated Total Cost** | **{usd(cost.total)}** |",
-                ]
-            )
+            cost_rows.append(f"| **Cost (output)** | {usd(cost.output)} |")
+            if cost.context_selection > 0:
+                cost_rows.append(f"| **Cost (context selection)** | {usd(cost.context_selection)} |")
+            cost_rows.append(f"| **Estimated Total Cost** | **{usd(cost.total)}** |")
 
         caveat_md = ""
         if cost.caveats:

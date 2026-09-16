@@ -1756,7 +1756,7 @@ def test_select_dynamic_context_files_success(mocker):
     files = [{"filename": "gemini_pr_review.py", "status": "modified", "patch": "@@ -1 +1 @@\n+import utils"}]
     candidates = ["gemini_review/prompts.py", "gemini_review/utils.py", "unrelated/asset.txt"]
 
-    selected, reasoning = select_dynamic_context_files(
+    selected, reasoning, usage_dict = select_dynamic_context_files(
         client=mock_client,
         model=DEFAULT_MODEL,
         files=files,
@@ -1765,6 +1765,7 @@ def test_select_dynamic_context_files_success(mocker):
 
     assert selected == ["gemini_review/prompts.py", "gemini_review/utils.py"]
     assert reasoning == "Core helpers"
+    assert isinstance(usage_dict, dict)
     assert mock_client.models.generate_content.called
     call_args = mock_client.models.generate_content.call_args
     assert call_args.kwargs["model"] == DEFAULT_MODEL
@@ -1784,7 +1785,7 @@ def test_select_dynamic_context_files_filters_hallucinated_files(mocker):
     files = [{"filename": "main.py", "status": "modified", "patch": "diff"}]
     candidates = ["gemini_review/prompts.py", "gemini_review/utils.py"]
 
-    selected, reasoning = select_dynamic_context_files(
+    selected, reasoning, usage_dict = select_dynamic_context_files(
         client=mock_client,
         model=DEFAULT_MODEL,
         files=files,
@@ -1794,6 +1795,7 @@ def test_select_dynamic_context_files_filters_hallucinated_files(mocker):
     assert selected == ["gemini_review/utils.py", "gemini_review/prompts.py"]
     assert "non_existent/fake.py" not in selected
     assert reasoning == "Test rationale"
+    assert isinstance(usage_dict, dict)
 
 
 def test_select_dynamic_context_files_handles_exception(mocker):
@@ -1804,7 +1806,7 @@ def test_select_dynamic_context_files_handles_exception(mocker):
     files = [{"filename": "main.py", "status": "modified", "patch": "diff"}]
     candidates = ["gemini_review/prompts.py"]
 
-    selected, reasoning = select_dynamic_context_files(
+    selected, reasoning, usage_dict = select_dynamic_context_files(
         client=mock_client,
         model=DEFAULT_MODEL,
         files=files,
@@ -1813,11 +1815,12 @@ def test_select_dynamic_context_files_handles_exception(mocker):
 
     assert selected == []
     assert reasoning == ""
+    assert usage_dict == {}
 
 
 def test_select_dynamic_context_files_no_client():
     """Test select_dynamic_context_files returns empty selection when client is None."""
-    selected, reasoning = select_dynamic_context_files(
+    selected, reasoning, usage_dict = select_dynamic_context_files(
         client=None,
         model=DEFAULT_MODEL,
         files=[],
@@ -1825,6 +1828,7 @@ def test_select_dynamic_context_files_no_client():
     )
     assert selected == []
     assert reasoning == ""
+    assert usage_dict == {}
 
 
 def test_build_codebase_context_sparse_mode_with_dynamic_selection(mocker):
