@@ -105,6 +105,18 @@ inputs:
     description: 'Comma-separated glob patterns to exclude from codebase context candidate selection.'
     required: false
     default: ''
+  max_multimodal_images:
+    description: 'Maximum number of multimodal images (markdown references, static attachments, visual diffs) attached to context.'
+    required: false
+    default: '20'
+  image_trigger_bytes:
+    description: 'Byte size threshold above which raster images are downscaled (defaults to 614400 / 600 KB).'
+    required: false
+    default: '614400'
+  image_target_bytes:
+    description: 'Target byte size when downscaling large raster images (defaults to 307200 / 300 KB).'
+    required: false
+    default: '307200'
 
 runs:
   using: 'composite'
@@ -137,15 +149,18 @@ runs:
         GEMINI_EXTRA_CONTEXT_FILES: ${{ inputs.extra_context_files }}
         GEMINI_CONTEXT_DIFF_DIRECTORIES_ONLY: ${{ inputs.context_diff_directories_only }}
         GEMINI_CONTEXT_EXCLUDE_PATTERNS: ${{ inputs.context_exclude_patterns }}
+        GEMINI_MAX_MULTIMODAL_IMAGES: ${{ inputs.max_multimodal_images }}
+        GEMINI_IMAGE_TRIGGER_BYTES: ${{ inputs.image_trigger_bytes }}
+        GEMINI_IMAGE_TARGET_BYTES: ${{ inputs.image_target_bytes }}
         GITHUB_REPOSITORY: ${{ github.repository }}
 
         GITHUB_EVENT_PATH: ${{ github.event_path }}
         GITHUB_EVENT_NAME: ${{ github.event_name }}
       run: |
         if [ "${{ inputs.command }}" = "triage" ]; then
-          uv run ${{ github.action_path }}/gemini_issue_triage.py
+          uv run --project ${{ github.action_path }} python ${{ github.action_path }}/gemini_issue_triage.py
         else
-          uv run ${{ github.action_path }}/gemini_pr_review.py
+          uv run --project ${{ github.action_path }} python ${{ github.action_path }}/gemini_pr_review.py
         fi
 
 branding:

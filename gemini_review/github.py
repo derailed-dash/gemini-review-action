@@ -34,6 +34,32 @@ def get_pr_files(repository: str, pr_number: int, headers: dict, timeout: int = 
     return files
 
 
+def get_file_blob(
+    repository: str,
+    file_path: str,
+    ref: str,
+    headers: dict,
+    timeout: int = DEFAULT_TIMEOUT,
+) -> bytes | None:
+    """Fetch raw file blob contents from GitHub repository for a specific ref (branch, tag, or commit SHA)."""
+    if not repository or not file_path or not ref:
+        return None
+    url = f"https://api.github.com/repos/{repository}/contents/{file_path}?ref={ref}"
+    req_headers = dict(headers)
+    req_headers["Accept"] = "application/vnd.github.v3.raw"
+    try:
+        res = requests.get(url, headers=req_headers, timeout=timeout)
+        if res.status_code == 200:
+            return res.content
+        print(
+            f"Warning: Failed to fetch blob for '{file_path}' at ref '{ref}' ({res.status_code}): {res.text}",
+            file=sys.stderr,
+        )
+    except Exception as e:
+        print(f"Warning: Exception while fetching blob for '{file_path}' ({e})", file=sys.stderr)
+    return None
+
+
 def get_pr_comments(
     repository: str, pr_number: int, headers: dict, timeout: int = DEFAULT_TIMEOUT
 ) -> tuple[list[dict], list[dict]]:

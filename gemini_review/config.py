@@ -147,3 +147,60 @@ def get_context_exclude_patterns(config: dict | None = None) -> list[str]:
         items = [p.strip() for line in str(raw).splitlines() for p in line.split(",") if p.strip()]
 
     return [item.replace("\\", "/").removeprefix("./") for item in items if item]
+
+
+def get_max_multimodal_images(config: dict | None = None) -> int:
+    """Return maximum number of multimodal images to attach in review context."""
+    default_val = 20
+    env_val = os.environ.get("GEMINI_MAX_MULTIMODAL_IMAGES")
+    if env_val:
+        try:
+            return int(env_val)
+        except ValueError:
+            pass
+    if config:
+        cfg_val = config.get("max_multimodal_images")
+        if cfg_val is not None:
+            try:
+                return int(cfg_val)
+            except ValueError:
+                pass
+    return default_val
+
+
+def get_image_trigger_bytes(config: dict | None = None) -> int:
+    """Return byte size threshold above which images are downscaled (default 600 KB)."""
+    default_val = 614400
+    env_val = os.environ.get("GEMINI_IMAGE_TRIGGER_BYTES")
+    if env_val:
+        try:
+            return int(env_val)
+        except ValueError:
+            pass
+    if config:
+        cfg_val = config.get("image_trigger_bytes")
+        if cfg_val is not None:
+            try:
+                return int(cfg_val)
+            except ValueError:
+                pass
+    return default_val
+
+
+def get_image_target_bytes(config: dict | None = None) -> int:
+    """Return target byte size for downscaling large images (default 300 KB)."""
+    default_val = 307200
+    env_val = os.environ.get("GEMINI_IMAGE_TARGET_BYTES")
+    if env_val:
+        try:
+            return int(env_val)
+        except ValueError:
+            pass
+    if config:
+        cfg_val = config.get("image_target_bytes")
+        if cfg_val is not None:
+            try:
+                return int(cfg_val)
+            except ValueError:
+                pass
+    return default_val

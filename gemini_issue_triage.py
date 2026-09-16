@@ -1,10 +1,3 @@
-# /// script
-# dependencies = [
-#   "google-genai>=2.10.0",
-#   "requests",
-#   "pydantic",
-# ]
-# ///
 #!/usr/bin/env python3
 """
 Description: Runs an automated GitHub Issue triage using the Google GenAI SDK.

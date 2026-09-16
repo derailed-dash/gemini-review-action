@@ -45,6 +45,12 @@ When designing or modifying review prompts and context assembly:
 - **Coverage**: Any new helper functions, tool implementations, or configuration loaders must be accompanied by comprehensive tests in the `tests/` directory.
 - **Mocking**: Properly mock all external network requests (such as GitHub API endpoints or the Google Developer Knowledge MCP JSON-RPC service).
 
+## Multimodal Context & Visual Diffing Standards
+
+- **Single-Turn Cross-Attention**: Always pass baseline (`base_sha`) and head (`head_sha`) images together in a single Gemini request as sequential `types.Part` elements so the model evaluates visual changes via direct cross-attention without lossy intermediate text summaries.
+- **Image Downscaling Thresholds**: All raster images exceeding `image_trigger_bytes` (default: 600 KB) MUST be downscaled via `optimize_image_bytes()` using Lanczos resampling towards `image_target_bytes` (default: 300 KB). SVGs and PDFs MUST pass through uncompressed.
+- **Path Traversal on Dynamic Markdown References**: When extracting image links from markdown (`extract_markdown_image_references()`), always enforce `os.path.commonpath` containment against the workspace root before reading image blobs.
+
 ## Local Execution & Testing Guidance
 
 If you are asked to run a review locally, be sure to present the actual review output back to the user, as well as your relevant conclusions following the review execution.
@@ -77,7 +83,7 @@ ALWAYS count exactly how many times you executed a review, to allow the user to 
 ## Pushing to GitHub
 
 Before pushing a change of anything non-trivial:
-- Check if any documentation should be updated based on this PR and update accordingly.
+- Check if any documentation should be updated based on this PR and update accordingly. This includes (but is not limited to) README.md, AGENTS.md, and ARCHITECTURE.md.
 - Update the version number in `pyproject.toml`. Verify your proposed new version number before proceeding.
 
 ## Release Notes & Tagging Standards

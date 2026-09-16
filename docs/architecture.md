@@ -17,9 +17,14 @@ The action runs as a native GitHub Composite Action (`action.yml`) that boots a 
 The code review action is organized into a modular Python package (`gemini_review/`) separating domain responsibilities, with `gemini_pr_review.py` serving as the top-level execution entrypoint and backward-compatible API facade:
 
 * **`gemini_review/schemas.py`**: Pydantic schemas defining structured outputs (`InlineComment`, `ReviewResult`, `DynamicContextSelection`).
-* **`gemini_review/config.py`**: Configuration loader for `gemini-review.toml` and timeout/model defaults.
-* **`gemini_review/utils.py`**: Binary file exclusion, diff patch line parsing, token counting, repo file listing, and rule loaders.
-* **`gemini_review/github.py`**: GitHub REST API client functions for PR files, comment threads, author filtering, and review postings.
+* **`gemini_review/config.py`**: Configuration loader for `gemini-review.toml`, timeout/model defaults, and multimodal budget controls (`max_multimodal_images`, `image_trigger_bytes`, `image_target_bytes`).
+* **`gemini_review/multimodal.py`**: Multimodal MIME type detection, image validation, deterministic Pillow downscaling (`optimize_image_bytes`), and document-order Markdown/HTML image reference extraction (`extract_markdown_image_references`).
+* **`gemini_review/diff.py`**: Unified diff patch parsing, line numbering annotations (`format_diff_patch_with_line_numbers`), suggestion indentation alignment, line-range auto-correction, and inline comment filtering (`filter_review_comments`).
+* **`gemini_review/repo.py`**: File discovery (`get_all_repo_files`), file tree formatting (`generate_file_tree`), core manifest pattern matching (`is_core_file`), import extraction, and candidate pool ranking & bounding (`rank_and_bound_candidates`).
+* **`gemini_review/context.py`**: Hybrid codebase context engine (Full vs Sparse mode), core documentation attachment, static extra context overrides, multimodal context binding, and Gemini dynamic context selection (`select_dynamic_context_files`).
+* **`gemini_review/prompts.py`**: Custom instruction loaders (`load_custom_instructions`), system prompt builder (`load_system_instruction`), PR diff prompt formatting (`build_pr_diff_prompt`), visual PR diff assembly (`build_visual_diff_parts`), and prompt assembly (`build_prompt`).
+* **`gemini_review/utils.py`**: Core primitives (token estimation, response extraction, workspace rules discovery) and facade re-exports for backward compatibility.
+* **`gemini_review/github.py`**: GitHub REST API client functions for PR files, comment threads, author filtering, review postings, and raw file blob retrieval (`get_file_blob`).
 * **`gemini_review/threads.py`**: Pull request review thread retrieval and automated resolution of addressed threads (`resolve_addressed_threads`).
 * **`gemini_review/budget.py`**: Token budget allocation and per-file content truncation (`cap_file_content`) to prevent out-of-budget diffs.
 * **`gemini_review/billing_labels.py`**: Google Cloud billing labels parser and sanitisation for GCP cost attribution.
@@ -27,7 +32,6 @@ The code review action is organized into a modular Python package (`gemini_revie
 * **`gemini_review/pricing.py`**: Gemini model token pricing and cost estimation engine (including Gemini 3.8 Flash).
 * **`gemini_review/skills.py`**: Agent skill metadata parser and instruction loader for workspace and built-in skills.
 * **`gemini_review/developer_knowledge.py`**: MCP/RPC integration to search and fetch official Google developer documentation.
-* **`gemini_review/prompts.py`**: Dynamic PR diff prompt construction, codebase context generation, custom instruction loaders, and prompt assembly.
 * **`gemini_pr_review.py`**: Main CLI entrypoint script that re-exports all `gemini_review` package APIs and runs the primary review loop.
 
 ---
@@ -74,7 +78,22 @@ When enabled via `include_comment_history: 'true'` (default), `gemini_pr_review.
 * **Resolution Decision Matrix**: Instructs Gemini not to repeat suggestions that have been addressed in code, deferred, or explicitly justified by developers, while ensuring unresolved items without explanation or un-applied agreed fixes are re-flagged.
 * **Automated Thread Resolution (`resolve_addressed_threads`)**: When enabled via action inputs, the action resolves GitHub review conversation threads using `fetch_review_threads()` and `resolve_addressed_threads()` for issues Gemini explicitly reports in `ReviewResult.resolved_items`, unblocking GitHub's *Require conversation resolution before merging* branch rule.
 
-### 5. Structured Output Schemas
+### 5. Multimodal Context & Visual PR Diffing Engine
+`gemini_pr_review.py` and `gemini_review/prompts.py` seamlessly integrate multimodal content (images and PDF documentation) into the Gemini evaluation workflow:
+
+* **Markdown Image Reference Extraction (`extract_markdown_image_references`)**:
+  Whenever markdown documentation is included in the review prompt (core project documentation, diff additions, extra context files, or dynamically selected files), regex parsers extract local image paths referenced via standard Markdown (`![alt](path)`) or HTML (`<img src="path">`). Paths are resolved relative to the markdown file, validated against path traversal via `os.path.commonpath`, and attached as multimodal parts (`types.Part.from_bytes`).
+* **Visual PR Diffing (`build_visual_diff_parts`)**:
+  When a PR adds, removes, or modifies visual assets (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.svg`):
+  - For modified images, both the baseline version (`base_sha`) and the updated version (`head_sha`) are retrieved via `get_file_blob()` (GitHub API) or `get_git_blob()` (local Git).
+  - The assets are assembled into labelled before-and-after visual diff parts, enabling Gemini to review UI changes, layout consistency, and potential visual regressions.
+  - Added and removed image assets are similarly captured with descriptive labels.
+* **Deterministic Pillow Downscaling (`optimize_image_bytes`)**:
+  To prevent large raster graphics from inflating context token usage or request latency, raster images exceeding `image_trigger_bytes` (default: 600 KB / 614,400 bytes) are resized using high-quality Lanczos resampling and re-compressed towards `image_target_bytes` (default: 300 KB / 307,200 bytes). SVGs and PDFs pass through uncompressed to preserve vector fidelity and document layout.
+* **Safety Ceilings & Token Heuristics**:
+  A configurable cap (`max_multimodal_images`, default: 20) bounds total multimodal attachments across context and visual diffs. The token estimation engine (`count_text_tokens`) incorporates a 258 tokens/part heuristic fallback for multimodal parts when offline or mocking API responses.
+
+### 6. Structured Output Schemas
 Gemini is forced to return structured JSON adhering to the Pydantic schemas:
 * `InlineComment`:
   - `path`: File path.
@@ -89,12 +108,12 @@ Gemini is forced to return structured JSON adhering to the Pydantic schemas:
   - `general_feedback`: List of highlights or observations.
   - `comments`: List of `InlineComment` instances.
 
-### 6. Resilient Review Submissions
+### 7. Resilient Review Submissions
 Submitting reviews with line-specific comments via GitHub's API can be fragile (e.g. if the model specifies a line index that falls outside the diff range).
 * **Atomic Run:** The script first attempts to post the summary, resolved items list (`### ✅ Resolved Items from Prior Reviews`), and all inline comments in a single transaction via `POST /repos/{owner}/{repo}/pulls/{number}/reviews`.
 * **Resilient Fallback:** If the atomic post fails (e.g. returns HTTP 422), the script catches the failure, posts the review summary comment, and attempts to publish individual comments one-by-one. This ensures valid comments are still delivered while preventing a CI checkout block.
 
-### 7. Review Prompt Customisation: Extending vs Replacing
+### 8. Review Prompt Customisation: Extending vs Replacing
 
 The review prompt assembly in `gemini_review/prompts.py` provides two distinct customisation tiers:
 
