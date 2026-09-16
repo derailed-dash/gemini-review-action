@@ -64,8 +64,8 @@ ALWAYS count exactly how many times you executed a review, to allow the user to 
 
 ## Pushing to GitHub
 
-Before pushing a change of anything non-trival:
-- Update the version number in `pypoject.toml`. Verify your proposed new version number before proceeding.
+Before pushing a change of anything non-trivial:
+- Update the version number in `pyproject.toml`. Verify your proposed new version number before proceeding.
 
 ## Release Notes & Tagging Standards
 
