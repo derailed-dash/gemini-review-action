@@ -399,7 +399,7 @@ def main():
                 file=sys.stderr,
             )
             cached_content_name = None
-            contents_to_send = full_prompt
+            contents_to_send = [full_prompt] + all_multimodal_parts if all_multimodal_parts else full_prompt
             gen_config = types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 tools=tools,

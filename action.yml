@@ -110,11 +110,11 @@ inputs:
     required: false
     default: '20'
   image_trigger_bytes:
-    description: 'Byte size threshold above which raster images are downscaled (defaults to 614400 / 600KB).'
+    description: 'Byte size threshold above which raster images are downscaled (defaults to 614400 / 600 KB).'
     required: false
     default: '614400'
   image_target_bytes:
-    description: 'Target byte size when downscaling large raster images (defaults to 307200 / 300KB).'
+    description: 'Target byte size when downscaling large raster images (defaults to 307200 / 300 KB).'
     required: false
     default: '307200'
 
