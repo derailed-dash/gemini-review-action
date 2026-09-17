@@ -122,12 +122,16 @@ runs:
   using: 'composite'
   steps:
     - name: Set up Python
-      uses: actions/setup-python@v6
+      # Pinned to the commit the tag points at. A moving major tag means the code that runs in a
+      # consumer's CI can change without the consumer's pin changing.
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
       with:
         python-version: '3.13'
 
     - name: Install uv
-      uses: astral-sh/setup-uv@v5
+      # NOTE: v5 is an annotated tag, so `git rev-parse v5` returns the tag object, not the commit.
+      # This is `git rev-parse v5^{commit}`.
+      uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
 
     - name: Run Script
       shell: bash
@@ -158,9 +162,9 @@ runs:
         GITHUB_EVENT_NAME: ${{ github.event_name }}
       run: |
         if [ "${{ inputs.command }}" = "triage" ]; then
-          uv run --project ${{ github.action_path }} python ${{ github.action_path }}/gemini_issue_triage.py
+          uv run --locked --project ${{ github.action_path }} python ${{ github.action_path }}/gemini_issue_triage.py
         else
-          uv run --project ${{ github.action_path }} python ${{ github.action_path }}/gemini_pr_review.py
+          uv run --locked --project ${{ github.action_path }} python ${{ github.action_path }}/gemini_pr_review.py
         fi
 
 branding:
