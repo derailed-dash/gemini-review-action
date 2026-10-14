@@ -1947,3 +1947,231 @@ def test_gemini_pr_review_getattr_backward_compatibility():
     assert gemini_pr_review.DEFAULT_MODEL == gemini_review.DEFAULT_MODEL
     assert gemini_pr_review.build_codebase_context is gemini_review.build_codebase_context
     assert gemini_pr_review.ReviewResult is gemini_review.ReviewResult
+
+
+def test_main_resolves_function_call_response_and_produces_review(mocker):
+    """Test Issue #42: when generate_content returns a function_call response with no text,
+    main() executes the tool, sends the tool result back to the model, and succeeds.
+    """
+    import sys
+
+    from google.genai import types
+
+    from gemini_pr_review import main
+
+    mocker.patch.dict(
+        os.environ,
+        {
+            "GEMINI_API_KEY": "test-key",
+            "GEMINI_MODEL": DEFAULT_MODEL,
+            "GITHUB_REPOSITORY": "test-owner/test-repo",
+            "GITHUB_EVENT_PATH": "",
+        },
+        clear=True,
+    )
+
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[{"filename": "main.py", "status": "modified", "patch": "diff patch"}],
+    )
+    mocker.patch("gemini_review.get_all_repo_files", return_value=["other.py"])
+    mocker.patch("gemini_review.get_file_content", return_value="a" * 120000)
+
+    mock_skills = mocker.patch(
+        "gemini_review.list_available_skills",
+        return_value=[{"id": "builtin:test/SKILL.md", "name": "Test Skill", "description": "Test desc"}],
+    )
+    mock_skills.__name__ = "list_available_skills"
+
+    mock_client = mocker.Mock()
+    existing_cache = mocker.Mock()
+    existing_cache.name = "cachedContents/existing-cache-42"
+    existing_cache.display_name = f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-straight"
+    existing_cache.model = DEFAULT_MODEL
+    mock_client.caches.list.return_value = [existing_cache]
+
+    # First response: model emits a function_call to list_available_skills() and no text
+    fc_part = types.Part.from_function_call(name="list_available_skills", args={})
+    fc_content = types.Content(role="model", parts=[fc_part])
+    fc_candidate = mocker.Mock(content=fc_content, finish_reason="STOP", finish_message=None, safety_ratings=None)
+
+    first_response = mocker.Mock()
+    first_response.text = None
+    first_response.candidates = [fc_candidate]
+    first_response.function_calls = [fc_part.function_call]
+    first_response.prompt_feedback = None
+    first_response.usage_metadata = mocker.Mock(
+        prompt_token_count=100000,
+        candidates_token_count=50,
+        thoughts_token_count=0,
+        total_token_count=100050,
+        cached_content_token_count=95000,
+    )
+
+    # Second response after feeding tool output back: valid ReviewResult JSON
+    second_response = mocker.Mock()
+    second_response.text = '{"summary": "Reviewed with skill!", "general_feedback": [], "comments": []}'
+    second_response.candidates = []
+    second_response.function_calls = None
+    second_response.prompt_feedback = None
+    second_response.usage_metadata = mocker.Mock(
+        prompt_token_count=100200,
+        candidates_token_count=200,
+        thoughts_token_count=0,
+        total_token_count=100400,
+        cached_content_token_count=95000,
+    )
+
+    mock_client.models.generate_content.side_effect = [first_response, second_response]
+    mocker.patch("google.genai.Client", return_value=mock_client)
+    mocker.patch.object(sys, "argv", ["gemini_pr_review.py"])
+
+    # Should NOT raise RuntimeError!
+    main()
+
+    assert mock_skills.called
+    assert mock_client.models.generate_content.call_count == 2
+
+
+def test_main_falls_back_to_tool_free_review_when_tool_loop_still_has_no_text(mocker):
+    """Test Issue #42 fallback: if the model still returns no text (e.g. blocked or repeated
+    function_call) after tool resolution attempts, fall back to a tool-free review request
+    so the run degrades gracefully rather than dying.
+    """
+    import sys
+
+    from google.genai import types
+
+    from gemini_pr_review import main
+
+    mocker.patch.dict(
+        os.environ,
+        {
+            "GEMINI_API_KEY": "test-key",
+            "GEMINI_MODEL": DEFAULT_MODEL,
+            "GITHUB_REPOSITORY": "test-owner/test-repo",
+            "GITHUB_EVENT_PATH": "",
+        },
+        clear=True,
+    )
+
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[{"filename": "main.py", "status": "modified", "patch": "diff patch"}],
+    )
+    mocker.patch("gemini_review.build_codebase_context", return_value="short context")
+
+    mock_skills = mocker.patch(
+        "gemini_review.list_available_skills",
+        return_value=[{"id": "builtin:test/SKILL.md", "name": "Test Skill", "description": "Test desc"}],
+    )
+    mock_skills.__name__ = "list_available_skills"
+
+    # First response: function_call with no text
+    fc_part = types.Part.from_function_call(name="list_available_skills", args={})
+    fc_content = types.Content(role="model", parts=[fc_part])
+    fc_candidate = mocker.Mock(content=fc_content, finish_reason="STOP", finish_message=None, safety_ratings=None)
+
+    fc_response = mocker.Mock()
+    fc_response.text = None
+    fc_response.candidates = [fc_candidate]
+    fc_response.function_calls = [fc_part.function_call]
+    fc_response.prompt_feedback = None
+    fc_response.usage_metadata = None
+
+    # Second response (during tool loop): blocked with PROHIBITED_CONTENT and no text
+    blocked_response = mocker.Mock()
+    blocked_response.text = None
+    blocked_response.candidates = []
+    blocked_response.function_calls = None
+    blocked_response.prompt_feedback = mocker.Mock(block_reason="PROHIBITED_CONTENT")
+    blocked_response.usage_metadata = None
+
+    # Third response (fallback without tools): succeeds with valid JSON review
+    fallback_response = mocker.Mock()
+    fallback_response.text = (
+        '{"summary": "Fallback tool-free review succeeded", "general_feedback": [], "comments": []}'
+    )
+    fallback_response.candidates = []
+    fallback_response.function_calls = None
+    fallback_response.prompt_feedback = None
+    fallback_response.usage_metadata = None
+
+    mock_client = mocker.Mock()
+    mock_client.models.generate_content.side_effect = [fc_response, blocked_response, fallback_response]
+    mocker.patch("google.genai.Client", return_value=mock_client)
+    mocker.patch.object(sys, "argv", ["gemini_pr_review.py"])
+
+    main()
+
+    assert mock_client.models.generate_content.call_count == 3
+    # Final fallback call should have tools=None and cached_content=None
+    final_call_cfg = mock_client.models.generate_content.call_args_list[-1].kwargs["config"]
+    assert final_call_cfg.tools is None
+    assert final_call_cfg.cached_content is None
+
+
+def test_resolve_tool_calls_loop_handles_unknown_tool_and_exception(mocker):
+    """Test resolve_tool_calls_loop gracefully handles unknown tool names, tool exceptions,
+    and accumulates token usage across turns.
+    """
+    from google.genai import types
+
+    import gemini_review as gr
+
+    def failing_tool(query: str) -> str:
+        raise ValueError(f"Tool failed on {query}")
+
+    fc1 = types.Part.from_function_call(name="unknown_tool", args={"x": 1})
+    fc2 = types.Part.from_function_call(name="failing_tool", args={"query": "test"})
+    fc_content = types.Content(role="model", parts=[fc1, fc2])
+    fc_candidate = mocker.Mock(content=fc_content)
+
+    first_resp = mocker.Mock()
+    first_resp.text = None
+    first_resp.candidates = [fc_candidate]
+    first_resp.function_calls = [fc1.function_call, fc2.function_call]
+    first_resp.usage_metadata = mocker.Mock(
+        prompt_token_count=100,
+        cached_content_token_count=50,
+        candidates_token_count=10,
+        thoughts_token_count=5,
+        total_token_count=115,
+    )
+
+    second_resp = mocker.Mock()
+    second_resp.text = '{"summary": "Handled tool errors", "general_feedback": [], "comments": []}'
+    second_resp.candidates = []
+    second_resp.function_calls = None
+    second_resp.usage_metadata = mocker.Mock(
+        prompt_token_count=150,
+        cached_content_token_count=50,
+        candidates_token_count=40,
+        thoughts_token_count=10,
+        total_token_count=200,
+    )
+
+    mock_client = mocker.Mock()
+    mock_client.models.generate_content.return_value = second_resp
+
+    gen_config = types.GenerateContentConfig(response_mime_type="application/json")
+    final_resp = gr.resolve_tool_calls_loop(
+        client=mock_client,
+        model_name=DEFAULT_MODEL,
+        initial_contents=["Review this diff", types.Part.from_text(text="Extra part")],
+        gen_config=gen_config,
+        tools=[failing_tool],
+        response=first_resp,
+    )
+
+    assert final_resp is second_resp
+    sent_contents = mock_client.models.generate_content.call_args.kwargs["contents"]
+    assert len(sent_contents) == 3
+    assert sent_contents[0].role == "user"
+    assert len(sent_contents[0].parts) == 2
+    assert sent_contents[1].role == "model"
+    assert sent_contents[2].role == "user"
+    assert final_resp.usage_metadata.prompt_token_count == 250
+    assert final_resp.usage_metadata.candidates_token_count == 50
+    assert final_resp.usage_metadata.thoughts_token_count == 15
+    assert final_resp.usage_metadata.total_token_count == 315

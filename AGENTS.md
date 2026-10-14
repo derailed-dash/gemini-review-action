@@ -27,12 +27,13 @@ When designing or modifying review prompts and context assembly:
 
 - **Python Version**: Target Python >=3.13.
 - **Type Hinting**: Use modern PEP 585 built-in types (e.g. use lowercase `list`, `dict`, `tuple` instead of importing from `typing`).
-- **Formatting and Lints**: Always format and check code using `ruff` and `codespell` from the root of the project:
+- **Formatting, Lints, and Type Checking**: Always format, lint, and type-check code using `codespell`, `ruff`, and `pyright` from the root of the project:
   ```bash
   uvx codespell@latest -s
   uvx ruff@latest format .
   uvx ruff@latest check --fix .
   uvx ruff@latest format --check .
+  uvx pyright@latest
   ```
 
 ## Security & Path Integrity

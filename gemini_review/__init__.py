@@ -112,6 +112,7 @@ from .utils import (
     count_text_tokens,
     extract_response_text_or_raise,
     load_workspace_rules,
+    resolve_tool_calls_loop,
 )
 
 __all__ = [
@@ -195,6 +196,7 @@ __all__ = [
     "post_review",
     "rank_and_bound_candidates",
     "resolve_persona_name",
+    "resolve_tool_calls_loop",
     "sanitize_code_suggestion",
     "search_google_developer_knowledge",
     "select_dynamic_context_files",

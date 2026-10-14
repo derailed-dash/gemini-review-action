@@ -1,6 +1,6 @@
 [project]
 name = "gemini-review-action"
-version = "1.8.1"
+version = "1.8.2"
 description = "GitHub Action for code reviews and issue triage using Google Gemini"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -30,3 +30,8 @@ select = ["E", "F", "I", "W"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+
+[tool.pyright]
+include = ["gemini_review", "gemini_pr_review.py", "gemini_issue_triage.py"]
+venvPath = "."
+venv = ".venv"

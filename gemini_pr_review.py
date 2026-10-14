@@ -434,6 +434,20 @@ def main():
         else:
             raise
 
+    direct_contents = [full_prompt] + all_multimodal_parts if all_multimodal_parts else full_prompt
+    response = gr.resolve_tool_calls_loop(
+        client=client,
+        model_name=model_name,
+        initial_contents=contents_to_send,
+        gen_config=gen_config,
+        tools=tools,
+        response=response,
+        fallback_contents=direct_contents,
+        system_instruction=system_instruction,
+        billing_labels=billing_labels,
+        thinking_cfg=gen_config.thinking_config,
+    )
+
     usage_dict = None
     if response.usage_metadata:
         usage = response.usage_metadata
