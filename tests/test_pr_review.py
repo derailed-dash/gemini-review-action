@@ -7,6 +7,8 @@ PR number, and language) correctly.
 
 import os
 
+import pytest
+
 from gemini_review import (
     DEFAULT_MODEL,
     DynamicContextSelection,
@@ -38,7 +40,6 @@ from gemini_review import (
     post_commit_status,
     post_review,
     sanitize_code_suggestion,
-    search_google_developer_knowledge,
     select_dynamic_context_files,
 )
 
@@ -272,30 +273,9 @@ def test_get_pr_files(mocker):
     assert files == [{"filename": "main.py"}, {"filename": "utils.py"}, {"filename": "README.md"}]
 
 
-def test_post_review_atomic(mocker):
-    mock_post = mocker.patch("requests.post")
-    mock_res = mocker.Mock()
-    mock_res.status_code = 200
-    mock_post.return_value = mock_res
-
-    review = ReviewResult(summary="Looks good", general_feedback=["Clean code"], comments=[])
-
-    post_review("derailed-dash/gemini-review-action", 42, "head_sha_123", review, {"Authorization": "token test"})
-
-    # On pull_request event, only the atomic review is posted (no commit status duplicate)
-    assert mock_post.call_count == 1
-    assert (
-        mock_post.call_args_list[0][0][0]
-        == "https://api.github.com/repos/derailed-dash/gemini-review-action/pulls/42/reviews"
-    )
-
-
-def test_post_review_issue_comment_atomic(mocker):
-    mock_post = mocker.patch("requests.post")
-    mock_res = mocker.Mock()
-    mock_res.status_code = 200
-    mock_post.return_value = mock_res
-
+@pytest.mark.parametrize("event_name,expected_calls", [("pull_request", 1), ("issue_comment", 2)])
+def test_post_review_atomic(mocker, event_name, expected_calls):
+    mock_post = mocker.patch("requests.post", return_value=mocker.Mock(status_code=200))
     review = ReviewResult(summary="Looks good", general_feedback=["Clean code"], comments=[])
 
     post_review(
@@ -304,70 +284,26 @@ def test_post_review_issue_comment_atomic(mocker):
         "head_sha_123",
         review,
         {"Authorization": "token test"},
-        event_name="issue_comment",
+        event_name=event_name,
     )
 
-    # On issue_comment event, review is posted AND commit status is posted to update check marks
-    assert mock_post.call_count == 2
+    assert mock_post.call_count == expected_calls
     assert (
         mock_post.call_args_list[0][0][0]
         == "https://api.github.com/repos/derailed-dash/gemini-review-action/pulls/42/reviews"
     )
-    assert (
-        mock_post.call_args_list[1][0][0]
-        == "https://api.github.com/repos/derailed-dash/gemini-review-action/statuses/head_sha_123"
-    )
+    if event_name == "issue_comment":
+        assert (
+            mock_post.call_args_list[1][0][0]
+            == "https://api.github.com/repos/derailed-dash/gemini-review-action/statuses/head_sha_123"
+        )
 
 
-def test_post_review_fallback(mocker):
-    mock_post = mocker.patch("requests.post")
-
-    # First post (atomic review) fails with 422
-    mock_res_atomic = mocker.Mock()
-    mock_res_atomic.status_code = 422
-
-    # Subsequent individual comments post succeed
-    mock_res_ok = mocker.Mock()
-    mock_res_ok.status_code = 201
-
-    mock_post.side_effect = [mock_res_atomic, mock_res_ok, mock_res_ok]
-
-    review = ReviewResult(
-        summary="Some bugs",
-        general_feedback=["Needs fix"],
-        comments=[
-            {
-                "path": "main.py",
-                "line": 10,
-                "side": "RIGHT",
-                "severity": "🔴",
-                "comment_text": "Fix this crash",
-                "code_suggestion": "print('fixed')",
-            }
-        ],
-    )
-
-    post_review("derailed-dash/gemini-review-action", 42, "head_sha_123", review, {"Authorization": "token test"})
-
-    # We expect 3 requests total on pull_request event:
-    # 1. Atomic review post (which fails)
-    # 2. PR issue summary comment
-    # 3. Individual inline comment post
-    assert mock_post.call_count == 3
-
-
-def test_post_review_issue_comment_fallback(mocker):
-    mock_post = mocker.patch("requests.post")
-
-    # First post (atomic review) fails with 422
-    mock_res_atomic = mocker.Mock()
-    mock_res_atomic.status_code = 422
-
-    # Subsequent individual comments post and commit status post succeed
-    mock_res_ok = mocker.Mock()
-    mock_res_ok.status_code = 201
-
-    mock_post.side_effect = [mock_res_atomic, mock_res_ok, mock_res_ok, mock_res_ok]
+@pytest.mark.parametrize("event_name,expected_calls", [("pull_request", 3), ("issue_comment", 4)])
+def test_post_review_fallback(mocker, event_name, expected_calls):
+    mock_res_atomic = mocker.Mock(status_code=422)
+    mock_res_ok = mocker.Mock(status_code=201)
+    mock_post = mocker.patch("requests.post", side_effect=[mock_res_atomic, mock_res_ok, mock_res_ok, mock_res_ok])
 
     review = ReviewResult(
         summary="Some bugs",
@@ -390,67 +326,22 @@ def test_post_review_issue_comment_fallback(mocker):
         "head_sha_123",
         review,
         {"Authorization": "token test"},
-        event_name="issue_comment",
+        event_name=event_name,
     )
 
-    # We expect 4 requests total on issue_comment:
-    # 1. Atomic review post (which fails)
-    # 2. PR issue summary comment
-    # 3. Individual inline comment post
-    # 4. Commit status update
-    assert mock_post.call_count == 4
-    assert (
-        mock_post.call_args_list[3][0][0]
-        == "https://api.github.com/repos/derailed-dash/gemini-review-action/statuses/head_sha_123"
-    )
+    assert mock_post.call_count == expected_calls
+    if event_name == "issue_comment":
+        assert (
+            mock_post.call_args_list[3][0][0]
+            == "https://api.github.com/repos/derailed-dash/gemini-review-action/statuses/head_sha_123"
+        )
 
 
-def test_post_review_complete_failure(mocker):
-    import pytest
-
-    mock_post = mocker.patch("requests.post")
-
-    # Atomic post fails
-    mock_res_atomic = mocker.Mock()
-    mock_res_atomic.status_code = 403
-    mock_res_atomic.text = "Forbidden"
-
-    # Fallback summary post fails
-    mock_res_summary = mocker.Mock()
-    mock_res_summary.status_code = 403
-    mock_res_summary.text = "Forbidden"
-
-    mock_post.side_effect = [mock_res_atomic, mock_res_summary]
-
-    review = ReviewResult(summary="Clean", general_feedback=[], comments=[])
-
-    with pytest.raises(RuntimeError, match="Failed to post PR review to GitHub"):
-        post_review("derailed-dash/gemini-review-action", 42, "head_sha_123", review, {"Authorization": "token test"})
-
-    assert mock_post.call_count == 2
-
-
-def test_post_review_issue_comment_complete_failure(mocker):
-    import pytest
-
-    mock_post = mocker.patch("requests.post")
-
-    # Atomic post fails
-    mock_res_atomic = mocker.Mock()
-    mock_res_atomic.status_code = 403
-    mock_res_atomic.text = "Forbidden"
-
-    # Fallback summary post fails
-    mock_res_summary = mocker.Mock()
-    mock_res_summary.status_code = 403
-    mock_res_summary.text = "Forbidden"
-
-    # Commit status update succeeds
-    mock_res_status = mocker.Mock()
-    mock_res_status.status_code = 201
-
-    mock_post.side_effect = [mock_res_atomic, mock_res_summary, mock_res_status]
-
+@pytest.mark.parametrize("event_name,expected_calls", [("pull_request", 2), ("issue_comment", 3)])
+def test_post_review_complete_failure(mocker, event_name, expected_calls):
+    mock_res_fail = mocker.Mock(status_code=403, text="Forbidden")
+    mock_res_status = mocker.Mock(status_code=201)
+    mock_post = mocker.patch("requests.post", side_effect=[mock_res_fail, mock_res_fail, mock_res_status])
     review = ReviewResult(summary="Clean", general_feedback=[], comments=[])
 
     with pytest.raises(RuntimeError, match="Failed to post PR review to GitHub"):
@@ -460,13 +351,16 @@ def test_post_review_issue_comment_complete_failure(mocker):
             "head_sha_123",
             review,
             {"Authorization": "token test"},
-            event_name="issue_comment",
+            event_name=event_name,
         )
 
-    # Check that commit status was set to 'failure'
-    status_call = mock_post.call_args_list[-1]
-    assert status_call[0][0] == "https://api.github.com/repos/derailed-dash/gemini-review-action/statuses/head_sha_123"
-    assert status_call[1]["json"]["state"] == "failure"
+    assert mock_post.call_count == expected_calls
+    if event_name == "issue_comment":
+        status_call = mock_post.call_args_list[-1]
+        assert (
+            status_call[0][0] == "https://api.github.com/repos/derailed-dash/gemini-review-action/statuses/head_sha_123"
+        )
+        assert status_call[1]["json"]["state"] == "failure"
 
 
 def test_get_valid_changed_lines():
@@ -573,86 +467,81 @@ def test_get_google_auth_headers_none(mocker):
     assert headers == {}
 
 
-def test_search_google_developer_knowledge_success(mocker):
+@pytest.mark.parametrize(
+    "func_name,arg,content_items,expected_text,error_code",
+    [
+        (
+            "search_google_developer_knowledge",
+            "query",
+            [{"type": "text", "text": "Match 1"}, {"type": "text", "text": "Match 2"}],
+            "Match 1\n\nMatch 2",
+            500,
+        ),
+        (
+            "get_google_developer_documents",
+            ["documents/docs.cloud.google.com/gke"],
+            [{"type": "text", "text": "Detailed setup instructions for GKE."}],
+            "Detailed setup instructions for GKE.",
+            404,
+        ),
+    ],
+)
+def test_google_developer_knowledge_tools(mocker, func_name, arg, content_items, expected_text, error_code):
+    import gemini_review as gr
+
+    func = getattr(gr, func_name)
+
+    # 1. Success case
     mocker.patch("gemini_review.get_google_auth_headers", return_value={"X-Goog-Api-Key": "key"})
-
-    mock_post = mocker.patch("requests.post")
-    mock_resp = mocker.Mock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {
-        "result": {"content": [{"type": "text", "text": "Match 1"}, {"type": "text", "text": "Match 2"}]}
-    }
-    mock_post.return_value = mock_resp
-
-    res = search_google_developer_knowledge("query")
-    assert res == "Match 1\n\nMatch 2"
-
-
-def test_search_google_developer_knowledge_no_auth(mocker):
-    mocker.patch("gemini_review.get_google_auth_headers", return_value={})
-    res = search_google_developer_knowledge("query")
-    assert "Error: No API key or Application Default Credentials found" in res
-
-
-def test_search_google_developer_knowledge_api_error(mocker):
-    mocker.patch("gemini_review.get_google_auth_headers", return_value={"X-Goog-Api-Key": "key"})
-
-    mock_post = mocker.patch("requests.post")
-    mock_resp = mocker.Mock()
-    mock_resp.status_code = 500
-    mock_resp.text = "Internal error"
-    mock_post.return_value = mock_resp
-
-    res = search_google_developer_knowledge("query")
-    assert "Error from Google Developer Knowledge API: 500" in res
-
-
-def test_list_available_skills_builtin(mocker):
-    # Mock folder checks and contents
-    mocker.patch("os.path.isdir", side_effect=lambda path: "starter-examples" in path or "my-skill" in path)
-    mocker.patch("os.listdir", return_value=["my-skill"])
-    mocker.patch("os.path.isfile", side_effect=lambda path: "SKILL.md" in path)
-    mocker.patch("gemini_review.parse_skill_metadata", return_value={"name": "My Skill", "description": "Dummy skill"})
-
-    skills = list_available_skills()
-    assert len(skills) == 1
-    assert skills[0]["id"] == "builtin:my-skill/SKILL.md"
-    assert skills[0]["name"] == "My Skill"
-
-
-def test_list_available_skills_workspace(mocker):
-    # Mock workspace folder checks and contents
-    mocker.patch("os.path.isdir", side_effect=lambda path: ".agents/skills" in path or "custom-skill" in path)
-    mocker.patch("os.listdir", return_value=["custom-skill"])
-    mocker.patch("os.path.isfile", side_effect=lambda path: "SKILL.md" in path)
-    mocker.patch(
-        "gemini_review.parse_skill_metadata", return_value={"name": "Custom Skill", "description": "Project rules"}
+    mock_post = mocker.patch(
+        "requests.post",
+        return_value=mocker.Mock(status_code=200, json=lambda: {"result": {"content": content_items}}),
     )
+    assert expected_text in func(arg)
+    assert mock_post.called
+
+    # 2. No auth case
+    mocker.patch("gemini_review.get_google_auth_headers", return_value={})
+    assert "Error: No API key or Application Default Credentials found" in func(arg)
+
+    # 3. API error case
+    mocker.patch("gemini_review.get_google_auth_headers", return_value={"X-Goog-Api-Key": "key"})
+    mocker.patch("requests.post", return_value=mocker.Mock(status_code=error_code, text="API error"))
+    assert f"Error from Google Developer Knowledge API: {error_code}" in func(arg)
+
+
+@pytest.mark.parametrize(
+    "dir_marker,skill_dir,meta_name,meta_desc,expected_id",
+    [
+        ("starter-examples", "my-skill", "My Skill", "Dummy skill", "builtin:my-skill/SKILL.md"),
+        (".agents/skills", "custom-skill", "Custom Skill", "Project rules", "custom-skill/SKILL.md"),
+    ],
+)
+def test_list_available_skills(mocker, dir_marker, skill_dir, meta_name, meta_desc, expected_id):
+    mocker.patch("os.path.isdir", side_effect=lambda path: dir_marker in path or skill_dir in path)
+    mocker.patch("os.listdir", return_value=[skill_dir])
+    mocker.patch("os.path.isfile", side_effect=lambda path: "SKILL.md" in path)
+    mocker.patch("gemini_review.parse_skill_metadata", return_value={"name": meta_name, "description": meta_desc})
 
     skills = list_available_skills()
     assert len(skills) == 1
-    assert skills[0]["id"] == "custom-skill/SKILL.md"
-    assert skills[0]["name"] == "Custom Skill"
+    assert skills[0]["id"] == expected_id
+    assert skills[0]["name"] == meta_name
 
 
-def test_load_skill_instructions_builtin(mocker):
-    # Verify resolving a builtin skill works safely
+@pytest.mark.parametrize(
+    "skill_id,expected_text",
+    [
+        ("builtin:agent-aware-cli/SKILL.md", "Built-in instructions"),
+        ("custom-rules.md", "Workspace instructions"),
+    ],
+)
+def test_load_skill_instructions(mocker, skill_id, expected_text):
     mocker.patch("os.path.exists", return_value=True)
     mocker.patch("os.path.isfile", return_value=True)
-    mocker.patch("builtins.open", mocker.mock_open(read_data="Built-in instructions"))
+    mocker.patch("builtins.open", mocker.mock_open(read_data=expected_text))
 
-    content = load_skill_instructions("builtin:agent-aware-cli/SKILL.md")
-    assert content == "Built-in instructions"
-
-
-def test_load_skill_instructions_workspace(mocker):
-    # Verify resolving workspace skill
-    mocker.patch("os.path.exists", return_value=True)
-    mocker.patch("os.path.isfile", return_value=True)
-    mocker.patch("builtins.open", mocker.mock_open(read_data="Workspace instructions"))
-
-    content = load_skill_instructions("custom-rules.md")
-    assert content == "Workspace instructions"
+    assert load_skill_instructions(skill_id) == expected_text
 
 
 def test_load_skill_instructions_path_traversal():
@@ -698,46 +587,6 @@ description: First line
     assert meta["description"] == "First line and second line"
 
 
-def test_get_google_developer_documents_success(mocker):
-    from gemini_review import get_google_developer_documents
-
-    mocker.patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
-    mock_post = mocker.patch("requests.post")
-    mock_resp = mocker.Mock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {
-        "result": {"content": [{"type": "text", "text": "Detailed setup instructions for GKE."}]}
-    }
-    mock_post.return_value = mock_resp
-
-    res = get_google_developer_documents(["documents/docs.cloud.google.com/gke"])
-    assert "Detailed setup instructions for GKE." in res
-
-
-def test_get_google_developer_documents_no_auth(mocker):
-    from gemini_review import get_google_developer_documents
-
-    mocker.patch.dict(os.environ, {}, clear=True)
-    mocker.patch("google.auth.default", side_effect=Exception("No ADC"))
-
-    res = get_google_developer_documents(["documents/docs.cloud.google.com/gke"])
-    assert "Error: No API key or Application Default Credentials found." in res
-
-
-def test_get_google_developer_documents_api_error(mocker):
-    from gemini_review import get_google_developer_documents
-
-    mocker.patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
-    mock_post = mocker.patch("requests.post")
-    mock_resp = mocker.Mock()
-    mock_resp.status_code = 404
-    mock_resp.text = "Not found"
-    mock_post.return_value = mock_resp
-
-    res = get_google_developer_documents(["documents/docs.cloud.google.com/gke"])
-    assert "Error from Google Developer Knowledge API: 404" in res
-
-
 def test_load_workspace_rules_success(mocker):
     from gemini_review import load_workspace_rules
 
@@ -750,21 +599,18 @@ def test_load_workspace_rules_success(mocker):
     assert "My Project Rules" in rules
 
 
-def test_context_caching_logic(mocker):
-    """Test that context caching creates a cache when prompt is large enough."""
+def _setup_dry_run_main(mocker, extra_env: dict[str, str] | None = None, clear_env: bool = False):
+    """Configure common dry-run mocks for gemini_pr_review.main() context-caching and tool tests."""
     import sys
 
-    from gemini_pr_review import main
-
-    mocker.patch.dict(
-        os.environ,
-        {
-            "GEMINI_API_KEY": "test-key",
-            "GITHUB_REPOSITORY": "test-owner/test-repo",
-            "GITHUB_EVENT_PATH": "",
-        },
-    )
-
+    env = {
+        "GEMINI_API_KEY": "test-key",
+        "GITHUB_REPOSITORY": "test-owner/test-repo",
+        "GITHUB_EVENT_PATH": "",
+    }
+    if extra_env:
+        env.update(extra_env)
+    mocker.patch.dict(os.environ, env, clear=clear_env)
     mocker.patch(
         "gemini_review.get_local_git_files",
         return_value=[{"filename": "large.py", "status": "modified", "patch": "diff patch"}],
@@ -773,275 +619,134 @@ def test_context_caching_logic(mocker):
     mocker.patch("gemini_review.get_file_content", return_value="a" * 120000)
 
     mock_client = mocker.Mock()
-    mock_cache = mocker.Mock()
-    mock_cache.name = "cachedContents/test-cache-123"
-    mock_client.caches.create.return_value = mock_cache
-
-    mock_parsed_cfg = mocker.Mock()
-    mock_parsed_cfg.tools = []
-    mock_client.models._parse_config.return_value = mock_parsed_cfg
-
-    mock_response = mocker.Mock()
-
-    mock_response.text = '{"summary": "OK", "general_feedback": [], "comments": []}'
-    mock_response.usage_metadata = mocker.Mock(
-        prompt_token_count=150000,
-        candidates_token_count=100,
-        total_token_count=150100,
-        cached_content_token_count=145000,
+    mock_client.models._parse_config.return_value = mocker.Mock(tools=[])
+    mock_response = mocker.Mock(
+        text='{"summary": "OK", "general_feedback": [], "comments": []}',
+        usage_metadata=mocker.Mock(
+            prompt_token_count=150000,
+            candidates_token_count=100,
+            total_token_count=150100,
+            cached_content_token_count=145000,
+        ),
     )
     mock_client.models.generate_content.return_value = mock_response
-
     mocker.patch("google.genai.Client", return_value=mock_client)
     mocker.patch.object(sys, "argv", ["gemini_pr_review.py"])
+    return mock_client, mock_response
 
-    # Run main in dry-run mode
+
+def test_context_caching_logic(mocker):
+    """Test that context caching creates a cache when prompt is large enough."""
+    from gemini_pr_review import main
+
+    mock_client, _ = _setup_dry_run_main(mocker)
+    mock_client.caches.create.return_value = mocker.Mock(name="cachedContents/test-cache-123")
+    mock_client.caches.create.return_value.name = "cachedContents/test-cache-123"
+
     main()
 
-    # Verify cache creation was invoked with display_name and ttl
     assert mock_client.caches.create.called
-    call_args = mock_client.caches.create.call_args
-    assert "repo-cache-test-owner-test-repo" in call_args.kwargs["config"].display_name
-
-    # Verify generate_content received cached_content
-    gen_call_args = mock_client.models.generate_content.call_args
-    assert gen_call_args.kwargs["config"].cached_content == "cachedContents/test-cache-123"
+    assert "repo-cache-test-owner-test-repo" in mock_client.caches.create.call_args.kwargs["config"].display_name
+    assert (
+        mock_client.models.generate_content.call_args.kwargs["config"].cached_content == "cachedContents/test-cache-123"
+    )
 
 
 def test_context_caching_reuse_existing_cache(mocker):
     """Test that existing active cache is reused without calling caches.create."""
-    import sys
-
     from gemini_pr_review import main
 
-    mocker.patch.dict(
-        os.environ,
-        {
-            "GEMINI_API_KEY": "test-key",
-            "GITHUB_REPOSITORY": "test-owner/test-repo",
-            "GITHUB_EVENT_PATH": "",
-            "GEMINI_PERSONA": "straight",
-        },
-        clear=True,
+    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_PERSONA": "straight"}, clear_env=True)
+    existing_cache = mocker.Mock(
+        display_name=f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-straight",
+        model=DEFAULT_MODEL,
     )
-
-    mocker.patch(
-        "gemini_review.get_local_git_files",
-        return_value=[{"filename": "large.py", "status": "modified", "patch": "diff patch"}],
-    )
-    mocker.patch("gemini_review.get_all_repo_files", return_value=["other.py"])
-    mocker.patch("gemini_review.get_file_content", return_value="a" * 120000)
-
-    mock_client = mocker.Mock()
-    existing_cache = mocker.Mock()
     existing_cache.name = "cachedContents/existing-cache-456"
-    existing_cache.display_name = f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-straight"
-    existing_cache.model = DEFAULT_MODEL
     mock_client.caches.list.return_value = [existing_cache]
-
-    mock_response = mocker.Mock()
-    mock_response.text = '{"summary": "OK", "general_feedback": [], "comments": []}'
-    mock_response.usage_metadata = mocker.Mock(
-        prompt_token_count=150000,
-        candidates_token_count=100,
-        total_token_count=150100,
-        cached_content_token_count=145000,
-    )
-    mock_client.models.generate_content.return_value = mock_response
-
-    mocker.patch("google.genai.Client", return_value=mock_client)
-    mocker.patch.object(sys, "argv", ["gemini_pr_review.py"])
 
     main()
 
-    # Verify caches.create was NOT called since existing cache was found
     assert not mock_client.caches.create.called
-    gen_call_args = mock_client.models.generate_content.call_args
-    assert gen_call_args.kwargs["config"].cached_content == "cachedContents/existing-cache-456"
+    assert (
+        mock_client.models.generate_content.call_args.kwargs["config"].cached_content
+        == "cachedContents/existing-cache-456"
+    )
 
 
 def test_context_caching_model_mismatch_skips_cache(mocker):
     """Test that an active cache for a different model is skipped and a new cache is created."""
-    import sys
-
     from gemini_pr_review import main
 
-    mocker.patch.dict(
-        os.environ,
-        {
-            "GEMINI_API_KEY": "test-key",
-            "GEMINI_MODEL": DEFAULT_MODEL,
-            "GITHUB_REPOSITORY": "test-owner/test-repo",
-            "GITHUB_EVENT_PATH": "",
-        },
-    )
-
-    mocker.patch(
-        "gemini_review.get_local_git_files",
-        return_value=[{"filename": "large.py", "status": "modified", "patch": "diff patch"}],
-    )
-    mocker.patch("gemini_review.get_all_repo_files", return_value=["other.py"])
-    mocker.patch("gemini_review.get_file_content", return_value="a" * 120000)
-
-    mock_client = mocker.Mock()
-    existing_cache = mocker.Mock()
+    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_MODEL": DEFAULT_MODEL})
+    existing_cache = mocker.Mock(display_name="repo-cache-test-owner-test-repo", model="models/gemini-3.5-flash")
     existing_cache.name = "cachedContents/old-model-cache-789"
-    existing_cache.display_name = "repo-cache-test-owner-test-repo"
-    existing_cache.model = "models/gemini-3.5-flash"  # Model mismatch!
     mock_client.caches.list.return_value = [existing_cache]
 
     mock_new_cache = mocker.Mock()
     mock_new_cache.name = "cachedContents/new-model-cache-101"
     mock_client.caches.create.return_value = mock_new_cache
 
-    mock_parsed_cfg = mocker.Mock()
-    mock_parsed_cfg.tools = []
-    mock_client.models._parse_config.return_value = mock_parsed_cfg
-
-    mock_response = mocker.Mock()
-    mock_response.text = '{"summary": "OK", "general_feedback": [], "comments": []}'
-    mock_response.usage_metadata = mocker.Mock(
-        prompt_token_count=150000,
-        candidates_token_count=100,
-        total_token_count=150100,
-        cached_content_token_count=145000,
-    )
-    mock_client.models.generate_content.return_value = mock_response
-
-    mocker.patch("google.genai.Client", return_value=mock_client)
-    mocker.patch.object(sys, "argv", ["gemini_pr_review.py"])
-
     main()
 
-    # Verify caches.create WAS called because old cache model did not match
     assert mock_client.caches.create.called
     create_call_args = mock_client.caches.create.call_args
     assert create_call_args.kwargs["model"] == DEFAULT_MODEL
     assert f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}" in create_call_args.kwargs["config"].display_name
-
-    # Verify generate_content received the newly created cache handle
-    gen_call_args = mock_client.models.generate_content.call_args
-    assert gen_call_args.kwargs["config"].cached_content == "cachedContents/new-model-cache-101"
+    assert (
+        mock_client.models.generate_content.call_args.kwargs["config"].cached_content
+        == "cachedContents/new-model-cache-101"
+    )
 
 
 def test_context_caching_persona_mismatch_skips_cache(mocker):
     """Test that an active cache for a different persona is skipped and a fresh persona cache created."""
-    import sys
-
     from gemini_pr_review import main
 
-    mocker.patch.dict(
-        os.environ,
-        {
-            "GEMINI_API_KEY": "test-key",
-            "GEMINI_MODEL": DEFAULT_MODEL,
-            "GEMINI_PERSONA": "rick",
-            "GITHUB_REPOSITORY": "test-owner/test-repo",
-            "GITHUB_EVENT_PATH": "",
-        },
-        clear=True,
+    mock_client, _ = _setup_dry_run_main(
+        mocker, {"GEMINI_MODEL": DEFAULT_MODEL, "GEMINI_PERSONA": "rick"}, clear_env=True
     )
-
-    mocker.patch(
-        "gemini_review.get_local_git_files",
-        return_value=[{"filename": "large.py", "status": "modified", "patch": "diff patch"}],
+    existing_cache = mocker.Mock(
+        display_name=f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-dazbo",
+        model=DEFAULT_MODEL,
     )
-    mocker.patch("gemini_review.get_all_repo_files", return_value=["other.py"])
-    mocker.patch("gemini_review.get_file_content", return_value="a" * 120000)
-
-    mock_client = mocker.Mock()
-    mock_client.models._parse_config.return_value.tools = None
-    existing_cache = mocker.Mock()
     existing_cache.name = "cachedContents/old-dazbo-cache-123"
-    existing_cache.display_name = f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-dazbo"
-    existing_cache.model = DEFAULT_MODEL
     mock_client.caches.list.return_value = [existing_cache]
 
     mock_new_cache = mocker.Mock()
     mock_new_cache.name = "cachedContents/new-rick-cache-789"
     mock_client.caches.create.return_value = mock_new_cache
 
-    mock_response = mocker.Mock()
-    mock_response.text = '{"summary": "Wubba Lubba Dub-Dub!", "general_feedback": [], "comments": []}'
-    mock_response.usage_metadata = mocker.Mock(
-        prompt_token_count=150000,
-        candidates_token_count=100,
-        total_token_count=150100,
-        cached_content_token_count=0,
-    )
-    mock_client.models.generate_content.return_value = mock_response
-
-    mocker.patch("google.genai.Client", return_value=mock_client)
-    mocker.patch.object(sys, "argv", ["gemini_pr_review.py"])
-
     main()
 
-    # Verify caches.create WAS called because old cache persona (dazbo) did not match new persona (rick)
     assert mock_client.caches.create.called
     create_call_args = mock_client.caches.create.call_args
     assert create_call_args.kwargs["config"].display_name == f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-rick"
-
-    # Verify generate_content received the newly created rick cache handle
-    gen_call_args = mock_client.models.generate_content.call_args
-    assert gen_call_args.kwargs["config"].cached_content == "cachedContents/new-rick-cache-789"
+    assert (
+        mock_client.models.generate_content.call_args.kwargs["config"].cached_content
+        == "cachedContents/new-rick-cache-789"
+    )
 
 
 def test_context_caching_generate_content_fallback(mocker):
     """Test that if generate_content with cached_content fails, it falls back to direct context."""
-    import sys
-
     from gemini_pr_review import main
 
-    mocker.patch.dict(
-        os.environ,
-        {
-            "GEMINI_API_KEY": "test-key",
-            "GITHUB_REPOSITORY": "test-owner/test-repo",
-            "GITHUB_EVENT_PATH": "",
-            "GEMINI_PERSONA": "straight",
-        },
-        clear=True,
+    mock_client, mock_response = _setup_dry_run_main(mocker, {"GEMINI_PERSONA": "straight"}, clear_env=True)
+    existing_cache = mocker.Mock(
+        display_name=f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-straight",
+        model=DEFAULT_MODEL,
     )
-
-    mocker.patch(
-        "gemini_review.get_local_git_files",
-        return_value=[{"filename": "large.py", "status": "modified", "patch": "diff patch"}],
-    )
-    mocker.patch("gemini_review.get_all_repo_files", return_value=["other.py"])
-    mocker.patch("gemini_review.get_file_content", return_value="a" * 120000)
-
-    mock_client = mocker.Mock()
-    existing_cache = mocker.Mock()
     existing_cache.name = "cachedContents/invalid-cache-999"
-    existing_cache.display_name = f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-straight"
-    existing_cache.model = DEFAULT_MODEL
     mock_client.caches.list.return_value = [existing_cache]
-
-    mock_response = mocker.Mock()
-    mock_response.text = '{"summary": "OK", "general_feedback": [], "comments": []}'
-    mock_response.usage_metadata = mocker.Mock(
-        prompt_token_count=150000,
-        candidates_token_count=100,
-        total_token_count=150100,
-        cached_content_token_count=0,
-    )
-
-    # First call with cache fails, second call without cache succeeds
     mock_client.models.generate_content.side_effect = [
         RuntimeError("400 INVALID_ARGUMENT: Model mismatch or invalid cache handle"),
         mock_response,
     ]
 
-    mocker.patch("google.genai.Client", return_value=mock_client)
-    mocker.patch.object(sys, "argv", ["gemini_pr_review.py"])
-
     main()
 
-    # generate_content should have been called twice (first with cache, then fallback without cache)
     assert mock_client.models.generate_content.call_count == 2
-    first_call_args = mock_client.models.generate_content.call_args_list[0]
-    second_call_args = mock_client.models.generate_content.call_args_list[1]
-
+    first_call_args, second_call_args = mock_client.models.generate_content.call_args_list
     assert first_call_args.kwargs["config"].cached_content == "cachedContents/invalid-cache-999"
     assert second_call_args.kwargs["config"].cached_content is None
 
@@ -1257,45 +962,34 @@ def test_get_persona_prompt_straight():
     assert get_persona_prompt("none") == ""
 
 
-def test_get_persona_prompt_dazbo():
-    """Test get_persona_prompt returns Dazbo persona overlay prompt."""
+@pytest.mark.parametrize(
+    "persona,expected_header,expected_phrases,aliases",
+    [
+        ("dazbo", "## Mandatory Persona Directive: Dazbo", ["exasperation", "sarcasm"], ["  DAZBO  "]),
+        (
+            "palpatine",
+            "## Mandatory Persona Directive: Emperor Palpatine",
+            ["execute order 66", "unlimited power!", "dark side"],
+            ["Palpatine"],
+        ),
+        (
+            "rick",
+            "## Mandatory Persona Directive: Rick Sanchez",
+            ["wubba lubba dub-dub!", "jerry-"],
+            ["Rick", "rick_sanchez"],
+        ),
+    ],
+)
+def test_get_persona_prompt_overlays(persona, expected_header, expected_phrases, aliases):
+    """Test get_persona_prompt returns expected persona overlay directives and handles aliases."""
     from gemini_review import get_persona_prompt
 
-    prompt = get_persona_prompt("dazbo")
-    assert "## Mandatory Persona Directive: Dazbo" in prompt
-    assert "exasperation" in prompt.lower()
-    assert "sarcasm" in prompt.lower()
-
-    # Case-insensitivity & whitespace handling
-    assert get_persona_prompt("  DAZBO  ") == prompt
-
-
-def test_get_persona_prompt_palpatine():
-    """Test get_persona_prompt returns Palpatine persona overlay prompt."""
-    from gemini_review import get_persona_prompt
-
-    prompt = get_persona_prompt("palpatine")
-    assert "## Mandatory Persona Directive: Emperor Palpatine" in prompt
-    assert "Execute Order 66" in prompt
-    assert "Unlimited power!" in prompt
-    assert "Dark Side" in prompt.title() or "dark side" in prompt.lower()
-
-    # Case-insensitivity
-    assert get_persona_prompt("Palpatine") == prompt
-
-
-def test_get_persona_prompt_rick():
-    """Test get_persona_prompt returns Rick Sanchez persona overlay prompt."""
-    from gemini_review import get_persona_prompt
-
-    prompt = get_persona_prompt("rick")
-    assert "## Mandatory Persona Directive: Rick Sanchez" in prompt
-    assert "Wubba Lubba Dub-Dub!" in prompt
-    assert "Jerry-tier" in prompt or "Jerry-level" in prompt
-
-    # Case-insensitivity & alias handling
-    assert get_persona_prompt("Rick") == prompt
-    assert get_persona_prompt("rick_sanchez") == prompt
+    prompt = get_persona_prompt(persona)
+    assert expected_header in prompt
+    for phrase in expected_phrases:
+        assert phrase in prompt.lower()
+    for alias in aliases:
+        assert get_persona_prompt(alias) == prompt
 
 
 def test_get_persona_prompt_unknown(capsys):
@@ -1457,8 +1151,6 @@ def test_extract_response_text_or_raise_success(mocker):
 
 
 def test_extract_response_text_or_raise_none_with_candidates(mocker):
-    import pytest
-
     mock_candidate = mocker.Mock()
     mock_candidate.finish_reason = "SAFETY"
     mock_candidate.finish_message = "Blocked due to safety settings"
@@ -1478,8 +1170,6 @@ def test_extract_response_text_or_raise_none_with_candidates(mocker):
 
 
 def test_extract_response_text_or_raise_none_with_function_calls(mocker):
-    import pytest
-
     mock_response = mocker.Mock()
     mock_response.text = None
     mock_response.candidates = []
@@ -1493,8 +1183,6 @@ def test_extract_response_text_or_raise_none_with_function_calls(mocker):
 
 
 def test_extract_response_text_or_raise_property_getter_exception(mocker):
-    import pytest
-
     mock_response = mocker.Mock()
     type(mock_response).text = property(mocker.Mock(side_effect=ValueError("Response candidate was blocked")))
     mock_response.candidates = []
@@ -1549,36 +1237,35 @@ def test_post_commit_status_custom_workflow_and_context(mocker, monkeypatch):
     assert kwargs["json"]["context"] == "Custom Context"
 
 
-def test_is_inline_suggestion_commit_true(mocker):
+@pytest.mark.parametrize(
+    ("commit_json", "expected"),
+    [
+        (
+            {
+                "committer": {"login": "web-flow"},
+                "commit": {
+                    "committer": {"email": "noreply@github.com"},
+                    "message": "Update SKILL.md\n\nCo-authored-by: github-actions[bot] <bot@users.noreply.github.com>",
+                },
+            },
+            True,
+        ),
+        (
+            {
+                "committer": {"login": "derailed-dash"},
+                "commit": {
+                    "committer": {"email": "dazbo@example.com"},
+                    "message": "Manual developer commit",
+                },
+            },
+            False,
+        ),
+    ],
+)
+def test_is_inline_suggestion_commit(mocker, commit_json, expected):
     mock_get = mocker.patch("requests.get")
-    mock_res = mocker.Mock()
-    mock_res.status_code = 200
-    mock_res.json.return_value = {
-        "committer": {"login": "web-flow"},
-        "commit": {
-            "committer": {"email": "noreply@github.com"},
-            "message": "Update SKILL.md\n\nCo-authored-by: github-actions[bot] <bot@users.noreply.github.com>",
-        },
-    }
-    mock_get.return_value = mock_res
-
-    assert is_inline_suggestion_commit("owner/repo", "sha123", {"Authorization": "token test"}) is True
-
-
-def test_is_inline_suggestion_commit_false(mocker):
-    mock_get = mocker.patch("requests.get")
-    mock_res = mocker.Mock()
-    mock_res.status_code = 200
-    mock_res.json.return_value = {
-        "committer": {"login": "derailed-dash"},
-        "commit": {
-            "committer": {"email": "dazbo@example.com"},
-            "message": "Manual developer commit",
-        },
-    }
-    mock_get.return_value = mock_res
-
-    assert is_inline_suggestion_commit("owner/repo", "sha123", {"Authorization": "token test"}) is False
+    mock_get.return_value = mocker.Mock(status_code=200, json=lambda: commit_json)
+    assert is_inline_suggestion_commit("owner/repo", "sha123", {"Authorization": "token test"}) is expected
 
 
 def test_sanitize_code_suggestion():
@@ -1873,34 +1560,10 @@ def test_build_codebase_context_sparse_mode_with_dynamic_selection(mocker):
 
 def test_main_passes_model_to_build_codebase_context(mocker):
     """Test main() retrieves GEMINI_MODEL and passes client + model to build_codebase_context."""
-    import sys
-
     from gemini_pr_review import main
 
-    mocker.patch.dict(
-        os.environ,
-        {
-            "GEMINI_API_KEY": "test-key",
-            "GEMINI_MODEL": DEFAULT_MODEL,
-            "GITHUB_REPOSITORY": "test-owner/test-repo",
-            "GITHUB_EVENT_PATH": "",
-        },
-    )
-
-    mocker.patch(
-        "gemini_review.get_local_git_files",
-        return_value=[{"filename": "main.py", "status": "modified", "patch": "diff"}],
-    )
+    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_MODEL": DEFAULT_MODEL})
     mock_build_ctx = mocker.patch("gemini_review.build_codebase_context", return_value="")
-
-    mock_client = mocker.Mock()
-    mock_response = mocker.Mock()
-    mock_response.text = '{"summary": "OK", "general_feedback": [], "comments": []}'
-    mock_response.usage_metadata = None
-    mock_client.models.generate_content.return_value = mock_response
-
-    mocker.patch("google.genai.Client", return_value=mock_client)
-    mocker.patch.object(sys, "argv", ["gemini_pr_review.py"])
 
     main()
 
@@ -1953,80 +1616,59 @@ def test_main_resolves_function_call_response_and_produces_review(mocker):
     """Test Issue #42: when generate_content returns a function_call response with no text,
     main() executes the tool, sends the tool result back to the model, and succeeds.
     """
-    import sys
-
     from google.genai import types
 
     from gemini_pr_review import main
 
-    mocker.patch.dict(
-        os.environ,
-        {
-            "GEMINI_API_KEY": "test-key",
-            "GEMINI_MODEL": DEFAULT_MODEL,
-            "GITHUB_REPOSITORY": "test-owner/test-repo",
-            "GITHUB_EVENT_PATH": "",
-        },
-        clear=True,
-    )
-
-    mocker.patch(
-        "gemini_review.get_local_git_files",
-        return_value=[{"filename": "main.py", "status": "modified", "patch": "diff patch"}],
-    )
-    mocker.patch("gemini_review.get_all_repo_files", return_value=["other.py"])
-    mocker.patch("gemini_review.get_file_content", return_value="a" * 120000)
-
+    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_MODEL": DEFAULT_MODEL}, clear_env=True)
     mock_skills = mocker.patch(
         "gemini_review.list_available_skills",
         return_value=[{"id": "builtin:test/SKILL.md", "name": "Test Skill", "description": "Test desc"}],
     )
     mock_skills.__name__ = "list_available_skills"
 
-    mock_client = mocker.Mock()
-    existing_cache = mocker.Mock()
+    existing_cache = mocker.Mock(
+        display_name=f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-straight",
+        model=DEFAULT_MODEL,
+    )
     existing_cache.name = "cachedContents/existing-cache-42"
-    existing_cache.display_name = f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-straight"
-    existing_cache.model = DEFAULT_MODEL
     mock_client.caches.list.return_value = [existing_cache]
 
-    # First response: model emits a function_call to list_available_skills() and no text
     fc_part = types.Part.from_function_call(name="list_available_skills", args={})
-    fc_content = types.Content(role="model", parts=[fc_part])
-    fc_candidate = mocker.Mock(content=fc_content, finish_reason="STOP", finish_message=None, safety_ratings=None)
-
-    first_response = mocker.Mock()
-    first_response.text = None
-    first_response.candidates = [fc_candidate]
-    first_response.function_calls = [fc_part.function_call]
-    first_response.prompt_feedback = None
-    first_response.usage_metadata = mocker.Mock(
-        prompt_token_count=100000,
-        candidates_token_count=50,
-        thoughts_token_count=0,
-        total_token_count=100050,
-        cached_content_token_count=95000,
+    fc_candidate = mocker.Mock(
+        content=types.Content(role="model", parts=[fc_part]),
+        finish_reason="STOP",
+        finish_message=None,
+        safety_ratings=None,
     )
-
-    # Second response after feeding tool output back: valid ReviewResult JSON
-    second_response = mocker.Mock()
-    second_response.text = '{"summary": "Reviewed with skill!", "general_feedback": [], "comments": []}'
-    second_response.candidates = []
-    second_response.function_calls = None
-    second_response.prompt_feedback = None
-    second_response.usage_metadata = mocker.Mock(
-        prompt_token_count=100200,
-        candidates_token_count=200,
-        thoughts_token_count=0,
-        total_token_count=100400,
-        cached_content_token_count=95000,
+    first_response = mocker.Mock(
+        text=None,
+        candidates=[fc_candidate],
+        function_calls=[fc_part.function_call],
+        prompt_feedback=None,
+        usage_metadata=mocker.Mock(
+            prompt_token_count=100000,
+            candidates_token_count=50,
+            thoughts_token_count=0,
+            total_token_count=100050,
+            cached_content_token_count=95000,
+        ),
     )
-
+    second_response = mocker.Mock(
+        text='{"summary": "Reviewed with skill!", "general_feedback": [], "comments": []}',
+        candidates=[],
+        function_calls=None,
+        prompt_feedback=None,
+        usage_metadata=mocker.Mock(
+            prompt_token_count=100200,
+            candidates_token_count=200,
+            thoughts_token_count=0,
+            total_token_count=100400,
+            cached_content_token_count=95000,
+        ),
+    )
     mock_client.models.generate_content.side_effect = [first_response, second_response]
-    mocker.patch("google.genai.Client", return_value=mock_client)
-    mocker.patch.object(sys, "argv", ["gemini_pr_review.py"])
 
-    # Should NOT raise RuntimeError!
     main()
 
     assert mock_skills.called
@@ -2038,74 +1680,51 @@ def test_main_falls_back_to_tool_free_review_when_tool_loop_still_has_no_text(mo
     function_call) after tool resolution attempts, fall back to a tool-free review request
     so the run degrades gracefully rather than dying.
     """
-    import sys
-
     from google.genai import types
 
     from gemini_pr_review import main
 
-    mocker.patch.dict(
-        os.environ,
-        {
-            "GEMINI_API_KEY": "test-key",
-            "GEMINI_MODEL": DEFAULT_MODEL,
-            "GITHUB_REPOSITORY": "test-owner/test-repo",
-            "GITHUB_EVENT_PATH": "",
-        },
-        clear=True,
-    )
-
-    mocker.patch(
-        "gemini_review.get_local_git_files",
-        return_value=[{"filename": "main.py", "status": "modified", "patch": "diff patch"}],
-    )
+    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_MODEL": DEFAULT_MODEL}, clear_env=True)
     mocker.patch("gemini_review.build_codebase_context", return_value="short context")
-
     mock_skills = mocker.patch(
         "gemini_review.list_available_skills",
         return_value=[{"id": "builtin:test/SKILL.md", "name": "Test Skill", "description": "Test desc"}],
     )
     mock_skills.__name__ = "list_available_skills"
 
-    # First response: function_call with no text
     fc_part = types.Part.from_function_call(name="list_available_skills", args={})
-    fc_content = types.Content(role="model", parts=[fc_part])
-    fc_candidate = mocker.Mock(content=fc_content, finish_reason="STOP", finish_message=None, safety_ratings=None)
-
-    fc_response = mocker.Mock()
-    fc_response.text = None
-    fc_response.candidates = [fc_candidate]
-    fc_response.function_calls = [fc_part.function_call]
-    fc_response.prompt_feedback = None
-    fc_response.usage_metadata = None
-
-    # Second response (during tool loop): blocked with PROHIBITED_CONTENT and no text
-    blocked_response = mocker.Mock()
-    blocked_response.text = None
-    blocked_response.candidates = []
-    blocked_response.function_calls = None
-    blocked_response.prompt_feedback = mocker.Mock(block_reason="PROHIBITED_CONTENT")
-    blocked_response.usage_metadata = None
-
-    # Third response (fallback without tools): succeeds with valid JSON review
-    fallback_response = mocker.Mock()
-    fallback_response.text = (
-        '{"summary": "Fallback tool-free review succeeded", "general_feedback": [], "comments": []}'
+    fc_candidate = mocker.Mock(
+        content=types.Content(role="model", parts=[fc_part]),
+        finish_reason="STOP",
+        finish_message=None,
+        safety_ratings=None,
     )
-    fallback_response.candidates = []
-    fallback_response.function_calls = None
-    fallback_response.prompt_feedback = None
-    fallback_response.usage_metadata = None
-
-    mock_client = mocker.Mock()
+    fc_response = mocker.Mock(
+        text=None,
+        candidates=[fc_candidate],
+        function_calls=[fc_part.function_call],
+        prompt_feedback=None,
+        usage_metadata=None,
+    )
+    blocked_response = mocker.Mock(
+        text=None,
+        candidates=[],
+        function_calls=None,
+        prompt_feedback=mocker.Mock(block_reason="PROHIBITED_CONTENT"),
+        usage_metadata=None,
+    )
+    fallback_response = mocker.Mock(
+        text='{"summary": "Fallback tool-free review succeeded", "general_feedback": [], "comments": []}',
+        candidates=[],
+        function_calls=None,
+        prompt_feedback=None,
+        usage_metadata=None,
+    )
     mock_client.models.generate_content.side_effect = [fc_response, blocked_response, fallback_response]
-    mocker.patch("google.genai.Client", return_value=mock_client)
-    mocker.patch.object(sys, "argv", ["gemini_pr_review.py"])
 
     main()
 
     assert mock_client.models.generate_content.call_count == 3
-    # Final fallback call should have tools=None and cached_content=None
     final_call_cfg = mock_client.models.generate_content.call_args_list[-1].kwargs["config"]
     assert final_call_cfg.tools is None
     assert final_call_cfg.cached_content is None
