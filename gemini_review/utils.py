@@ -23,9 +23,14 @@ from gemini_review.diff import (
 
 # Re-export multimodal utilities
 from gemini_review.multimodal import (
+    DEFAULT_MAX_REMOTE_IMAGE_BYTES,
+    DEFAULT_MAX_TRIAGE_IMAGES,
     SUPPORTED_IMAGE_EXTENSIONS,
     SUPPORTED_MULTIMODAL_EXTENSIONS,
+    build_triage_multimodal_parts,
     extract_markdown_image_references,
+    extract_remote_image_urls,
+    fetch_remote_image,
     get_mime_type,
     is_supported_image,
     is_supported_multimodal_file,
@@ -54,6 +59,8 @@ __all__ = [
     "extract_response_text_or_raise",
     "resolve_tool_calls_loop",
     # Multimodal re-exports
+    "DEFAULT_MAX_REMOTE_IMAGE_BYTES",
+    "DEFAULT_MAX_TRIAGE_IMAGES",
     "SUPPORTED_IMAGE_EXTENSIONS",
     "SUPPORTED_MULTIMODAL_EXTENSIONS",
     "is_supported_image",
@@ -61,6 +68,9 @@ __all__ = [
     "get_mime_type",
     "optimize_image_bytes",
     "extract_markdown_image_references",
+    "extract_remote_image_urls",
+    "fetch_remote_image",
+    "build_triage_multimodal_parts",
     # Diff re-exports
     "format_file_content_with_line_numbers",
     "format_diff_patch_with_line_numbers",

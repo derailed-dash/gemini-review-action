@@ -48,13 +48,13 @@ See the supporting blog post about this action [here](https://medium.com/google-
 ![Features Overview](assets/features-overview.png)
 
 - **AI-Powered Code Reviews**: Automated, constructive line-specific feedback on Pull Requests using Google Gemini models (Gemini 3.8 Flash by default).
-- **Automated Issue Triage**: Dynamically labels, prioritises, and triages incoming issues.
+- **Automated Issue Triage**: Dynamically labels, prioritises, and triages incoming issues using text descriptions, discussion comments, and attached remote screenshots.
 - **PR Comment & Discussion Thread History**: Automatically retrieves inline review threads and general PR conversation comments, enabling Gemini to track issue resolution, respect developer justifications/disagreements, and avoid repeating resolved suggestions across commits.
 - **Billing Labels for Cost Attribution (Vertex AI only)**: Tags every request with Cloud Billing labels (`component`, `repo`), so spend per repository is a group-by in the billing export rather than a sum of numbers in review comments.
 - **Tokenomics & Cost Telemetry Report**: Appends a collapsible token usage and **estimated dollar cost** summary to each review, with the rate that was applied stated alongside it.
 - **Drop-in Migration**: Fully compatible as a direct, drop-in replacement for the deprecated `run-gemini-cli` action.
 - **Structured Outputs**: Error-free JSON response formatting using Pydantic schema validation.
-- **Multimodal Context & Visual PR Diffing**: Inspects repository visual assets and documents (PNG, JPEG, WebP, GIF, SVG, PDF). Local images referenced in Markdown docs are automatically extracted and attached to review context. When PRs modify images, Gemini performs side-by-side visual diffing between baseline and updated versions to catch visual regressions and layout issues. Includes intelligent deterministic downscaling (Pillow) to minimise token consumption and latency.
+- **Multimodal Context, Visual PR Diffing & Triage Screenshots**: Inspects repository visual assets, issue screenshots, and documents (PNG, JPEG, WebP, GIF, SVG, PDF). Local images referenced in Markdown docs and remote screenshots embedded in issues (`github.com/user-attachments/assets/...`, `githubusercontent.com/...`) are automatically extracted and attached as multimodal parts. When PRs modify images, Gemini performs side-by-side visual diffing between baseline and updated versions to catch visual regressions and layout issues. Includes intelligent deterministic downscaling (Pillow) to minimise token consumption and latency.
 - **Hybrid Codebase Context**: Automatically includes codebase context based on the overall size of the codebase. If the codebase isn't huge, the entire repo is loaded into context; but if it is huge, the agent reads the overall directory tree and judiciously includes a subset of the repo. (Note that it always reads markdown files, dependency files, packaging files, etc.)
 - **Interactive Suggestions**: Formats code recommendations inside native GitHub ` ```suggestion ` blocks for one-click merge applications.
 - **Triggers**: The action triggers automatically in response to PR events. It can also be triggered by posting a comment in the PR starting with `/gemini-review`.
@@ -466,6 +466,7 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 | `context_diff_directories_only` | Whether to restrict candidate context files in Sparse Mode strictly to directories containing modified files from the PR diff. | No | `'false'` |
 | `context_exclude_patterns` | Comma-separated glob patterns to exclude from candidate context files in addition to default exclusions (lockfiles, minified files, test snapshots, and binaries). | No | `''` |
 | `max_multimodal_images` | Maximum number of multimodal images (markdown references, static attachments, visual diffs) attached to review context (default: 20). | No | `20` |
+| `max_triage_images` | Maximum number of remote screenshots attached during issue triage (default: 5). | No | `5` |
 | `image_trigger_bytes` | File size threshold in bytes above which raster images are downscaled before attachment (default: 614400 / 600 KB). | No | `614400` |
 | `image_target_bytes` | Target size in bytes when downscaling large raster images (default: 307200 / 300 KB). | No | `307200` |
 | `timeout` | Timeout for API requests in seconds. | No | `60` |
@@ -521,7 +522,7 @@ core_file_patterns = [
 
 ### Multimodal Context & Visual PR Diffing
 
-Gemini Review Action supports multimodal context inspection and side-by-side visual diffing for image assets and PDF documents:
+Gemini Review Action supports multimodal context inspection, side-by-side visual PR diffing, and remote screenshot extraction for issue triage:
 
 * **Automatic Markdown Image Reference Resolution**:
   Whenever Markdown documentation (such as `README.md`, `DESIGN.md`, `ARCHITECTURE.md`, or newly added diff documentation) is included in the review context, any local repository images referenced via standard Markdown (`![alt](path/to/img.png)`) or HTML (`<img src="path/to/img.png">`) are automatically extracted, validated against path traversal, and attached as multimodal parts. This gives Gemini the complete visual context behind architecture diagrams, wireframes, and screenshots referenced in documentation.
@@ -529,13 +530,17 @@ Gemini Review Action supports multimodal context inspection and side-by-side vis
   When a Pull Request adds, deletes, or modifies visual assets (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.svg`), the action constructs structured visual diff parts for Gemini:
   - For modified images, both the baseline version (`base_sha`) and the updated version (`head_sha`) are retrieved directly and presented side-by-side with clear labels.
   - Gemini evaluates visual diffs for visual regressions, UI alignment, resolution degradation, icon consistency, and styling changes.
+* **Remote Screenshot Extraction for Issue Triage**:
+  During issue triage (`command: 'triage'`), the action parses the issue body and discussion comments for remote HTTPS image URLs (`![alt](https://...)` and `<img src="https://...">`), including extensionless GitHub user-uploaded assets (`github.com/user-attachments/assets/...` and `githubusercontent.com/...`):
+  - For GitHub-hosted URLs, requests automatically include `Authorization: Bearer <GITHUB_TOKEN>` so screenshots in private or internal repositories are fetched seamlessly (credentials are never sent to third-party domains).
+  - Screenshots are streamed with a 20 MB download safety limit, downscaled via `optimize_image_bytes()`, and attached as `types.Part.from_bytes` up to `max_triage_images` (default: `5`). If any remote screenshot fails or times out, triage gracefully continues with text-only classification.
 * **Deterministic Pillow Downscaling**:
   To protect token budgets and reduce inference latency, large raster graphics are automatically downscaled before being attached:
   - Any raster image exceeding `image_trigger_bytes` (default: `614400` / 600 KB) is deterministically downscaled using high-quality Lanczos resampling and re-compressed towards `image_target_bytes` (default: `307200` / 300 KB).
   - Scalable Vector Graphics (`image/svg+xml`) and PDF documents (`application/pdf`) bypass lossy compression to preserve full vector fidelity and textual clarity.
 * **Static Context Overrides & Safety Ceilings**:
   - You can explicitly attach visual diagrams or design specifications using `extra_context_files` (e.g. `extra_context_files: 'docs/architecture.png,specs/api-spec.pdf'`).
-  - The `max_multimodal_images` input (default: `20`) provides a safety ceiling capping the total number of multimodal images attached across codebase context and visual diffs.
+  - The `max_multimodal_images` input (default: `20`) and `max_triage_images` input (default: `5`) provide safety ceilings capping the total number of multimodal attachments.
 
 ### Reviewer Personas
 

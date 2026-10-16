@@ -168,6 +168,25 @@ def get_max_multimodal_images(config: dict | None = None) -> int:
     return default_val
 
 
+def get_max_triage_images(config: dict | None = None) -> int:
+    """Return maximum number of remote screenshots to attach during issue triage (default 5)."""
+    default_val = 5
+    env_val = os.environ.get("GEMINI_MAX_TRIAGE_IMAGES")
+    if env_val:
+        try:
+            return int(env_val)
+        except ValueError:
+            pass
+    if config:
+        cfg_val = config.get("max_triage_images")
+        if cfg_val is not None:
+            try:
+                return int(cfg_val)
+            except ValueError:
+                pass
+    return default_val
+
+
 def get_image_trigger_bytes(config: dict | None = None) -> int:
     """Return byte size threshold above which images are downscaled (default 600 KB)."""
     default_val = 614400

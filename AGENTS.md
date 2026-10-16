@@ -51,6 +51,8 @@ When designing or modifying review prompts and context assembly:
 - **Single-Turn Cross-Attention**: Always pass baseline (`base_sha`) and head (`head_sha`) images together in a single Gemini request as sequential `types.Part` elements so the model evaluates visual changes via direct cross-attention without lossy intermediate text summaries.
 - **Image Downscaling Thresholds**: All raster images exceeding `image_trigger_bytes` (default: 600 KB) MUST be downscaled via `optimize_image_bytes()` using Lanczos resampling towards `image_target_bytes` (default: 300 KB). SVGs and PDFs MUST pass through uncompressed.
 - **Path Traversal on Dynamic Markdown References**: When extracting image links from markdown (`extract_markdown_image_references()`), always enforce `os.path.commonpath` containment against the workspace root before reading image blobs.
+- **Remote Triage Screenshot Security**: When fetching remote screenshots for issue triage (`fetch_remote_image()`), strictly require `https://`, reject loopback/private/metadata hosts, cap downloads at `max_triage_images` (default: 5), and only attach `Authorization: Bearer <GITHUB_TOKEN>` to trusted GitHub domains (`github.com`, `githubusercontent.com`).
+
 
 ## Local Execution & Testing Guidance
 

@@ -319,3 +319,170 @@ def test_build_visual_diff_parts_variant_images(tmp_path, monkeypatch):
     assert "Removed image: deleted.png" in summary_rem
     assert len(parts_rem) == 2
     assert parts_rem[1].inline_data.data == base_bytes
+
+
+def test_extract_remote_image_urls():
+    from gemini_review import extract_remote_image_urls
+
+    issue_body = """
+    ### Bug Description
+    The modal dialog overflows on mobile screens:
+    ![Mobile overflow](https://github.com/user-attachments/assets/550e8400-e29b-41d4-a716-446655440000)
+
+    Console stack trace screenshot:
+    <img width="800" alt="Console Error" src="https://user-images.githubusercontent.com/12345/98765432-abcdef.png" />
+
+    Signed private image:
+    ![Private](https://private-user-images.githubusercontent.com/123/456.jpg?jwt=eyJhbGci&amp;foo=bar "Title")
+
+    Ignored links:
+    - Local image: ![Local](docs/local.png)
+    - Insecure HTTP: ![Insecure](http://example.com/insecure.png)
+    - SSRF localhost: ![Localhost](https://localhost/secret.png)
+    - SSRF metadata: ![Metadata](https://169.254.169.254/latest/meta-data/)
+    - SSRF RFC1918 172.16: ![Private172](https://172.16.0.1/internal.png)
+    - SSRF RFC1918 172.31: ![Private172End](https://172.31.255.255/internal.png)
+    - SSRF IPv6 loopback: ![IPv6Loopback](https://[::1]/secret.png)
+    - SSRF internal domain: ![Internal](https://corp.internal/secret.png)
+    - Non-image video asset: ![Video](https://example.com/demo.mp4)
+    - Duplicate link: ![Dup](https://github.com/user-attachments/assets/550e8400-e29b-41d4-a716-446655440000)
+    """
+
+    comments = [
+        {"body": "Here is another screenshot from Safari:\n![Safari](https://example.com/safari-bug.webp)"},
+        {"body": 'And duplicate:\n<img src="https://example.com/safari-bug.webp">'},
+    ]
+
+    urls = extract_remote_image_urls(issue_body, comments)
+    assert urls == [
+        "https://github.com/user-attachments/assets/550e8400-e29b-41d4-a716-446655440000",
+        "https://user-images.githubusercontent.com/12345/98765432-abcdef.png",
+        "https://private-user-images.githubusercontent.com/123/456.jpg?jwt=eyJhbGci&foo=bar",
+        "https://example.com/safari-bug.webp",
+    ]
+
+
+def test_fetch_remote_image_auth_and_headers(mocker):
+    from gemini_review import fetch_remote_image
+
+    mock_get = mocker.patch("gemini_review.multimodal.requests.get")
+
+    img = Image.new("RGB", (50, 50), color="green")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    png_bytes = buf.getvalue()
+
+    mock_resp = mocker.Mock()
+    mock_resp.status_code = 200
+    mock_resp.headers = {"Content-Type": "image/png", "Content-Length": str(len(png_bytes))}
+    mock_resp.iter_content.return_value = [png_bytes]
+    mock_get.return_value = mock_resp
+
+    # 1. GitHub user-attachment URL should receive Authorization: Bearer <token>
+    gh_url = "https://github.com/user-attachments/assets/550e8400-e29b-41d4-a716-446655440000"
+    res = fetch_remote_image(gh_url, github_token="ghp_secret123", timeout=30)
+    assert res is not None
+    data, mime = res
+    assert data == png_bytes
+    assert mime == "image/png"
+
+    called_headers = mock_get.call_args[1]["headers"]
+    assert called_headers.get("Authorization") == "Bearer ghp_secret123"
+    assert mock_get.call_args[1]["stream"] is True
+    assert mock_get.call_args[1]["timeout"] == 30
+
+    # 2. Third-party URL must NOT receive GitHub Authorization header
+    mock_get.reset_mock()
+    ext_url = "https://example.com/screenshot.png"
+    res_ext = fetch_remote_image(ext_url, github_token="ghp_secret123", timeout=30)
+    assert res_ext is not None
+    ext_headers = mock_get.call_args[1]["headers"]
+    assert "Authorization" not in ext_headers
+
+
+def test_fetch_remote_image_size_limit_and_errors(mocker):
+    from gemini_review import fetch_remote_image
+
+    mock_get = mocker.patch("gemini_review.multimodal.requests.get")
+
+    # 1. Exceeds max_bytes via Content-Length
+    mock_resp_large = mocker.Mock()
+    mock_resp_large.status_code = 200
+    mock_resp_large.headers = {"Content-Type": "image/png", "Content-Length": "50000000"}
+    mock_get.return_value = mock_resp_large
+    assert fetch_remote_image("https://github.com/user-attachments/assets/123", max_bytes=1024) is None
+
+    # 2. Exceeds max_bytes during streaming chunks
+    mock_resp_stream = mocker.Mock()
+    mock_resp_stream.status_code = 200
+    mock_resp_stream.headers = {"Content-Type": "image/png"}
+    mock_resp_stream.iter_content.return_value = [b"x" * 600, b"y" * 600]
+    mock_get.return_value = mock_resp_stream
+    assert fetch_remote_image("https://github.com/user-attachments/assets/123", max_bytes=1000) is None
+
+    # 3. Non-image Content-Type (e.g. HTML login page)
+    mock_resp_html = mocker.Mock()
+    mock_resp_html.status_code = 200
+    mock_resp_html.headers = {"Content-Type": "text/html; charset=utf-8"}
+    mock_resp_html.iter_content.return_value = [b"<html>Sign in</html>"]
+    mock_get.return_value = mock_resp_html
+    assert fetch_remote_image("https://github.com/user-attachments/assets/123") is None
+
+    # 4. Unrecognised binary data (e.g. ZIP archive at extensionless URL with application/octet-stream)
+    mock_resp_zip = mocker.Mock()
+    mock_resp_zip.status_code = 200
+    mock_resp_zip.headers = {"Content-Type": "application/octet-stream"}
+    mock_resp_zip.iter_content.return_value = [b"PK\x03\x04not_an_image_payload"]
+    mock_get.return_value = mock_resp_zip
+    assert fetch_remote_image("https://github.com/user-attachments/assets/123") is None
+
+    # 5. Network exception / timeout handled gracefully
+    mock_get.side_effect = Exception("Connection timed out")
+    assert fetch_remote_image("https://github.com/user-attachments/assets/123") is None
+
+
+def test_build_triage_multimodal_parts_downscaling_and_cap(mocker, monkeypatch):
+    from gemini_review import build_triage_multimodal_parts, get_max_triage_images
+
+    assert get_max_triage_images({}) == 5
+    monkeypatch.setenv("GEMINI_MAX_TRIAGE_IMAGES", "2")
+    assert get_max_triage_images({}) == 2
+
+    # Create a large synthetic image (> 600 KB) to verify Pillow downscaling
+    large_img = Image.new("RGB", (1000, 1000), color="purple")
+    buf = io.BytesIO()
+    large_img.save(buf, format="PNG", compress_level=0)
+    large_bytes = buf.getvalue()
+    assert len(large_bytes) > 614400
+
+    mock_get = mocker.patch("gemini_review.multimodal.requests.get")
+
+    def _side_effect(url, **kwargs):
+        if "fail" in url:
+            raise RuntimeError("Download failed")
+        resp = mocker.Mock()
+        resp.status_code = 200
+        resp.headers = {"Content-Type": "image/png"}
+        resp.iter_content.return_value = [large_bytes]
+        return resp
+
+    mock_get.side_effect = _side_effect
+
+    issue_body = """
+    ![Fail](https://github.com/user-attachments/assets/fail-1)
+    ![Img1](https://github.com/user-attachments/assets/valid-1)
+    ![Img2](https://github.com/user-attachments/assets/valid-2)
+    ![Img3](https://github.com/user-attachments/assets/valid-3)
+    """
+
+    parts = build_triage_multimodal_parts(
+        issue_body=issue_body,
+        github_token="ghp_test",
+    )
+
+    # Capped at 2 valid images (since GEMINI_MAX_TRIAGE_IMAGES=2, and fail-1 was skipped gracefully)
+    assert len(parts) == 2
+    for part in parts:
+        assert hasattr(part, "inline_data")
+        assert part.inline_data.mime_type == "image/png"
+        assert len(part.inline_data.data) < len(large_bytes)

@@ -17,8 +17,8 @@ The action runs as a native GitHub Composite Action (`action.yml`) that boots a 
 The code review action is organized into a modular Python package (`gemini_review/`) separating domain responsibilities, with `gemini_pr_review.py` serving as the top-level execution entrypoint and backward-compatible API facade:
 
 * **`gemini_review/schemas.py`**: Pydantic schemas defining structured outputs (`InlineComment`, `ReviewResult`, `DynamicContextSelection`).
-* **`gemini_review/config.py`**: Configuration loader for `gemini-review.toml`, timeout/model defaults, and multimodal budget controls (`max_multimodal_images`, `image_trigger_bytes`, `image_target_bytes`).
-* **`gemini_review/multimodal.py`**: Multimodal MIME type detection, image validation, deterministic Pillow downscaling (`optimize_image_bytes`), and document-order Markdown/HTML image reference extraction (`extract_markdown_image_references`).
+* **`gemini_review/config.py`**: Configuration loader for `gemini-review.toml`, timeout/model defaults, and multimodal budget controls (`max_multimodal_images`, `max_triage_images`, `image_trigger_bytes`, `image_target_bytes`).
+* **`gemini_review/multimodal.py`**: Multimodal MIME type detection, image validation, deterministic Pillow downscaling (`optimize_image_bytes`), local Markdown/HTML image reference extraction (`extract_markdown_image_references`), and remote issue screenshot extraction/authenticated fetching (`extract_remote_image_urls`, `fetch_remote_image`, `build_triage_multimodal_parts`).
 * **`gemini_review/diff.py`**: Unified diff patch parsing, line numbering annotations (`format_diff_patch_with_line_numbers`), suggestion indentation alignment, line-range auto-correction, and inline comment filtering (`filter_review_comments`).
 * **`gemini_review/repo.py`**: File discovery (`get_all_repo_files`), file tree formatting (`generate_file_tree`), core manifest pattern matching (`is_core_file`), import extraction, and candidate pool ranking & bounding (`rank_and_bound_candidates`).
 * **`gemini_review/context.py`**: Hybrid codebase context engine (Full vs Sparse mode), core documentation attachment, static extra context overrides, multimodal context binding, and Gemini dynamic context selection (`select_dynamic_context_files`).
@@ -41,10 +41,12 @@ The code review action is organized into a modular Python package (`gemini_revie
 The PR review workflow is designed to retrieve PR details, collect local codebase context, build a structured prompt, and atomically submit line-specific reviews back to GitHub.
 
 ### 1. File Discovery & Filtering
+
 * **PR Changes:** The script fetches the list of changed files and their diff patches from the GitHub API using `get_pr_files()`. Locally, it falls back to `git diff main...HEAD`.
 * **Binary Exclusion:** Non-text files, binaries, lock files, and encrypted files are filtered out using `is_text_file()`.
 
 ### 2. Hybrid Codebase Context Engine
+
 To provide Gemini with project-wide awareness, the script traverses the workspace to find all tracked files via `get_all_repo_files()`. It then sums the file sizes (excluding the changed PR files) to determine the context mode:
 
 * **Per-File Content Truncation (`cap_file_content`):** To prevent a single abnormally large file (e.g. bundled assets, minified scripts, or large test fixtures) from monopolising the context budget, individual text files attached to the prompt are capped at 128 KB with a truncation notice.
@@ -60,6 +62,7 @@ To provide Gemini with project-wide awareness, the script traverses the workspac
 
 
 ### 3. Gemini Context Caching Engine
+
 To drastically reduce API costs and latency for large codebase contexts, `gemini_pr_review.py` incorporates native **Gemini Context Caching**:
 
 * **Threshold Verification**: If the codebase context exceeds 100,000 characters (~32,768 tokens, Gemini's minimum caching requirement), context caching is automatically activated.
@@ -71,6 +74,7 @@ To drastically reduce API costs and latency for large codebase contexts, `gemini
 * **Resilient Fallback**: If cache creation, lookup, or generation with cached content fails for any reason, the script seamlessly falls back to direct context generation without interrupting the CI review pipeline.
 
 ### 4. PR Comment & Discussion Thread History Engine
+
 When enabled via `include_comment_history: 'true'` (default), `gemini_pr_review.py` fetches complete historical discussion context from the GitHub API:
 * **Inline & Conversation Retrieval (`get_pr_comments()`)**: Fetches inline review comments (`pulls/{pr_number}/comments`) and general PR issue comments (`issues/{pr_number}/comments`) using `while True` pagination loops (`per_page=100`) to guarantee all historical comments are captured.
 * **Comment Author Filtering (`exclude_comment_authors`)**: Selectively filters out automated comments from secondary bots (such as `claude[bot]`) before prompt generation using `filter_comment_authors()`, preventing competing review conclusions from skewing the evaluation.
@@ -79,6 +83,7 @@ When enabled via `include_comment_history: 'true'` (default), `gemini_pr_review.
 * **Automated Thread Resolution (`resolve_addressed_threads`)**: When enabled via action inputs, the action resolves GitHub review conversation threads using `fetch_review_threads()` and `resolve_addressed_threads()` for issues Gemini explicitly reports in `ReviewResult.resolved_items`, unblocking GitHub's *Require conversation resolution before merging* branch rule.
 
 ### 5. Multimodal Context & Visual PR Diffing Engine
+
 `gemini_pr_review.py` and `gemini_review/prompts.py` seamlessly integrate multimodal content (images and PDF documentation) into the Gemini evaluation workflow:
 
 * **Markdown Image Reference Extraction (`extract_markdown_image_references`)**:
@@ -94,6 +99,7 @@ When enabled via `include_comment_history: 'true'` (default), `gemini_pr_review.
   A configurable cap (`max_multimodal_images`, default: 20) bounds total multimodal attachments across context and visual diffs. The token estimation engine (`count_text_tokens`) incorporates a 258 tokens/part heuristic fallback for multimodal parts when offline or mocking API responses.
 
 ### 6. Structured Output Schemas
+
 Gemini is forced to return structured JSON adhering to the Pydantic schemas:
 * `InlineComment`:
   - `path`: File path.
@@ -109,6 +115,7 @@ Gemini is forced to return structured JSON adhering to the Pydantic schemas:
   - `comments`: List of `InlineComment` instances.
 
 ### 7. Resilient Review Submissions
+
 Submitting reviews with line-specific comments via GitHub's API can be fragile (e.g. if the model specifies a line index that falls outside the diff range).
 * **Atomic Run:** The script first attempts to post the summary, resolved items list (`### ✅ Resolved Items from Prior Reviews`), and all inline comments in a single transaction via `POST /repos/{owner}/{repo}/pulls/{number}/reviews`.
 * **Resilient Fallback:** If the atomic post fails (e.g. returns HTTP 422), the script catches the failure, posts the review summary comment, and attempts to publish individual comments one-by-one. This ensures valid comments are still delivered while preventing a CI checkout block.
@@ -126,19 +133,28 @@ The review prompt assembly in `gemini_review/prompts.py` provides two distinct c
 
 ## 🏷️ Issue Triage Script (`gemini_issue_triage.py`)
 
-The issue triage script automatically categorises and labels new issues to streamline management.
+The issue triage script automatically categorises and labels new or reopened issues using both text context and attached screenshots.
 
-### 1. Label Triage Retrieval
+### 1. Label & Discussion Comment Retrieval
+
 * The script calls `get_available_labels()` to fetch all labels currently configured on the repository, handling pagination dynamically.
+* When comment history is enabled (`include_comment_history: 'true'`), `get_issue_comments()` retrieves existing issue discussion comments so follow-up context and screenshots are included.
 
-### 2. Prompting & Classification
-* The system instruction (loaded from `gemini-triage.toml`) instructs the model to act as a triage assistant.
-* The issue's title and body, along with the list of available labels, are passed to Gemini.
+### 2. Remote Screenshot Extraction & Multimodal Assembly
+
+* `extract_remote_image_urls()` parses the issue body and discussion comments in document order for remote HTTPS image links (`![alt](https://...)` and `<img src="https://...">`), supporting extensionless GitHub user-uploaded asset URLs (`github.com/user-attachments/assets/...` and `githubusercontent.com/...`).
+* `fetch_remote_image()` streams remote screenshots with a 20 MB size ceiling, attaching `Authorization: Bearer <GITHUB_TOKEN>` strictly for GitHub-hosted domains (`github.com` and `githubusercontent.com`) to support private/internal repositories without leaking credentials to third-party servers.
+* `build_triage_multimodal_parts()` caps screenshots at `max_triage_images` (default: 5), downscales large raster images via `optimize_image_bytes()`, and attaches them as binary `types.Part.from_bytes` payloads alongside the triage prompt. If any remote download fails or times out, triage gracefully degrades to text-only classification.
+
+### 3. Prompting & Classification
+
+* The system instruction (loaded from `gemini-triage.toml`) instructs the model to act as a triage assistant and inspect both text and any attached screenshots.
 * Using structured output, Gemini returns a `TriageResult` containing:
   - `selected_labels`: The subset of repo labels that match the issue.
   - `reasoning`: The explanation for applying those labels.
 
-### 3. API Label Application
+### 4. API Label Application
+
 * The script calls `apply_labels()` to add the selected labels to the issue on GitHub.
 
 ---

@@ -109,6 +109,10 @@ inputs:
     description: 'Maximum number of multimodal images (markdown references, static attachments, visual diffs) attached to context.'
     required: false
     default: '20'
+  max_triage_images:
+    description: 'Maximum number of remote screenshots attached during issue triage (defaults to 5).'
+    required: false
+    default: '5'
   image_trigger_bytes:
     description: 'Byte size threshold above which raster images are downscaled (defaults to 614400 / 600 KB).'
     required: false
@@ -154,6 +158,7 @@ runs:
         GEMINI_CONTEXT_DIFF_DIRECTORIES_ONLY: ${{ inputs.context_diff_directories_only }}
         GEMINI_CONTEXT_EXCLUDE_PATTERNS: ${{ inputs.context_exclude_patterns }}
         GEMINI_MAX_MULTIMODAL_IMAGES: ${{ inputs.max_multimodal_images }}
+        GEMINI_MAX_TRIAGE_IMAGES: ${{ inputs.max_triage_images }}
         GEMINI_IMAGE_TRIGGER_BYTES: ${{ inputs.image_trigger_bytes }}
         GEMINI_IMAGE_TARGET_BYTES: ${{ inputs.image_target_bytes }}
         GITHUB_REPOSITORY: ${{ github.repository }}
