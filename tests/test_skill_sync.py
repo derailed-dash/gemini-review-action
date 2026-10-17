@@ -77,4 +77,3 @@ def test_install_skill_documents_all_personas() -> None:
         f"The following personas are missing from {SKILL_MD_PATH.relative_to(REPO_ROOT)}: "
         f"{missing_personas}. Please update SKILL.md (and sync to derailed-dash/dazbo-agent-skills)."
     )
-
