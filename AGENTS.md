@@ -83,10 +83,18 @@ To execute `gemini_pr_review.py` or `gemini_issue_triage.py` locally for testing
 
 ALWAYS count exactly how many times you executed a review, to allow the user to cross reference invocations against costs and token usage.
 
+## Installation Skill Synchronisation (`install-gemini-code-review-action`)
+
+- **Canonical Source & Local Workspace Copy**:
+  - The `install-gemini-code-review-action` skill is canonically hosted in `derailed-dash/dazbo-agent-skills` (`../dazbo-agent-skills/skills/install-gemini-code-review-action/SKILL.md`), and mirrored in this repository at [.agents/skills/install-gemini-code-review-action/SKILL.md](.agents/skills/install-gemini-code-review-action/SKILL.md) so users can also install it directly via `npx skills add derailed-dash/gemini-review-action --skill install-gemini-code-review-action`.
+- **Keeping the Skill in Sync**:
+  - **When modifying action inputs, personas, or workflow templates here**: Update [.agents/skills/install-gemini-code-review-action/SKILL.md](.agents/skills/install-gemini-code-review-action/SKILL.md) in the same PR (enforced by `tests/test_skill_sync.py`), and copy the updated `SKILL.md` across to the canonical `../dazbo-agent-skills/skills/install-gemini-code-review-action/SKILL.md` repository (and `~/.gemini/config/skills/install-gemini-code-review-action/SKILL.md` if present).
+  - **When pulling upstream updates from the canonical skills repo**: Copy from `../dazbo-agent-skills/skills/install-gemini-code-review-action/SKILL.md` (or run `npx skills update -g -y && ./scripts/sync_skills.sh`) into [.agents/skills/install-gemini-code-review-action/SKILL.md](.agents/skills/install-gemini-code-review-action/SKILL.md).
+
 ## Pushing to GitHub
 
 Before pushing a change of anything non-trivial:
-- Check if any documentation should be updated based on this PR and update accordingly. This includes (but is not limited to) README.md, AGENTS.md, and ARCHITECTURE.md.
+- Check if any documentation should be updated based on this PR and update accordingly. This includes (but is not limited to) README.md, AGENTS.md, ARCHITECTURE.md, and [.agents/skills/install-gemini-code-review-action/SKILL.md](.agents/skills/install-gemini-code-review-action/SKILL.md) (plus syncing back to `../dazbo-agent-skills`).
 - Update the version number in `pyproject.toml` and run `uv lock` (because `action.yml` enforces `uv run --locked`, `uv.lock` MUST stay synchronised with `pyproject.toml`). Verify your proposed new version number before proceeding.
 
 ## Release Notes & Tagging Standards
@@ -94,4 +102,5 @@ Before pushing a change of anything non-trivial:
 When preparing GitHub releases:
 - **Rolled-In Highlights with Collapsible Drop-Downs**: In release notes, roll in summaries of previous recent releases under `## 📜 Rolled-In Highlights from Previous Releases` using collapsible HTML `<details><summary><strong>vX.Y.Z: Title</strong></summary>...</details>` blocks (following the v1.6.1 style).
 - **Floating Tag Maintenance**: Always create the specific versioned tag (e.g. `v1.6.3`) AND force-update the major floating tag (e.g. `git tag -fa v1 -m "Update v1 tag to v1.6.3" && git push origin v1 --force`) so standard action consumers tracking `@v1` automatically receive updates.
+
 

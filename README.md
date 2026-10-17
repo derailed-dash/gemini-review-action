@@ -213,21 +213,30 @@ When reviewing pull requests that have undergone multiple iterations or team dis
 
 ### Setup Using Install-Gemini-Code-Review-Action Skill (Recommended)
 
-If you are using an agentic coding environment like Google Antigravity, you can install and configure this action and its triage workflow automatically using Dazbo's skill from [derailed-dash/dazbo-agent-skills](https://github.com/derailed-dash/dazbo-agent-skills).
+If you are using an agentic coding environment like Google Antigravity, Gemini CLI, or Claude Code, you can install and configure this action and its triage workflow automatically using the `install-gemini-code-review-action` skill.
+
+The skill is maintained in [derailed-dash/dazbo-agent-skills](https://github.com/derailed-dash/dazbo-agent-skills) and is also bundled directly in this repository at [.agents/skills/install-gemini-code-review-action/SKILL.md](.agents/skills/install-gemini-code-review-action/SKILL.md).
 
 > [!IMPORTANT]
 > **Prerequisite:** Regardless of whether you use the automatic skill setup or the manual setup, you must configure authentication (either a Gemini API Key or Workload Identity Federation) as described in the **Authentication** section above.
 
 The `install-gemini-code-review-action` skill automatically handles:
 - Detecting and removing conflicting legacy workflows (e.g., `run-gemini-cli` or `gemini-code-assist`).
-- Asking for your preferences (e.g., installing PR Review, Issue Triage, or both, plus your preferred language and model).
-- Writing the workflow YAML files and default TOML prompt configurations.
-- Commit and push of the new workflow files.
+- Asking for your preferences (e.g., installing PR Review, Issue Triage, or both, plus your preferred reviewer persona, language, and model).
+- Writing the workflow YAML files (with job-level concurrency and fork PR guards) and optional `.github/review-instruction-additions.md` guardrails.
+- Offering to configure the `GEMINI_API_KEY` secret via `gh secret set` and committing/pushing the workflow files.
 
-To install the skill locally, run:
+To install the skill globally from this repository (or from `dazbo-agent-skills`), run:
+
 ```bash
-npx skills add https://github.com/derailed-dash/dazbo-agent-skills -y -g --skill install-gemini-code-review-action
+# Install directly from this repository:
+npx skills add derailed-dash/gemini-review-action -y -g --skill install-gemini-code-review-action
+
+# Or from the canonical dazbo-agent-skills repository:
+npx skills add derailed-dash/dazbo-agent-skills -y -g --skill install-gemini-code-review-action
 ```
+
+*(Note: If you have cloned `gemini-review-action` locally, your IDE agent will automatically discover `.agents/skills/install-gemini-code-review-action/SKILL.md` with zero extra installation.)*
 
 Once installed, simply ask your agent:
 > "Install the Gemini code review action"
