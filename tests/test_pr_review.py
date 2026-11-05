@@ -1905,3 +1905,91 @@ def test_resolve_tool_calls_loop_handles_unknown_tool_and_exception(mocker):
     assert final_resp.usage_metadata.candidates_token_count == 50
     assert final_resp.usage_metadata.thoughts_token_count == 15
     assert final_resp.usage_metadata.total_token_count == 315
+
+
+def test_context_caching_multimodal_invalid_argument_retries_text_only(mocker):
+    """When caches.create fails with 400 INVALID_ARGUMENT while codebase_multimodal_parts is non-empty,
+    main() retries caches.create with text-only codebase_context and succeeds in caching.
+    """
+    from gemini_pr_review import main
+
+    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_PERSONA": "straight"}, clear_env=True)
+    mock_client.caches.list.return_value = []
+
+    def _fake_build_ctx(files, config, client=None, model=None, context_telemetry=None, multimodal_parts=None):
+        if multimodal_parts is not None:
+            multimodal_parts.append(types.Part.from_bytes(data=b"corrupt", mime_type="image/png"))
+        return "a" * 120000
+
+    mocker.patch("gemini_review.build_codebase_context", side_effect=_fake_build_ctx)
+
+    created_cache = mocker.Mock()
+    created_cache.name = "cachedContents/recovered-text-cache"
+    mock_client.caches.create.side_effect = [
+        RuntimeError("400 INVALID_ARGUMENT. Request contains an invalid argument."),
+        created_cache,
+    ]
+
+    main()
+
+    assert mock_client.caches.create.call_count == 2
+    second_cache_cfg = mock_client.caches.create.call_args_list[1].kwargs["config"]
+    assert isinstance(second_cache_cfg.contents, str)
+    assert (
+        mock_client.models.generate_content.call_args.kwargs["config"].cached_content
+        == "cachedContents/recovered-text-cache"
+    )
+
+
+def test_generate_content_stream_fallback_on_connection_reset(mocker):
+    """When generate_content fails with ConnectionResetError ([Errno 104]), main() retries via
+    generate_content_stream and aggregates the streamed response chunks.
+    """
+    from gemini_pr_review import main
+
+    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_PERSONA": "straight"}, clear_env=True)
+    mocker.patch("gemini_review.build_codebase_context", return_value="short context")
+
+    mock_client.models.generate_content.side_effect = ConnectionResetError(104, "Connection reset by peer")
+
+    chunk1 = mocker.Mock(
+        text='{"summary": "Streamed ',
+        candidates=[],
+        function_calls=None,
+        prompt_feedback=None,
+        usage_metadata=None,
+    )
+    chunk2 = mocker.Mock(
+        text='review success", "general_feedback": [], "comments": []}',
+        candidates=[],
+        function_calls=None,
+        prompt_feedback=None,
+        usage_metadata=mocker.Mock(
+            prompt_token_count=1000,
+            candidates_token_count=50,
+            thoughts_token_count=10,
+            total_token_count=1060,
+            cached_content_token_count=0,
+        ),
+    )
+    mock_client.models.generate_content_stream.return_value = iter([chunk1, chunk2])
+
+    main()
+
+    assert mock_client.models.generate_content.call_count == 1
+    assert mock_client.models.generate_content_stream.call_count == 1
+
+
+def test_client_initialised_with_http_options_timeout_in_ms(mocker):
+    """Verify genai.Client is initialised with HttpOptions(timeout=...) in milliseconds."""
+    from gemini_pr_review import main
+
+    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_TIMEOUT": "420"}, clear_env=True)
+    mocker.patch("gemini_review.build_codebase_context", return_value="short context")
+    mock_client_cls = mocker.patch("google.genai.Client", return_value=mock_client)
+
+    main()
+
+    call_kwargs = mock_client_cls.call_args.kwargs
+    assert "http_options" in call_kwargs
+    assert call_kwargs["http_options"].timeout == 420000

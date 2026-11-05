@@ -27,6 +27,7 @@ from gemini_review.config import (
 )
 from gemini_review.multimodal import (
     extract_markdown_image_references,
+    is_gemini_supported_mime,
     is_supported_multimodal_file,
     optimize_image_bytes,
 )
@@ -206,6 +207,13 @@ def build_codebase_context(
                 opt_bytes, mime = optimize_image_bytes(
                     raw_bytes, img_ref, trigger_bytes=trigger_bytes, target_bytes=target_bytes
                 )
+                if not is_gemini_supported_mime(mime):
+                    print(
+                        f"Warning: Skipping image '{img_ref}' referenced in '{md_path}' "
+                        f"(unsupported Gemini MIME type '{mime}').",
+                        file=sys.stderr,
+                    )
+                    continue
                 part = types.Part.from_bytes(data=opt_bytes, mime_type=mime)
                 multimodal_parts.append(f"Visual Context (referenced in '{md_path}'): {img_ref}")
                 multimodal_parts.append(part)
@@ -220,6 +228,51 @@ def build_codebase_context(
 
     prompt_parts = []
     pr_filenames = {f["filename"] if isinstance(f, dict) else str(f) for f in files}
+
+    def _attach_extra_files() -> None:
+        prompt_parts.append("--- Relevant Codebase Context (Static Extra Files) ---")
+        extra_capped: list[str] = []
+        for ef in extra_files:
+            if not os.path.exists(ef):
+                continue
+            if is_supported_multimodal_file(ef):
+                prompt_parts.append(
+                    f"--- Multimodal File: {ef} (binary content attached directly to Gemini request) ---"
+                )
+                if multimodal_parts is not None and len(seen_images) < max_images and ef not in seen_images:
+                    try:
+                        with open(ef, "rb") as f_bin:
+                            raw_bytes = f_bin.read()
+                        if raw_bytes:
+                            opt_bytes, mime = optimize_image_bytes(
+                                raw_bytes, ef, trigger_bytes=trigger_bytes, target_bytes=target_bytes
+                            )
+                            if not is_gemini_supported_mime(mime):
+                                print(
+                                    f"Warning: Skipping extra multimodal file '{ef}' "
+                                    f"(unsupported Gemini MIME type '{mime}').",
+                                    file=sys.stderr,
+                                )
+                                continue
+                            part = types.Part.from_bytes(data=opt_bytes, mime_type=mime)
+                            multimodal_parts.append(f"Extra Context File: {ef}")
+                            multimodal_parts.append(part)
+                            seen_images.add(ef)
+                    except Exception as e:
+                        print(f"Warning: Failed to attach extra multimodal file '{ef}': {e}", file=sys.stderr)
+                continue
+
+            content = fn_get_file_content(ef)
+            if content:
+                content, was_capped = cap_file_content(content, ef, file_byte_limit)
+                if was_capped:
+                    extra_capped.append(ef)
+                prompt_parts.append(f"--- File: {ef} ---")
+                prompt_parts.append(content)
+                prompt_parts.append("-----------------\n")
+                if ef.lower().endswith((".md", ".markdown")):
+                    _attach_markdown_images(content, ef)
+        report_capped(extra_capped, file_byte_limit)
 
     # Also scan any markdown files in the PR diff for image references
     for f in files:
@@ -335,42 +388,7 @@ def build_codebase_context(
 
         # In Full Context Mode, also attach any explicit extra_context_files
         if extra_files:
-            prompt_parts.append("--- Relevant Codebase Context (Static Extra Files) ---")
-            extra_capped: list[str] = []
-            for ef in extra_files:
-                if not os.path.exists(ef):
-                    continue
-                if is_supported_multimodal_file(ef):
-                    prompt_parts.append(
-                        f"--- Multimodal File: {ef} (binary content attached directly to Gemini request) ---"
-                    )
-                    if multimodal_parts is not None and len(seen_images) < max_images and ef not in seen_images:
-                        try:
-                            with open(ef, "rb") as f_bin:
-                                raw_bytes = f_bin.read()
-                            if raw_bytes:
-                                opt_bytes, mime = optimize_image_bytes(
-                                    raw_bytes, ef, trigger_bytes=trigger_bytes, target_bytes=target_bytes
-                                )
-                                part = types.Part.from_bytes(data=opt_bytes, mime_type=mime)
-                                multimodal_parts.append(f"Extra Context File: {ef}")
-                                multimodal_parts.append(part)
-                                seen_images.add(ef)
-                        except Exception as e:
-                            print(f"Warning: Failed to attach extra multimodal file '{ef}': {e}", file=sys.stderr)
-                    continue
-
-                content = fn_get_file_content(ef)
-                if content:
-                    content, was_capped = cap_file_content(content, ef, file_byte_limit)
-                    if was_capped:
-                        extra_capped.append(ef)
-                    prompt_parts.append(f"--- File: {ef} ---")
-                    prompt_parts.append(content)
-                    prompt_parts.append("-----------------\n")
-                    if ef.lower().endswith((".md", ".markdown")):
-                        _attach_markdown_images(content, ef)
-            report_capped(extra_capped, file_byte_limit)
+            _attach_extra_files()
     else:
         print(
             "Codebase context: running in Sparse Context Mode (attaching file tree, core manifests,"
@@ -456,42 +474,7 @@ def build_codebase_context(
                 f"Codebase context: attaching {len(extra_files)} static extra context file(s)...",
                 file=sys.stderr,
             )
-            prompt_parts.append("--- Relevant Codebase Context (Static Extra Files) ---")
-            extra_capped: list[str] = []
-            for ef in extra_files:
-                if not os.path.exists(ef):
-                    continue
-                if is_supported_multimodal_file(ef):
-                    prompt_parts.append(
-                        f"--- Multimodal File: {ef} (binary content attached directly to Gemini request) ---"
-                    )
-                    if multimodal_parts is not None and len(seen_images) < max_images and ef not in seen_images:
-                        try:
-                            with open(ef, "rb") as f_bin:
-                                raw_bytes = f_bin.read()
-                            if raw_bytes:
-                                opt_bytes, mime = optimize_image_bytes(
-                                    raw_bytes, ef, trigger_bytes=trigger_bytes, target_bytes=target_bytes
-                                )
-                                part = types.Part.from_bytes(data=opt_bytes, mime_type=mime)
-                                multimodal_parts.append(f"Extra Context File: {ef}")
-                                multimodal_parts.append(part)
-                                seen_images.add(ef)
-                        except Exception as e:
-                            print(f"Warning: Failed to attach extra multimodal file '{ef}': {e}", file=sys.stderr)
-                    continue
-
-                content = fn_get_file_content(ef)
-                if content:
-                    content, was_capped = cap_file_content(content, ef, file_byte_limit)
-                    if was_capped:
-                        extra_capped.append(ef)
-                    prompt_parts.append(f"--- File: {ef} ---")
-                    prompt_parts.append(content)
-                    prompt_parts.append("-----------------\n")
-                    if ef.lower().endswith((".md", ".markdown")):
-                        _attach_markdown_images(content, ef)
-            report_capped(extra_capped, file_byte_limit)
+            _attach_extra_files()
         else:
             # Dynamic context selection via model
             dynamic_candidates = [f for f in other_files if f not in core_files_included]

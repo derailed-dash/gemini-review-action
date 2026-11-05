@@ -155,7 +155,7 @@ The action supports four distinct reviewer personas configured via the `persona`
 | `gemini_model` | Gemini model to use. | `'gemini-3.8-flash'` |
 | `persona` | Reviewer persona overlay (`straight`, `dazbo`, `palpatine`, `rick`). | `'straight'` |
 | `language` | Natural language for review output (e.g. `English (UK)`, `French`). | `'English (UK)'` |
-| `timeout` | API request timeout in seconds. | `'60'` |
+| `timeout` | API request timeout in seconds (LLM review client enforces a 300s minimum HTTP timeout floor and falls back to streaming on connection resets). | `'60'` |
 | `include_comment_history` | Fetch and track prior PR review threads and discussion comments. | `'true'` |
 | `skip_inline_suggestions` | Skip re-reviews on commits created by accepting inline GitHub suggestions. | `'true'` |
 | `resolve_addressed_threads` | Auto-resolve review threads marked addressed (requires PAT/App token). | `'false'` |

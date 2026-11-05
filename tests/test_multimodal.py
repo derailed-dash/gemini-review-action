@@ -159,17 +159,71 @@ def test_optimize_image_bytes_large():
         assert opt_img.size[1] < 2000
 
 
-def test_optimize_image_bytes_passthrough_pdf_and_svg():
+def test_optimize_image_bytes_passthrough_pdf_and_rasterize_svg():
+    from gemini_review import is_gemini_supported_mime, rasterize_svg_bytes
+
     pdf_bytes = b"%PDF-1.4 large fake pdf bytes " * 30000
     assert len(pdf_bytes) > 614400
     out, mime = optimize_image_bytes(pdf_bytes, "doc.pdf")
     assert out == pdf_bytes
     assert mime == "application/pdf"
 
-    svg_bytes = b"<svg>large fake svg</svg>" * 30000
-    out_svg, mime_svg = optimize_image_bytes(svg_bytes, "vector.svg")
-    assert out_svg == svg_bytes
-    assert mime_svg == "image/svg+xml"
+    valid_svg = (
+        b'<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80">'
+        b'<rect width="120" height="80" fill="#2563eb"/>'
+        b"</svg>"
+    )
+    out_svg, mime_svg = optimize_image_bytes(valid_svg, "vector.svg")
+    assert mime_svg == "image/png"
+    assert is_gemini_supported_mime(mime_svg) is True
+    assert is_gemini_supported_mime("image/svg+xml") is False
+    assert out_svg.startswith(b"\x89PNG\r\n\x1a\n")
+    with Image.open(io.BytesIO(out_svg)) as png_img:
+        assert png_img.size == (120, 80)
+
+    assert rasterize_svg_bytes(b"") is None
+    assert rasterize_svg_bytes(b"<html>not an svg</html>") is None
+
+
+def test_build_codebase_context_rasterizes_svg_and_skips_corrupt_svg(tmp_path, monkeypatch):
+    from gemini_review import build_codebase_context
+
+    monkeypatch.chdir(tmp_path)
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    valid_svg = docs_dir / "flow.svg"
+    valid_svg.write_bytes(
+        b'<svg xmlns="http://www.w3.org/2000/svg" width="100" height="60">'
+        b'<rect width="100" height="60" fill="green"/></svg>'
+    )
+    corrupt_svg = docs_dir / "corrupt.svg"
+    corrupt_svg.write_bytes(b"not valid xml or svg at all")
+
+    md_text = "# Flow\n![Flow](docs/flow.svg)\n![Corrupt](docs/corrupt.svg)\n"
+    arch_doc = tmp_path / "ARCHITECTURE.md"
+    arch_doc.write_text(md_text, encoding="utf-8")
+
+    monkeypatch.setattr(
+        "gemini_review.prompts.get_all_repo_files",
+        lambda: ["ARCHITECTURE.md", "docs/flow.svg", "docs/corrupt.svg"],
+    )
+    monkeypatch.setattr(
+        "gemini_review.prompts.get_file_content",
+        lambda f: md_text if f == "ARCHITECTURE.md" else "",
+    )
+
+    multimodal_parts = []
+    build_codebase_context(
+        files=[{"filename": "src/main.py", "status": "modified"}],
+        config={"max_context_bytes": 10000},
+        multimodal_parts=multimodal_parts,
+    )
+
+    # Only the valid SVG should be attached (rasterised to image/png); corrupt.svg must be skipped
+    assert len(multimodal_parts) == 2
+    assert "docs/flow.svg" in multimodal_parts[0]
+    assert multimodal_parts[1].inline_data.mime_type == "image/png"
+    assert multimodal_parts[1].inline_data.data.startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_count_text_tokens_multimodal():

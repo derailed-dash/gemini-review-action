@@ -26,6 +26,7 @@ from gemini_review.diff import (
 from gemini_review.multimodal import (
     DEFAULT_MAX_REMOTE_IMAGE_BYTES,
     DEFAULT_MAX_TRIAGE_IMAGES,
+    GEMINI_SUPPORTED_PART_MIMES,
     SUPPORTED_IMAGE_EXTENSIONS,
     SUPPORTED_MULTIMODAL_EXTENSIONS,
     build_triage_multimodal_parts,
@@ -33,9 +34,11 @@ from gemini_review.multimodal import (
     extract_remote_image_urls,
     fetch_remote_image,
     get_mime_type,
+    is_gemini_supported_mime,
     is_supported_image,
     is_supported_multimodal_file,
     optimize_image_bytes,
+    rasterize_svg_bytes,
 )
 
 # Re-export repository and filesystem utilities
@@ -59,15 +62,19 @@ __all__ = [
     "load_workspace_rules",
     "count_text_tokens",
     "extract_response_text_or_raise",
+    "generate_content_with_stream_fallback",
     "resolve_tool_calls_loop",
     # Multimodal re-exports
     "DEFAULT_MAX_REMOTE_IMAGE_BYTES",
     "DEFAULT_MAX_TRIAGE_IMAGES",
+    "GEMINI_SUPPORTED_PART_MIMES",
     "SUPPORTED_IMAGE_EXTENSIONS",
     "SUPPORTED_MULTIMODAL_EXTENSIONS",
+    "is_gemini_supported_mime",
     "is_supported_image",
     "is_supported_multimodal_file",
     "get_mime_type",
+    "rasterize_svg_bytes",
     "optimize_image_bytes",
     "extract_markdown_image_references",
     "extract_remote_image_urls",
@@ -285,12 +292,13 @@ def _extract_function_call_parts(response: Any) -> tuple[Any, list[Any]]:
         if candidates and len(candidates) > 0:
             cand_content = getattr(candidates[0], "content", None)
             if cand_content is not None:
-                model_content = cand_content
                 parts = getattr(cand_content, "parts", None) or []
                 for p in parts:
                     fc = getattr(p, "function_call", None)
                     if fc is not None and getattr(fc, "name", None):
                         fc_list.append(fc)
+                if fc_list:
+                    model_content = cand_content
     except Exception:
         pass
 
@@ -322,6 +330,137 @@ def _accumulate_usage(accumulated: dict[str, int], response: Any) -> None:
         raw = getattr(usage, key, 0)
         val = int(raw) if isinstance(raw, (int, float)) and not isinstance(raw, bool) else 0
         accumulated[key] = accumulated.get(key, 0) + val
+
+
+def _is_connection_or_timeout_error(err: Exception) -> bool:
+    """Return True if the exception represents a dropped connection, gateway reset, or read timeout."""
+    if isinstance(err, (ConnectionError, TimeoutError)):
+        return True
+    err_str = f"{type(err).__name__} {err}".lower()
+    transient_markers = (
+        "readerror",
+        "timeout",
+        "timed out",
+        "connection reset",
+        "remoteprotocolerror",
+        "serverdisconnected",
+        "incomplete chunked read",
+        "errno 104",
+        "connection aborted",
+        "broken pipe",
+    )
+    return any(marker in err_str for marker in transient_markers)
+
+
+class _AggregatedStreamResponse:
+    """Lightweight container holding aggregated fields from `generate_content_stream` chunks."""
+
+    def __init__(
+        self,
+        text: str | None,
+        candidates: list[Any],
+        function_calls: list[Any] | None,
+        prompt_feedback: Any,
+        usage_metadata: Any,
+    ) -> None:
+        self.text = text
+        self.candidates = candidates
+        self.function_calls = function_calls
+        self.prompt_feedback = prompt_feedback
+        self.usage_metadata = usage_metadata
+
+
+def generate_content_with_stream_fallback(
+    client: Any,
+    *,
+    model: str,
+    contents: Any,
+    config: Any,
+) -> Any:
+    """Call `client.models.generate_content` and retry with `generate_content_stream` on connection resets.
+
+    Large uncached prompts with thinking tokens enabled can take several minutes before the first
+    byte is returned in non-streaming mode, causing GFE or NAT gateways to drop the idle TCP socket
+    with `[Errno 104] Connection reset by peer`. Streaming keeps chunks flowing continuously over
+    the connection so idle timeouts do not trigger.
+    """
+    try:
+        return client.models.generate_content(
+            model=model,
+            contents=contents,
+            config=config,
+        )
+    except Exception as err:
+        if not _is_connection_or_timeout_error(err) or not hasattr(client.models, "generate_content_stream"):
+            raise
+        print(
+            f"Warning: Synchronous generate_content interrupted by connection/timeout ({err}). "
+            "Retrying with streaming (generate_content_stream)...",
+            file=sys.stderr,
+        )
+        stream = client.models.generate_content_stream(
+            model=model,
+            contents=contents,
+            config=config,
+        )
+        text_parts: list[str] = []
+        accumulated_parts: list[Any] = []
+        last_candidates: list[Any] = []
+        function_calls: list[Any] = []
+        last_prompt_feedback: Any = None
+        last_usage: Any = None
+
+        for chunk in stream:
+            try:
+                c_text = getattr(chunk, "text", None)
+                if isinstance(c_text, str) and c_text:
+                    text_parts.append(c_text)
+            except Exception:
+                pass
+            try:
+                c_cands = getattr(chunk, "candidates", None)
+                if c_cands:
+                    last_candidates = list(c_cands)
+                    cand0_content = getattr(c_cands[0], "content", None)
+                    cand0_parts = getattr(cand0_content, "parts", None) if cand0_content is not None else None
+                    if cand0_parts:
+                        accumulated_parts.extend(cand0_parts)
+            except Exception:
+                pass
+            try:
+                c_fcs = getattr(chunk, "function_calls", None)
+                if c_fcs:
+                    function_calls.extend(c_fcs)
+            except Exception:
+                pass
+            try:
+                c_pf = getattr(chunk, "prompt_feedback", None)
+                if c_pf is not None:
+                    last_prompt_feedback = c_pf
+            except Exception:
+                pass
+            try:
+                c_usage = getattr(chunk, "usage_metadata", None)
+                if c_usage is not None:
+                    last_usage = c_usage
+            except Exception:
+                pass
+
+        if last_candidates and accumulated_parts:
+            try:
+                cand0_content = getattr(last_candidates[0], "content", None)
+                if cand0_content is not None and hasattr(cand0_content, "parts"):
+                    cand0_content.parts = accumulated_parts
+            except Exception:
+                pass
+
+        return _AggregatedStreamResponse(
+            text="".join(text_parts) if text_parts else None,
+            candidates=last_candidates,
+            function_calls=function_calls or None,
+            prompt_feedback=last_prompt_feedback,
+            usage_metadata=last_usage,
+        )
 
 
 def resolve_tool_calls_loop(
@@ -429,7 +568,8 @@ def resolve_tool_calls_loop(
             file=sys.stderr,
         )
         try:
-            response = client.models.generate_content(
+            response = generate_content_with_stream_fallback(
+                client,
                 model=model_name,
                 contents=history,
                 config=gen_config,
@@ -474,7 +614,8 @@ def resolve_tool_calls_loop(
         )
         target_contents = fallback_contents if fallback_contents is not None else initial_contents
         try:
-            response = client.models.generate_content(
+            response = generate_content_with_stream_fallback(
+                client,
                 model=model_name,
                 contents=target_contents,
                 config=fallback_cfg,

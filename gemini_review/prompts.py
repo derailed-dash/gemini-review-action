@@ -28,6 +28,7 @@ from gemini_review.diff import (
 from gemini_review.github import get_file_blob
 from gemini_review.multimodal import (
     get_mime_type,
+    is_gemini_supported_mime,
     is_supported_image,
     optimize_image_bytes,
 )
@@ -372,8 +373,12 @@ def build_visual_diff_parts(
         base_mime = get_mime_type(fname)
         if head_bytes:
             head_bytes, head_mime = optimize_image_bytes(head_bytes, fname, trigger_bytes, target_bytes)
+            if not is_gemini_supported_mime(head_mime):
+                head_bytes = None
         if base_bytes:
             base_bytes, base_mime = optimize_image_bytes(base_bytes, fname, trigger_bytes, target_bytes)
+            if not is_gemini_supported_mime(base_mime):
+                base_bytes = None
 
         # 4. Assemble visual diff parts
         if status == "modified":
