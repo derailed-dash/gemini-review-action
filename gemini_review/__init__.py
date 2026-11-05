@@ -115,6 +115,7 @@ from .skills import (
 from .threads import fetch_review_threads, resolve_addressed_threads, reviewer_logins
 from .utils import (
     _normalize_model_name,
+    context_cache_fingerprint,
     count_text_tokens,
     extract_response_text_or_raise,
     load_workspace_rules,
@@ -150,6 +151,7 @@ __all__ = [
     "_auto_align_suggestion_indentation",
     "_auto_correct_suggestion_range",
     "_normalize_model_name",
+    "context_cache_fingerprint",
     "build_codebase_context",
     "build_pr_diff_prompt",
     "build_prompt",

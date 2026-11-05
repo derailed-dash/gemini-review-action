@@ -274,7 +274,13 @@ def main():
                 clean_repo = repository.replace("/", "-").replace("\\", "-") if repository else "repo"
                 clean_model = gr._normalize_model_name(model_name).replace("/", "-").replace("\\", "-")
                 clean_persona = gr.resolve_persona_name(config).lower().replace("/", "-").replace("\\", "-")
-                display_name = f"repo-cache-{clean_repo}-{clean_model}-{clean_persona}"
+                cache_contents: Any = (
+                    [codebase_context] + codebase_multimodal_parts if codebase_multimodal_parts else codebase_context
+                )
+                # The hash makes the name unique to this run's system instruction and selected context,
+                # so a live cache is only reused when it holds exactly what this run would have cached.
+                fingerprint = gr.context_cache_fingerprint(system_instruction, cache_contents)
+                display_name = f"repo-cache-{clean_repo}-{clean_model}-{clean_persona}-{fingerprint}"
 
                 # Check if an active cache already exists matching display_name and model_name
                 existing_cache = None
@@ -319,11 +325,6 @@ def main():
                         except Exception:
                             parsed_tools = None
 
-                    cache_contents: Any = (
-                        [codebase_context] + codebase_multimodal_parts
-                        if codebase_multimodal_parts
-                        else codebase_context
-                    )
                     cache_obj = client.caches.create(
                         model=model_name,
                         config=types.CreateCachedContentConfig(

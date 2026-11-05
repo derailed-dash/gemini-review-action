@@ -5,6 +5,7 @@ workspace rules discovery), while re-exporting functions from the specialised
 multimodal, diff, and repo modules to ensure full backward compatibility.
 """
 
+import hashlib
 import os
 import sys
 from typing import Any
@@ -54,6 +55,7 @@ __all__ = [
     # Core utils primitives
     "_get_pr_review_func",
     "_normalize_model_name",
+    "context_cache_fingerprint",
     "load_workspace_rules",
     "count_text_tokens",
     "extract_response_text_or_raise",
@@ -120,6 +122,27 @@ def _normalize_model_name(model: str | None) -> str:
     if "models/" in name:
         name = name.split("models/")[-1]
     return name
+
+
+def context_cache_fingerprint(system_instruction: str | None, contents: Any) -> str:
+    """Return a short hash of everything a context cache stores: system instruction and cached contents.
+
+    Put into the cache display name so a live cache is only reused by a run that would have created
+    an identical one. Without it, two PRs on the same repository within the TTL share the first PR's
+    selected context files, and a job with different instructions reuses another job's prompt.
+    """
+    digest = hashlib.sha256()
+    digest.update((system_instruction or "").encode("utf-8"))
+    parts = contents if isinstance(contents, list) else [contents]
+    for part in parts:
+        digest.update(b"\x00")
+        if isinstance(part, str):
+            digest.update(part.encode("utf-8"))
+        elif hasattr(part, "model_dump_json"):
+            digest.update(part.model_dump_json().encode("utf-8"))
+        else:
+            digest.update(repr(part).encode("utf-8"))
+    return digest.hexdigest()[:12]
 
 
 def load_workspace_rules() -> str:
