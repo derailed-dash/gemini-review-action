@@ -996,6 +996,8 @@ Rates for **`gemini-3.8-flash`** (and **`gemini-3.7-flash`**), which the action 
 * **Output**: **$3.75** per 1,000,000 tokens — then $7.50
 * **Cached input**: 0.1x the input rate
 
+**`gemini-4-argon`** is priced too: **$2.00 / $10.00** per 1M input / output through **2026-11-30** (Google pays this promo as a 50% credit back), then **$4.00 / $20.00**. Cached input is 0.05x the input rate. Rates are for the global endpoint; regional endpoints are 10% higher.
+
 **Calculated Cost Per PR Review** (at today's introductory rate):
 * **Input Cost**: 140,000 x ($0.75 / 1,000,000) = **$0.105**
 * **Output Cost**: 1,500 x ($3.75 / 1,000,000) = **$0.006**

@@ -59,6 +59,21 @@ class Rate:
 # Keys are matched after normalising the model id (see `_normalise`), so
 # "models/gemini-3.8-flash" and "publishers/google/models/gemini-3.8-flash" both resolve.
 RATES: dict[str, Rate] = {
+    "gemini-4-argon": Rate(
+        input=4.00,
+        output=20.00,
+        label="Gemini 4 Argon",
+        # Half price through 2026-11-30. Google pays the promo as a 50% credit back on net spend,
+        # so the invoice line shows the standard rate and the credit lands the following month.
+        promo=Promo(input=2.00, output=10.00, ends_after="2026-11-30"),
+        # Cached input is $0.20 against $4.00 (and $0.10 against $2.00 in the promo), i.e. 0.05x,
+        # half the Flash multiplier. Leaving it on the 0.1x default would double every cache read.
+        cache_read=0.05,
+        note=(
+            "standard tier, global endpoint; regional endpoints are 10% higher, "
+            "the promo is paid as a credit back, and Cyber Permissive is excluded from it"
+        ),
+    ),
     "gemini-3.8-flash": Rate(
         input=1.50,
         output=7.50,

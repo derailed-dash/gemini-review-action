@@ -149,6 +149,32 @@ class TestGemini38Flash:
         assert after.total == pytest.approx(1.50)
 
 
+class TestGemini4Argon:
+    """Argon's promo ends a month before the Flash one, and its cache reads are 0.05x, not 0.1x."""
+
+    def test_a_usage_record_is_priced_at_the_promo_rate(self):
+        # 100k uncached in, 900k cached in, 2k response + 3k thinking out, at $2.00/$10.00.
+        record = {**usage(fresh=100_000, cached=900_000, output=2_000), "thoughts_tokens": 3_000}
+        cost = estimate_cost(record, "gemini-4-argon", today=date(2026, 10, 28))
+        assert cost.rate is not None, "an unpriced model reports tokens and no cost"
+        assert cost.uncached_input == pytest.approx(0.20)
+        assert cost.cached_input == pytest.approx(0.09)  # 900k x $0.10, the published cached rate
+        assert cost.thinking == pytest.approx(0.03)  # reasoning bills at the output rate
+        assert cost.output == pytest.approx(0.05)
+        assert cost.total == pytest.approx(0.34)
+
+    def test_the_promo_ends_with_november(self):
+        on = estimate_cost(usage(fresh=1_000_000, cached=1_000_000), "gemini-4-argon", today=date(2026, 11, 30))
+        after = estimate_cost(usage(fresh=1_000_000, cached=1_000_000), "gemini-4-argon", today=date(2026, 12, 1))
+        assert on.total == pytest.approx(2.00 + 0.10)
+        assert after.total == pytest.approx(4.00 + 0.20)
+
+    def test_vertex_model_path_resolves(self):
+        vertex_id = "publishers/google/models/gemini-4-argon"
+        cost = estimate_cost(usage(output=1_000_000), vertex_id, today=date(2026, 12, 1))
+        assert cost.total == pytest.approx(20.00)
+
+
 class TestRateTable:
     def test_every_promo_is_cheaper_than_its_standard_rate(self):
         """A promo dearer than the standard rate would mean the two were swapped."""
