@@ -54,7 +54,7 @@ See the supporting blog post about this action [here](https://medium.com/google-
 - **Tokenomics & Cost Telemetry Report**: Appends a collapsible token usage and **estimated dollar cost** summary to each review, with the rate that was applied stated alongside it.
 - **Drop-in Migration**: Fully compatible as a direct, drop-in replacement for the deprecated `run-gemini-cli` action.
 - **Structured Outputs**: Error-free JSON response formatting using Pydantic schema validation.
-- **Multimodal Context, Visual PR Diffing & Triage Screenshots**: Inspects repository visual assets, issue screenshots, and documents (PNG, JPEG, WebP, GIF, SVG, PDF). Local images referenced in Markdown docs and remote screenshots embedded in issues (`github.com/user-attachments/assets/...`, `githubusercontent.com/...`) are automatically extracted and attached as multimodal parts. When PRs modify images, Gemini performs side-by-side visual diffing between baseline and updated versions to catch visual regressions and layout issues. Includes intelligent deterministic downscaling (Pillow) to minimise token consumption and latency.
+- **Multimodal Context, Visual PR Diffing & Triage Screenshots**: Inspects repository visual assets, issue screenshots, and documents (PNG, JPEG, WebP, GIF, SVG, PDF). Local images referenced in Markdown docs and remote screenshots embedded in issues (`github.com/user-attachments/assets/...`, `githubusercontent.com/...`) are automatically extracted and attached as multimodal parts. When PRs modify images, Gemini performs side-by-side visual diffing between baseline and updated versions to catch visual regressions and layout issues. Includes in-memory SVG-to-PNG rasterisation (`resvg-py`) and intelligent deterministic downscaling (Pillow) to minimise token consumption and latency.
 - **Hybrid Codebase Context**: Automatically includes codebase context based on the overall size of the codebase. If the codebase isn't huge, the entire repo is loaded into context; but if it is huge, the agent reads the overall directory tree and judiciously includes a subset of the repo. (Note that it always reads markdown files, dependency files, packaging files, etc.)
 - **Interactive Suggestions**: Formats code recommendations inside native GitHub ` ```suggestion ` blocks for one-click merge applications.
 - **Triggers**: The action triggers automatically in response to PR events. It can also be triggered by posting a comment in the PR starting with `/gemini-review`.
@@ -132,6 +132,7 @@ To enable this capability, see [Google Developer Knowledge Setup Guide](docs/dev
 This action supports **On-Demand Skills Discovery**. Instead of cramming all your repository's formatting rules, coding guidelines, and API specs directly into the prompt context (which wastes tokens and confuses the model), the reviewer agent queries a list of available guidelines and loads the relevant instructions dynamically as needed.
 
 #### 1. Default (Built-in) Skills Included
+
 The action comes pre-packaged with a comprehensive set of default skills that are automatically available for every run. These cover:
 *   **Google Enterprise & Agent Development**: Best practices for Google ADK (Agent Development Kit), Gemini Agents API, serving endpoint management, prompt orchestration, and model tuning.
 *   **Google Cloud Best Practices**: Official architecture patterns, operational excellence, reliability, performance, security, and GCS/Cloud Run/GKE setup.
@@ -140,6 +141,7 @@ The action comes pre-packaged with a comprehensive set of default skills that ar
 All curated starter skills are tracked declaratively in [skills-manifest.json](starter-examples/skills/skills-manifest.json) and can be updated from their upstream sources using `uv run python scripts/update_skills.py`.
 
 #### 2. Adding Custom Skills to Your Repository
+
 To add project-specific coding standards or team rules that your PR reviewer should check against:
 1.  Create a folder named `.agents/skills/` at the root of your repository.
 2.  Add a subdirectory for your skill, and create a `SKILL.md` file inside it (e.g. `.agents/skills/my-react-rules/SKILL.md`).
@@ -155,6 +157,7 @@ To add project-specific coding standards or team rules that your PR reviewer sho
 4.  Commit and push these files. The PR review agent will automatically detect your project's custom guidelines and invoke them when reviewing relevant code changes.
 
 ##### Coexistence with Upstream Skills & `local_skills`
+
 If your repository mixes upstream skills with custom local skills inside `.agents/skills/`:
 - **Unmanaged Directories Are Safe:** `scripts/update_skills.py` only synchronises the specific skills listed under `"skills"` for each configured repository. It never deletes, overwrites, or alters custom skill directories.
 - **Declaring `local_skills` in the Manifest:** You can optionally document locally maintained skills under `"local_skills"` in your `skills-manifest.json`:
@@ -173,6 +176,7 @@ If your repository mixes upstream skills with custom local skills inside `.agent
   When declared, the updater will explicitly acknowledge them in the terminal summary and confirm they are preserved locally without touching upstream Git repositories.
 
 ##### Synchronising Upstream Skills in Consumer Repositories
+
 If your team wants to pull and track curated agent skills directly in your project's `.agents/skills/` directory from official upstream repositories (such as `google/skills` or `google/agents-cli`), you do not need to construct a manifest from scratch:
 1. **Copy the updater script:** Copy `scripts/update_skills.py` into your repository's `scripts/` folder.
 2. **Initialise or copy the manifest:**
@@ -194,6 +198,7 @@ The updater automatically detects consumer repositories and defaults target path
 When reviewing pull requests that have undergone multiple iterations or team discussions, Gemini automatically retrieves prior inline review threads (`pulls/{pr_number}/comments`) and general PR conversation comments (`issues/{pr_number}/comments`) using automatic pagination loops.
 
 #### How Discussion Tracking Works:
+
 1. **Thread Grouping:** Root review comments and developer replies are structured into conversational threads mapped to specific files and line numbers.
 2. **Developer Workflow Rules for Follow-Up Reviews:**
    Gemini evaluates prior comment history against the incoming diff patch and enforces an opinionated developer workflow matrix:
@@ -478,7 +483,7 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 | `max_triage_images` | Maximum number of remote screenshots attached during issue triage (default: 5). | No | `5` |
 | `image_trigger_bytes` | File size threshold in bytes above which raster images are downscaled before attachment (default: 614400 / 600 KB). | No | `614400` |
 | `image_target_bytes` | Target size in bytes when downscaling large raster images (default: 307200 / 300 KB). | No | `307200` |
-| `timeout` | Timeout for API requests in seconds. | No | `60` |
+| `timeout` | Timeout for API requests in seconds (the Gemini review client enforces a 300s minimum HTTP timeout floor and automatically falls back to streaming on connection resets). | No | `60` |
 
 ### Reasoning & Thinking Budget Control
 
@@ -543,10 +548,12 @@ Gemini Review Action supports multimodal context inspection, side-by-side visual
   During issue triage (`command: 'triage'`), the action parses the issue body and discussion comments for remote HTTPS image URLs (`![alt](https://...)` and `<img src="https://...">`), including extensionless GitHub user-uploaded assets (`github.com/user-attachments/assets/...` and `githubusercontent.com/...`):
   - For GitHub-hosted URLs, requests automatically include `Authorization: Bearer <GITHUB_TOKEN>` so screenshots in private or internal repositories are fetched seamlessly (credentials are never sent to third-party domains).
   - Screenshots are streamed with a 20 MB download safety limit, downscaled via `optimize_image_bytes()`, and attached as `types.Part.from_bytes` up to `max_triage_images` (default: `5`). If any remote screenshot fails or times out, triage gracefully continues with text-only classification.
-* **Deterministic Pillow Downscaling**:
-  To protect token budgets and reduce inference latency, large raster graphics are automatically downscaled before being attached:
-  - Any raster image exceeding `image_trigger_bytes` (default: `614400` / 600 KB) is deterministically downscaled using high-quality Lanczos resampling and re-compressed towards `image_target_bytes` (default: `307200` / 300 KB).
-  - Scalable Vector Graphics (`image/svg+xml`) and PDF documents (`application/pdf`) bypass lossy compression to preserve full vector fidelity and textual clarity.
+* **SVG-to-PNG Rasterisation & Deterministic Pillow Downscaling**:
+  To ensure full compatibility with the Gemini Vision API and protect token budgets:
+  - Scalable Vector Graphics (`.svg` / `image/svg+xml`) are rasterised in memory to `image/png` via `resvg-py` (as the Gemini Vision API strictly rejects `image/svg+xml`).
+  - Any raster image (including rasterised SVGs) exceeding `image_trigger_bytes` (default: `614400` / 600 KB) is deterministically downscaled using high-quality Lanczos resampling and re-compressed towards `image_target_bytes` (default: `307200` / 300 KB).
+  - PDF documents (`application/pdf`) pass through uncompressed to preserve document layout and textual clarity.
+  - All multimodal parts are verified against a strict Gemini MIME allowlist (`GEMINI_SUPPORTED_PART_MIMES`), with automatic text-only fallbacks if multimodal context caching or review/triage requests are rejected.
 * **Static Context Overrides & Safety Ceilings**:
   - You can explicitly attach visual diagrams or design specifications using `extra_context_files` (e.g. `extra_context_files: 'docs/architecture.png,specs/api-spec.pdf'`).
   - The `max_multimodal_images` input (default: `20`) and `max_triage_images` input (default: `5`) provide safety ceilings capping the total number of multimodal attachments.
@@ -557,7 +564,7 @@ You can customise the personality and feedback style of the reviewer agent using
 
 Available personas:
 - **`straight` (Default)**: Standard, objective code reviewer with no persona overlay applied.
-- **`dazbo`**: Warm, approachable software engineer tone with clear technical explanations and mild cheekiness. If recommendations from previous review iterations are unaddressed or ignored without explanation, it exhibits increasing levels of dry humor, sarcasm, and mild exasperation!
+- **`dazbo`**: Warm, approachable software engineer tone with clear technical explanations and mild cheekiness. If recommendations from previous review iterations are unaddressed or ignored without explanation, it exhibits increasing levels of dry humour, sarcasm, and mild exasperation!
 - **`palpatine`**: Emperor Palpatine (Star Wars) persona with grand imperial authority, dark side quotes ("*Do it.*", "*Unlimited power!*", "*I find your lack of compliance disturbing*"), demanding ruthless code perfectionism.
 - **`rick`**: Rick Sanchez (Rick and Morty) persona — hyper-intelligent, cynical multiverse genius ("*burp*", "*Wubba Lubba Dub-Dub!*", "*Jerry-tier code*"). Demands galaxy-brain engineering perfection and treats sloppy bugs as pathetic Jerry-level amateur work!
 
@@ -806,7 +813,7 @@ Here is an overview of the directory tree and the purpose of each file:
 │   ├── developer_knowledge.py # Google Developer Knowledge API integration
 │   ├── diff.py              # Diff patch parsing, line numbering & suggestion alignment
 │   ├── github.py            # GitHub REST API interactions & review submission
-│   ├── multimodal.py        # Image/PDF MIME detection, Pillow downscaling & image extraction
+│   ├── multimodal.py        # Image/PDF MIME detection, SVG-to-PNG rasterisation, Pillow downscaling & image extraction
 │   ├── personas.py          # Reviewer persona registry & prompt generation
 │   ├── pricing.py           # Token pricing calculation & review cost estimation
 │   ├── prompts.py           # Prompt builders, system instructions & visual diff assembly

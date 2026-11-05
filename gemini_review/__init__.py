@@ -64,6 +64,7 @@ from .github import (
 from .multimodal import (
     DEFAULT_MAX_REMOTE_IMAGE_BYTES,
     DEFAULT_MAX_TRIAGE_IMAGES,
+    GEMINI_SUPPORTED_PART_MIMES,
     SUPPORTED_IMAGE_EXTENSIONS,
     SUPPORTED_MULTIMODAL_EXTENSIONS,
     build_triage_multimodal_parts,
@@ -71,9 +72,11 @@ from .multimodal import (
     extract_remote_image_urls,
     fetch_remote_image,
     get_mime_type,
+    is_gemini_supported_mime,
     is_supported_image,
     is_supported_multimodal_file,
     optimize_image_bytes,
+    rasterize_svg_bytes,
 )
 from .personas import (
     get_persona_prompt,
@@ -118,6 +121,7 @@ from .utils import (
     context_cache_fingerprint,
     count_text_tokens,
     extract_response_text_or_raise,
+    generate_content_with_stream_fallback,
     load_workspace_rules,
     resolve_tool_calls_loop,
 )
@@ -203,8 +207,12 @@ __all__ = [
     "load_workspace_rules",
     "optimize_image_bytes",
     "extract_markdown_image_references",
+    "GEMINI_SUPPORTED_PART_MIMES",
     "SUPPORTED_IMAGE_EXTENSIONS",
     "SUPPORTED_MULTIMODAL_EXTENSIONS",
+    "is_gemini_supported_mime",
+    "rasterize_svg_bytes",
+    "generate_content_with_stream_fallback",
     "parse_skill_metadata",
     "post_commit_status",
     "post_review",

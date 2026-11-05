@@ -18,12 +18,12 @@ The code review action is organized into a modular Python package (`gemini_revie
 
 * **`gemini_review/schemas.py`**: Pydantic schemas defining structured outputs (`InlineComment`, `ReviewResult`, `DynamicContextSelection`).
 * **`gemini_review/config.py`**: Configuration loader for `gemini-review.toml`, timeout/model defaults, and multimodal budget controls (`max_multimodal_images`, `max_triage_images`, `image_trigger_bytes`, `image_target_bytes`).
-* **`gemini_review/multimodal.py`**: Multimodal MIME type detection, image validation, deterministic Pillow downscaling (`optimize_image_bytes`), local Markdown/HTML image reference extraction (`extract_markdown_image_references`), and remote issue screenshot extraction/authenticated fetching (`extract_remote_image_urls`, `fetch_remote_image`, `build_triage_multimodal_parts`).
+* **`gemini_review/multimodal.py`**: Multimodal MIME type detection and allowlist validation (`is_gemini_supported_mime`), in-memory SVG-to-PNG rasterisation via `resvg_py` (`rasterize_svg_bytes`), deterministic Pillow downscaling (`optimize_image_bytes`), local Markdown/HTML image reference extraction (`extract_markdown_image_references`), and remote issue screenshot extraction/authenticated fetching (`extract_remote_image_urls`, `fetch_remote_image`, `build_triage_multimodal_parts`).
 * **`gemini_review/diff.py`**: Unified diff patch parsing, line numbering annotations (`format_diff_patch_with_line_numbers`), suggestion indentation alignment, line-range auto-correction, and inline comment filtering (`filter_review_comments`).
 * **`gemini_review/repo.py`**: File discovery (`get_all_repo_files`), file tree formatting (`generate_file_tree`), core manifest pattern matching (`is_core_file`), import extraction, and candidate pool ranking & bounding (`rank_and_bound_candidates`).
 * **`gemini_review/context.py`**: Hybrid codebase context engine (Full vs Sparse mode), core documentation attachment, static extra context overrides, multimodal context binding, and Gemini dynamic context selection (`select_dynamic_context_files`).
 * **`gemini_review/prompts.py`**: Custom instruction loaders (`load_custom_instructions`), system prompt builder (`load_system_instruction`), PR diff prompt formatting (`build_pr_diff_prompt`), visual PR diff assembly (`build_visual_diff_parts`), and prompt assembly (`build_prompt`).
-* **`gemini_review/utils.py`**: Core primitives (token estimation, response extraction, workspace rules discovery) and facade re-exports for backward compatibility.
+* **`gemini_review/utils.py`**: Core primitives (token estimation, response extraction, streaming connection-reset fallback `generate_content_with_stream_fallback`, multi-turn tool resolution `resolve_tool_calls_loop`, workspace rules discovery) and facade re-exports for backward compatibility.
 * **`gemini_review/github.py`**: GitHub REST API client functions for PR files, comment threads, author filtering, review postings, and raw file blob retrieval (`get_file_blob`).
 * **`gemini_review/threads.py`**: Pull request review thread retrieval and automated resolution of addressed threads (`resolve_addressed_threads`).
 * **`gemini_review/budget.py`**: Token budget allocation and per-file content truncation (`cap_file_content`) to prevent out-of-budget diffs.
@@ -71,11 +71,12 @@ To drastically reduce API costs and latency for large codebase contexts, `gemini
 * **Tenant Isolation & Security**: Context caches are hosted on Google's infrastructure and strictly isolated to your API key / GCP project namespace. No third-party or unauthorized API key can access or view cached context.
 * **Cache Provisioning (`client.caches.create()`)**: If no matching active cache handle for the current model is found, the script provisions a new `CachedContent` resource containing the codebase context, `system_instruction`, and pre-parsed `tools`.
 * **Cost & Multi-Turn Optimisation**: Input tokens billed against the cached handle receive a **90% discount**. Furthermore, multi-turn tool interactions (such as Google Developer Knowledge MCP searches or skill lookups) reference the cached handle without re-billing the codebase context on subsequent turns.
-* **Resilient Fallback**: If cache creation, lookup, or generation with cached content fails for any reason, the script seamlessly falls back to direct context generation without interrupting the CI review pipeline.
+* **Resilient Fallback**: If context cache creation with multimodal attachments fails, the script automatically retries cache creation with text-only codebase context (while retaining visual PR diff parts on the generation request). If cache creation, lookup, or generation with cached content still fails for any reason, it seamlessly falls back to direct context generation without interrupting the CI review pipeline.
 
 ### 4. PR Comment & Discussion Thread History Engine
 
 When enabled via `include_comment_history: 'true'` (default), `gemini_pr_review.py` fetches complete historical discussion context from the GitHub API:
+
 * **Inline & Conversation Retrieval (`get_pr_comments()`)**: Fetches inline review comments (`pulls/{pr_number}/comments`) and general PR issue comments (`issues/{pr_number}/comments`) using `while True` pagination loops (`per_page=100`) to guarantee all historical comments are captured.
 * **Comment Author Filtering (`exclude_comment_authors`)**: Selectively filters out automated comments from secondary bots (such as `claude[bot]`) before prompt generation using `filter_comment_authors()`, preventing competing review conclusions from skewing the evaluation.
 * **Thread Structuring (`format_pr_comment_history()`)**: Groups comments into root comments and nested developer replies per file and line number, presenting clear conversational timelines to Gemini.
@@ -93,14 +94,15 @@ When enabled via `include_comment_history: 'true'` (default), `gemini_pr_review.
   - For modified images, both the baseline version (`base_sha`) and the updated version (`head_sha`) are retrieved via `get_file_blob()` (GitHub API) or `get_git_blob()` (local Git).
   - The assets are assembled into labelled before-and-after visual diff parts, enabling Gemini to review UI changes, layout consistency, and potential visual regressions.
   - Added and removed image assets are similarly captured with descriptive labels.
-* **Deterministic Pillow Downscaling (`optimize_image_bytes`)**:
-  To prevent large raster graphics from inflating context token usage or request latency, raster images exceeding `image_trigger_bytes` (default: 600 KB / 614,400 bytes) are resized using high-quality Lanczos resampling and re-compressed towards `image_target_bytes` (default: 300 KB / 307,200 bytes). SVGs and PDFs pass through uncompressed to preserve vector fidelity and document layout.
+* **SVG-to-PNG Rasterisation & Deterministic Pillow Downscaling (`rasterize_svg_bytes`, `optimize_image_bytes`)**:
+  Because the Gemini Vision API strictly rejects `image/svg+xml`, SVG assets (`.svg` or `image/svg+xml`) are first rasterised in memory to `image/png` via `resvg_py` (`rasterize_svg_bytes`). To prevent large raster graphics from inflating context token usage or request latency, raster images (including rasterised SVGs) exceeding `image_trigger_bytes` (default: 600 KB / 614,400 bytes) are resized using high-quality Lanczos resampling and re-compressed towards `image_target_bytes` (default: 300 KB / 307,200 bytes). PDFs (`application/pdf`) pass through uncompressed to preserve document layout. Every multimodal part is verified against `is_gemini_supported_mime()` (`GEMINI_SUPPORTED_PART_MIMES`) before attachment, and if a multimodal review request still fails with `400 INVALID_ARGUMENT`, `gemini_pr_review.py` gracefully falls back to a text-only review.
 * **Safety Ceilings & Token Heuristics**:
   A configurable cap (`max_multimodal_images`, default: 20) bounds total multimodal attachments across context and visual diffs. The token estimation engine (`count_text_tokens`) incorporates a 258 tokens/part heuristic fallback for multimodal parts when offline or mocking API responses.
 
 ### 6. Structured Output Schemas
 
 Gemini is forced to return structured JSON adhering to the Pydantic schemas:
+
 * `InlineComment`:
   - `path`: File path.
   - `line`: Line number in the RIGHT (modified) side of the diff.
@@ -114,11 +116,16 @@ Gemini is forced to return structured JSON adhering to the Pydantic schemas:
   - `general_feedback`: List of highlights or observations.
   - `comments`: List of `InlineComment` instances.
 
-### 7. Resilient Review Submissions
+### 7. Resilient Generation & Review Submissions
 
-Submitting reviews with line-specific comments via GitHub's API can be fragile (e.g. if the model specifies a line index that falls outside the diff range).
-* **Atomic Run:** The script first attempts to post the summary, resolved items list (`### ✅ Resolved Items from Prior Reviews`), and all inline comments in a single transaction via `POST /repos/{owner}/{repo}/pulls/{number}/reviews`.
-* **Resilient Fallback:** If the atomic post fails (e.g. returns HTTP 422), the script catches the failure, posts the review summary comment, and attempts to publish individual comments one-by-one. This ensures valid comments are still delivered while preventing a CI checkout block.
+Both LLM generation and GitHub review submission are hardened against network and payload faults:
+
+* **HTTP Timeout Floor & Streaming Fallback (`generate_content_with_stream_fallback`)**:
+  The `google-genai` `HttpOptions(timeout=...)` parameter expects milliseconds, and large uncached prompts with thinking tokens enabled can take several minutes before the first response byte arrives. `gemini_pr_review.py` configures `HttpOptions(timeout=max(timeout, 300) * 1000)` (enforcing a 300-second minimum floor) and wraps generation calls in `generate_content_with_stream_fallback()`, which automatically retries via `client.models.generate_content_stream` if a synchronous `generate_content` call encounters a dropped connection, gateway reset (`[Errno 104] Connection reset by peer`), or read timeout.
+* **Atomic GitHub Review Run**:
+  The script first attempts to post the summary, resolved items list (`### ✅ Resolved Items from Prior Reviews`), and all inline comments in a single transaction via `POST /repos/{owner}/{repo}/pulls/{number}/reviews`.
+* **Resilient Comment Fallback**:
+  If the atomic post fails (e.g. returns HTTP 422 because a line index falls outside the diff range), the script catches the failure, posts the review summary comment, and attempts to publish individual comments one-by-one. This ensures valid comments are still delivered while preventing a CI checkout block.
 
 ### 8. Review Prompt Customisation: Extending vs Replacing
 
@@ -152,10 +159,12 @@ The issue triage script automatically categorises and labels new or reopened iss
 * Using structured output, Gemini returns a `TriageResult` containing:
   - `selected_labels`: The subset of repo labels that match the issue.
   - `reasoning`: The explanation for applying those labels.
+* If multimodal triage fails (for instance, due to an upstream vision error), the script automatically retries with text-only triage (`triage_prompt`).
 
-### 4. API Label Application
+### 4. Deterministic Allowlist Filtering & API Label Application
 
-* The script calls `apply_labels()` to add the selected labels to the issue on GitHub.
+* Before calling the GitHub API, `gemini_issue_triage.py` deduplicates `triage.selected_labels` in order and filters them strictly against the repository's `available_labels` allowlist, dropping any hallucinated or unrecognised labels with a warning.
+* The script then calls `apply_labels()` to add the validated labels to the issue on GitHub.
 
 ---
 
@@ -225,6 +234,7 @@ I selected the **Direct Gemini API + Context Caching** model based on the follow
    Direct API generation and Context Caching primitives are generally available (GA) with guaranteed SLAs, avoiding reliance on Public Preview APIs for production CI pipelines.
 
 ### References
+
 * [Google Managed Agents Overview](https://ai.google.dev/gemini-api/docs/agents)
 * [Antigravity Agent Documentation](https://ai.google.dev/gemini-api/docs/antigravity-agent)
 * [Agent Environment Overview](https://ai.google.dev/gemini-api/docs/agent-environment)

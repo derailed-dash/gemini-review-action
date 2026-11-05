@@ -129,16 +129,17 @@ def main():
         print("No text-based or visual image files to review. Exiting.", file=sys.stderr)
         sys.exit(0)
 
-    # Initialise Gemini client
+    # Initialise Gemini client (HttpOptions.timeout is in milliseconds; enforce a 300s minimum floor for LLM reviews)
+    http_options = types.HttpOptions(timeout=max(timeout, 300) * 1000)
     if use_vertexai:
         print(f"Initialising GenAI Client (Model: {model_name}) using Vertex AI authentication...", file=sys.stderr)
-        client = genai.Client(vertexai=True, project=project, location=location)
+        client = genai.Client(vertexai=True, project=project, location=location, http_options=http_options)
     else:
         print(
             f"Initialising GenAI Client (Model: {model_name}) using Google AI Studio API Key authentication...",
             file=sys.stderr,
         )
-        client = genai.Client(api_key=gemini_api_key)
+        client = genai.Client(api_key=gemini_api_key, http_options=http_options)
 
     config = gr.load_config()
 
@@ -283,12 +284,16 @@ def main():
                 display_name = f"repo-cache-{clean_repo}-{clean_model}-{clean_persona}-{fingerprint}"
 
                 # Check if an active cache already exists matching display_name and model_name
-                existing_cache = None
+                active_caches: list[Any] = []
                 try:
-                    active_caches = client.caches.list()
+                    active_caches = list(client.caches.list() or [])
+                except Exception as list_err:
+                    print(f"Notice: Cache listing failed ({list_err}), creating fresh cache.", file=sys.stderr)
+
+                def _find_matching_cache(target_display_name: str) -> Any:
                     for cache_item in active_caches:
                         item_display_name = getattr(cache_item, "display_name", None)
-                        if item_display_name == display_name:
+                        if item_display_name == target_display_name:
                             item_model = getattr(cache_item, "model", None)
                             if isinstance(item_model, str) and gr._normalize_model_name(
                                 item_model
@@ -300,14 +305,15 @@ def main():
                                     file=sys.stderr,
                                 )
                                 continue
-                            existing_cache = cache_item
-                            break
-                except Exception as list_err:
-                    print(f"Notice: Cache listing failed ({list_err}), creating fresh cache.", file=sys.stderr)
+                            return cache_item
+                    return None
 
+                existing_cache = _find_matching_cache(display_name)
                 if existing_cache:
                     cached_content_name = existing_cache.name
-                    contents_to_send = dynamic_pr_prompt
+                    contents_to_send = (
+                        [dynamic_pr_prompt] + visual_diff_parts if visual_diff_parts else dynamic_pr_prompt
+                    )
                     active_display_name = getattr(existing_cache, "display_name", display_name)
                     print(
                         f"Reusing active Gemini context cache ({active_display_name}: {cached_content_name})...",
@@ -325,16 +331,40 @@ def main():
                         except Exception:
                             parsed_tools = None
 
-                    cache_obj = client.caches.create(
-                        model=model_name,
-                        config=types.CreateCachedContentConfig(
-                            contents=cache_contents,
-                            display_name=display_name,
-                            system_instruction=system_instruction,
-                            tools=parsed_tools,
-                            ttl=cache_ttl,
-                        ),
-                    )
+                    try:
+                        cache_obj = client.caches.create(
+                            model=model_name,
+                            config=types.CreateCachedContentConfig(
+                                contents=cache_contents,
+                                display_name=display_name,
+                                system_instruction=system_instruction,
+                                tools=parsed_tools,
+                                ttl=cache_ttl,
+                            ),
+                        )
+                    except Exception as cache_err:
+                        if codebase_multimodal_parts:
+                            print(
+                                f"Warning: Context cache creation with multimodal attachments failed ({cache_err}). "
+                                "Retrying cache creation with text-only codebase context...",
+                                file=sys.stderr,
+                            )
+                            codebase_multimodal_parts = []
+                            all_multimodal_parts = list(visual_diff_parts)
+                            fingerprint = gr.context_cache_fingerprint(system_instruction, codebase_context)
+                            display_name = f"repo-cache-{clean_repo}-{clean_model}-{clean_persona}-{fingerprint}"
+                            cache_obj = _find_matching_cache(display_name) or client.caches.create(
+                                model=model_name,
+                                config=types.CreateCachedContentConfig(
+                                    contents=codebase_context,
+                                    display_name=display_name,
+                                    system_instruction=system_instruction,
+                                    tools=parsed_tools,
+                                    ttl=cache_ttl,
+                                ),
+                            )
+                        else:
+                            raise
                     cached_content_name = cache_obj.name
                     contents_to_send = (
                         [dynamic_pr_prompt] + visual_diff_parts if visual_diff_parts else dynamic_pr_prompt
@@ -371,31 +401,43 @@ def main():
 
     print("Generating code review...", file=sys.stderr)
 
+    response = None
     try:
-        response = client.models.generate_content(
+        response = gr.generate_content_with_stream_fallback(
+            client,
             model=model_name,
             contents=contents_to_send,
             config=gen_config,
         )
     except Exception as gen_err:
-        err_msg = str(gen_err).lower()
+        last_err: Exception = gen_err
+
+        # Stage 1: If thinking_config is set and error is 400 / invalid_argument / thinking,
+        # retry without thinking_config
+        err_msg = str(last_err).lower()
         if gen_config.thinking_config is not None and (
             "thinking" in err_msg or "400" in err_msg or "invalid_argument" in err_msg
         ):
             print(
-                f"Warning: thinking_config not supported by model '{model_name}' ({gen_err}). "
+                f"Warning: thinking_config not supported by model '{model_name}' ({last_err}). "
                 "Retrying without thinking_config...",
                 file=sys.stderr,
             )
             gen_config.thinking_config = None
-            response = client.models.generate_content(
-                model=model_name,
-                contents=contents_to_send,
-                config=gen_config,
-            )
-        elif cached_content_name:
+            try:
+                response = gr.generate_content_with_stream_fallback(
+                    client,
+                    model=model_name,
+                    contents=contents_to_send,
+                    config=gen_config,
+                )
+            except Exception as err_after_thinking:
+                last_err = err_after_thinking
+
+        # Stage 2: If cached_content was used and request still failed, fall back to direct context
+        if response is None and cached_content_name:
             print(
-                f"Warning: generate_content with cached content failed ({gen_err}). "
+                f"Warning: generate_content with cached content failed ({last_err}). "
                 "Falling back to direct context generation...",
                 file=sys.stderr,
             )
@@ -407,33 +449,37 @@ def main():
                 response_mime_type="application/json",
                 response_schema=gr.ReviewResult,
                 labels=billing_labels,
-                thinking_config=thinking_cfg,
+                thinking_config=gen_config.thinking_config,
             )
             try:
-                response = client.models.generate_content(
+                response = gr.generate_content_with_stream_fallback(
+                    client,
                     model=model_name,
                     contents=contents_to_send,
                     config=gen_config,
                 )
-            except Exception as retry_err:
-                r_err_msg = str(retry_err).lower()
-                if gen_config.thinking_config is not None and (
-                    "thinking" in r_err_msg or "400" in r_err_msg or "invalid_argument" in r_err_msg
-                ):
-                    print(
-                        f"Warning: thinking_config rejected ({retry_err}). Retrying without thinking_config...",
-                        file=sys.stderr,
-                    )
-                    gen_config.thinking_config = None
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=contents_to_send,
-                        config=gen_config,
-                    )
-                else:
-                    raise
-        else:
-            raise
+            except Exception as err_after_cache:
+                last_err = err_after_cache
+
+        # Stage 3: If multimodal parts were attached and request still failed with 400 / invalid_argument,
+        # fall back to text-only
+        err_msg = str(last_err).lower()
+        if response is None and all_multimodal_parts and ("400" in err_msg or "invalid_argument" in err_msg):
+            print(
+                f"Warning: Multimodal review request failed ({last_err}). Falling back to text-only review...",
+                file=sys.stderr,
+            )
+            all_multimodal_parts = []
+            contents_to_send = full_prompt
+            response = gr.generate_content_with_stream_fallback(
+                client,
+                model=model_name,
+                contents=contents_to_send,
+                config=gen_config,
+            )
+
+        if response is None:
+            raise last_err
 
     direct_contents = [full_prompt] + all_multimodal_parts if all_multimodal_parts else full_prompt
     response = gr.resolve_tool_calls_loop(

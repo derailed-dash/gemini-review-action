@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import requests
+import resvg_py
 from google.genai import types
 from PIL import Image
 
@@ -29,6 +30,17 @@ from gemini_review.config import (
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"}
 SUPPORTED_MULTIMODAL_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".pdf"}
 
+# Gemini Vision / Multimodal API strictly rejects image/svg+xml; SVGs must be rasterised to image/png first.
+GEMINI_SUPPORTED_PART_MIMES = {
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+    "image/gif",
+    "image/heic",
+    "image/heif",
+    "application/pdf",
+}
+
 DEFAULT_MAX_TRIAGE_IMAGES = 5
 DEFAULT_MAX_REMOTE_IMAGE_BYTES = 20 * 1024 * 1024  # 20 MB cap per remote image download
 
@@ -40,6 +52,31 @@ _MIME_TO_EXTENSION = {
     "image/gif": ".gif",
     "image/svg+xml": ".svg",
 }
+
+
+def is_gemini_supported_mime(mime: str | None) -> bool:
+    """Return True if the MIME type is directly supported by Gemini Part.from_bytes()."""
+    return bool(mime and mime.lower() in GEMINI_SUPPORTED_PART_MIMES)
+
+
+def rasterize_svg_bytes(data: bytes, filename: str = "") -> bytes | None:
+    """Rasterise SVG XML bytes into PNG bytes in memory using resvg_py.
+
+    Returns PNG bytes on success, or None if the SVG is malformed or cannot be rendered.
+    """
+    if not data:
+        return None
+    try:
+        svg_str = data.decode("utf-8", errors="replace").strip()
+        if "<svg" not in svg_str.lower():
+            return None
+        png_bytes = resvg_py.svg_to_bytes(svg_string=svg_str)
+        if png_bytes and png_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            return png_bytes
+    except Exception as e:
+        label = f" '{filename}'" if filename else ""
+        print(f"Warning: Failed to rasterise SVG{label} to PNG ({e}).", file=sys.stderr)
+    return None
 
 
 def _strip_query_and_fragment(filename: str) -> str:
@@ -110,7 +147,8 @@ def optimize_image_bytes(
 ) -> tuple[bytes, str]:
     """Deterministically downscale and compress raster images exceeding trigger_bytes (~600KB).
 
-    Leaves vector SVGs, PDFs, and images under trigger_bytes intact.
+    Rasterises SVGs to PNG in memory via resvg_py (as Gemini Vision rejects image/svg+xml),
+    and leaves PDFs and raster images under trigger_bytes intact.
     """
     clean_name = _strip_query_and_fragment(filename)
     mime = get_mime_type(clean_name)
@@ -120,7 +158,16 @@ def optimize_image_bytes(
             mime = detected
     _, ext = os.path.splitext(clean_name.lower())
 
-    if len(data) <= trigger_bytes or ext in (".svg", ".pdf") or mime in ("image/svg+xml", "application/pdf"):
+    if ext == ".svg" or mime == "image/svg+xml":
+        png_bytes = rasterize_svg_bytes(data, filename=filename)
+        if png_bytes is not None:
+            data = png_bytes
+            mime = "image/png"
+            ext = ".png"
+        else:
+            return data, "image/svg+xml"
+
+    if len(data) <= trigger_bytes or ext == ".pdf" or mime == "application/pdf":
         return data, mime
 
     try:
@@ -542,6 +589,13 @@ def build_triage_multimodal_parts(
         )
         if final_mime == "application/octet-stream":
             final_mime = fetched_mime
+
+        if not is_gemini_supported_mime(final_mime):
+            print(
+                f"Warning: Skipping remote screenshot '{url}' with unsupported Gemini MIME type '{final_mime}'.",
+                file=sys.stderr,
+            )
+            continue
 
         part = types.Part.from_bytes(data=opt_bytes, mime_type=final_mime)
         parts.append(part)
