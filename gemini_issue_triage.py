@@ -325,13 +325,23 @@ def main():
     result_data = json.loads(result_text)
     triage = TriageResult(**result_data)
 
+    valid_label_set = set(available_labels)
+    unique_selected = list(dict.fromkeys(triage.selected_labels))
+    dropped_labels = [lbl for lbl in unique_selected if lbl not in valid_label_set]
+    if dropped_labels:
+        print(
+            f"Warning: Dropping unrecognised labels not in repository allowlist: {dropped_labels}",
+            file=sys.stderr,
+        )
+    filtered_labels = [lbl for lbl in unique_selected if lbl in valid_label_set]
+
     if is_dry_run:
         print("\n=== DRY RUN TRIAGE RESULTS ===", file=sys.stderr)
         print(f"Issue Title: {issue_title}")
-        print(f"Chosen Labels: {triage.selected_labels}")
+        print(f"Chosen Labels: {filtered_labels}")
         print(f"Reasoning: {triage.reasoning}\n")
     else:
-        apply_labels(repository, issue_number, triage.selected_labels, headers, timeout=timeout)
+        apply_labels(repository, issue_number, filtered_labels, headers, timeout=timeout)
 
 
 if __name__ == "__main__":
