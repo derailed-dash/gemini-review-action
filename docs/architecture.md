@@ -29,7 +29,7 @@ The code review action is organized into a modular Python package (`gemini_revie
 * **`gemini_review/budget.py`**: Token budget allocation and per-file content truncation (`cap_file_content`) to prevent out-of-budget diffs.
 * **`gemini_review/billing_labels.py`**: Google Cloud billing labels parser and sanitisation for GCP cost attribution.
 * **`gemini_review/personas.py`**: Reviewer persona registry and prompt generation (`straight`, `dazbo`, `palpatine`, `rick`).
-* **`gemini_review/pricing.py`**: Gemini model token pricing and cost estimation engine (including Gemini 3.8 Flash).
+* **`gemini_review/pricing.py`**: Gemini model token pricing and cost estimation engine (supporting Gemini 4 Hydrogen, Gemini 4 Argon, and Gemini 3.6–3.8 Flash).
 * **`gemini_review/skills.py`**: Agent skill metadata parser and instruction loader for workspace and built-in skills.
 * **`gemini_review/developer_knowledge.py`**: MCP/RPC integration to search and fetch official Google developer documentation.
 * **`gemini_pr_review.py`**: Main CLI entrypoint script that re-exports all `gemini_review` package APIs and runs the primary review loop.
@@ -63,15 +63,17 @@ To provide Gemini with project-wide awareness, the script traverses the workspac
 
 ### 3. Gemini Context Caching Engine
 
-To drastically reduce API costs and latency for large codebase contexts, `gemini_pr_review.py` incorporates native **Gemini Context Caching**:
+To drastically reduce API costs and latency for large codebase contexts, `gemini_pr_review.py` automatically selects between Gemini 4's implicit prefix caching and Gemini 3's explicit `CachedContent` engine:
 
-* **Threshold Verification**: If the codebase context exceeds 100,000 characters (~32,768 tokens, Gemini's minimum caching requirement), context caching is automatically activated.
-* **Deterministic Active Cache Lookup (`client.caches.list()`)**: Before creating a new cache, the script queries active server-side caches matching the display name `repo-cache-{repo}-{model}-{persona}-{fingerprint}`, where `fingerprint` is a short SHA-256 of the system instruction and the cached context (text and multimodal parts). A cache is therefore only reused by a run that would have created an identical one: a PR whose selected context differs, or a job with different review instructions, creates its own cache instead of being reviewed against another run's files and prompt. It validates that the cache's model matches the requested model, skipping any caches created under a different model version to avoid `INVALID_ARGUMENT` errors.
-* **Stateless Zero-Infrastructure Persistence**: No local state, runner disk storage, or database is required between workflow runs. Active context caches are queried dynamically on Gemini's API servers using the deterministic display name key.
-* **Tenant Isolation & Security**: Context caches are hosted on Google's infrastructure and strictly isolated to your API key / GCP project namespace. No third-party or unauthorized API key can access or view cached context.
-* **Cache Provisioning (`client.caches.create()`)**: If no matching active cache handle for the current model is found, the script provisions a new `CachedContent` resource containing the codebase context, `system_instruction`, and pre-parsed `tools`.
-* **Cost & Multi-Turn Optimisation**: Input tokens billed against the cached handle receive a **90% discount**. Furthermore, multi-turn tool interactions (such as Google Developer Knowledge MCP searches or skill lookups) reference the cached handle without re-billing the codebase context on subsequent turns.
-* **Resilient Fallback**: If context cache creation with multimodal attachments fails, the script automatically retries cache creation with text-only codebase context (while retaining visual PR diff parts on the generation request). If cache creation, lookup, or generation with cached content still fails for any reason, it seamlessly falls back to direct context generation without interrupting the CI review pipeline.
+* **Gemini 4 Automatic Implicit Prefix Caching (`gemini-4-*`, default)**:
+  * **Zero Cache-Management Overhead**: When `gr._normalize_model_name(model_name)` starts with `"gemini-4"`, the script skips `client.caches.list()` and `client.caches.create()` (since Gemini 4 does not use explicit `CachedContent` handles).
+  * **Prefix-Stable Prompt Ordering**: For uncached/direct requests, `gemini_pr_review.py` places static `codebase_context` (and `codebase_multimodal_parts`) *before* `dynamic_pr_prompt` (and `visual_diff_parts`). Because `system_instruction`, `tools`, and `codebase_context` come first, successive PR pushes and multi-turn tool calls retain an identical prefix and automatically receive Gemini 4's **95% cached-input discount** (`0.05x`) on prompts of 4,096+ tokens with no storage fee.
+* **Gemini 3 Explicit `CachedContent` Provisioning & Reuse (`gemini-3.*`)**:
+  * **Threshold Verification**: If the codebase context exceeds 100,000 characters (~32,768 tokens, Gemini's minimum explicit caching requirement), explicit context caching is activated.
+  * **Deterministic Active Cache Lookup (`client.caches.list()`)**: Before creating a new cache, the script queries active server-side caches matching the display name `repo-cache-{repo}-{model}-{persona}-{fingerprint}`, where `fingerprint` is a short SHA-256 of the system instruction and cached context (text and multimodal parts). A cache is therefore only reused by a run that would have created an identical one, and caches created under a different model version are skipped to avoid `INVALID_ARGUMENT` errors.
+  * **Stateless Zero-Infrastructure Persistence & Tenant Isolation**: No local state, runner disk storage, or database is required between workflow runs. Active context caches live on Google's infrastructure and are strictly isolated to your API key / GCP project namespace.
+  * **Cache Provisioning (`client.caches.create()`) & 90% Discount**: If no matching active cache handle exists, the script provisions a new `CachedContent` resource containing `codebase_context`, `system_instruction`, and pre-parsed `tools`. Input tokens billed against the cached handle receive a **90% discount** across both initial generation and multi-turn tool calls.
+  * **Resilient Fallback**: If explicit cache creation with multimodal attachments fails, the script retries cache creation with text-only codebase context (retaining visual PR diff parts on the generation request). If lookup, creation, or generation with `cached_content` still fails, it seamlessly falls back to direct context generation without interrupting the CI review pipeline.
 
 ### 4. PR Comment & Discussion Thread History Engine
 
@@ -159,6 +161,7 @@ The issue triage script automatically categorises and labels new or reopened iss
 * Using structured output, Gemini returns a `TriageResult` containing:
   - `selected_labels`: The subset of repo labels that match the issue.
   - `reasoning`: The explanation for applying those labels.
+* The Gemini client enforces a 300-second minimum HTTP timeout floor (`types.HttpOptions(timeout=max(timeout, 300) * 1000)`), applies model-aware `build_thinking_config()` (clamping unsupported `'off'`/`'minimal'` levels to `'low'` on Gemini 4), and wraps calls in `generate_content_with_stream_fallback()` so connection resets recover via `generate_content_stream`.
 * If multimodal triage fails (for instance, due to an upstream vision error), the script automatically retries with text-only triage (`triage_prompt`).
 
 ### 4. Deterministic Allowlist Filtering & API Label Application
@@ -208,8 +211,8 @@ During the architectural design of this action, I evaluated using Managed Agents
 | :--- | :--- | :--- |
 | **API Primitives** | `client.models.generate_content` + `client.caches` | `client.interactions.create` + `agent_config` |
 | **Execution Environment** | Client-side Python runner on GitHub Runner | Google-hosted cloud Linux sandbox VM |
-| **Codebase Context Strategy** | Native Gemini Context Caching (`CachedContent`) | Repo mounted in VM sandbox via environment sources |
-| **Input Token Pricing** | **90% discount** on cached tokens (>100k chars) | Standard token pricing per interaction turn |
+| **Codebase Context Strategy** | Prefix-stable implicit caching (Gemini 4) + explicit `CachedContent` (Gemini 3) | Repo mounted in VM sandbox via environment sources |
+| **Input Token Pricing** | **90–95% discount** on cached tokens (implicit on Gemini 4; >100k chars explicit on Gemini 3) | Standard token pricing per interaction turn |
 | **Startup Overhead & Latency** | Near-zero (direct token generation) | VM sandbox boot & cold-start latency per job |
 | **State Management** | Stateless single-turn pass per PR commit | Persistent multi-turn sessions (`previous_interaction_id`) |
 | **API Maturity** | GA (General Availability) | Public Preview |
@@ -221,8 +224,8 @@ I selected the **Direct Gemini API + Context Caching** model based on the follow
 1. **Latency & CI Execution Speed**:
    Code review in a CI pipeline requires rapid execution feedback. Managed Agent sandboxes incur non-negligible cold-start boot latency when provisioning remote containers for each workflow trigger. Direct API generation starts producing feedback immediately.
 
-2. **Context Caching Cost Optimisation (90% Input Token Savings)**:
-   For repositories with large codebase contexts (>100,000 characters), my context caching engine creates a server-side `CachedContent` handle that persists across workflow runs. Subsequent PR review runs referencing the cache receive a **90% discount** on cached input tokens. Managed agent environments load context into a remote VM container filesystem, which does not benefit from native `CachedContent` input token discounts.
+2. **Context Caching Cost Optimisation (90–95% Input Token Savings)**:
+   On Gemini 4 models (such as `gemini-4-hydrogen`), placing static `codebase_context` before the dynamic PR diff keeps the prefix invariant across pushes and tool turns so automatic implicit caching delivers a **95% discount** with zero cache management. On Gemini 3 models with large codebase contexts (>100,000 characters), the explicit caching engine creates a server-side `CachedContent` handle that receives a **90% discount** across workflow runs. Managed agent environments load context into a remote VM container filesystem, which does not benefit from these direct-API caching mechanisms.
 
 3. **Appropriate Complexity for CI Workflows**:
    A Pull Request review is inherently a single-turn structured evaluation per git commit. The heavyweight architecture of a persistent Linux VM sandbox container (with mounted tool shims and session state tracking) introduces unnecessary complexity compared to a focused Python execution loop running on the native GitHub Action runner.

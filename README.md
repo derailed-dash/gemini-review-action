@@ -47,7 +47,7 @@ See the supporting blog post about this action [here](https://medium.com/google-
 
 ![Features Overview](assets/features-overview.png)
 
-- **AI-Powered Code Reviews**: Automated, constructive line-specific feedback on Pull Requests using Google Gemini models (Gemini 3.8 Flash by default).
+- **AI-Powered Code Reviews**: Automated, constructive line-specific feedback on Pull Requests using Google Gemini models (Gemini 4 Hydrogen by default).
 - **Automated Issue Triage**: Dynamically labels, prioritises, and triages incoming issues using text descriptions, discussion comments, and attached remote screenshots.
 - **PR Comment & Discussion Thread History**: Automatically retrieves inline review threads and general PR conversation comments, enabling Gemini to track issue resolution, respect developer justifications/disagreements, and avoid repeating resolved suggestions across commits.
 - **Billing Labels for Cost Attribution (Vertex AI only)**: Tags every request with Cloud Billing labels (`component`, `repo`), so spend per repository is a group-by in the billing export rather than a sum of numbers in review comments.
@@ -67,8 +67,8 @@ See the supporting blog post about this action [here](https://medium.com/google-
 - **Reviewer Personas**: Customise the personality, tone, and review style of the agent with pre-built persona overlays (`straight`, `dazbo`, `palpatine`, `rick`).
 - **Google Developer Knowledge Integration**: Automatically queries official Google developer documentation (Google Cloud, Firebase, Android, etc.) via MCP to cross-reference your changes against up-to-date best practices.
 - **On-Demand Agent Skills**: Dynamically discovers and loads project-specific formatting guidelines and coding standards from `.agents/skills` on-demand, keeping prompt contexts lightweight and relevant (bundled with defaults for Google Cloud, Gemini APIs and agentic development).
-- **Gemini Context Caching**: Native, automatic integration with Gemini Context Caching, delivering up to **90% cost reduction** on input tokens for repositories over 32k tokens.
-- **Multi-Turn & Cross-PR Cache Reuse**: Reuses active server-side context cache handles across multi-turn tool/skill calls and successive PR pushes within the TTL window (1h default), eliminating prompt re-tokenisation and server overhead. This is a huge efficiency and cost saving between successive reviews.
+- **Gemini Context Caching**: Automatic integration with Gemini's caching tiers — **95% cost reduction** via automatic implicit prefix caching on Gemini 4 (`gemini-4-*`, ordering static repository context first with zero cache-management overhead), and stateless explicit `CachedContent` (**90% discount**) on Gemini 3 models for repositories over 32k tokens.
+- **Multi-Turn & Cross-PR Cache Reuse**: Keeps `[system_instruction + tools + codebase_context]` as an invariant prefix for Gemini 4 implicit caching, and reuses active server-side explicit cache handles across multi-turn tool/skill calls and successive PR pushes on Gemini 3 within the TTL window (1h default), eliminating redundant prompt re-billing between commits.
 
 ![Leveraing MCP and Skills](/assets/agent_intelligence_diagram.png)
 
@@ -86,7 +86,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 2. **Hybrid Context Enrichment**: In addition to surrounding modified file content, the action gathers context from the rest of the repository. It measures the total size of all other tracked text files:
    - **Full Context Mode**: If the codebase is under the configured size threshold (default: 1.5 MB), the full contents of all other text files are included.
    - **Sparse Context Mode**: If the codebase exceeds the threshold, it includes a structured text-based file tree of the entire project, plus the full contents of key configuration and documentation files (like `*.md`, `pyproject.toml`, `package.json`, `go.mod`, etc.).
-3. **Gemini Context Caching & Multi-Turn Reuse**: For repository contexts exceeding ~32,768 tokens (100,000+ characters), the action automatically checks for an active server-side cache (`repo-cache-{repo}-{model}-{persona}-{fingerprint}`, where the fingerprint hashes the system instruction and the cached context, so only an identical context is reused) via `client.caches.list()`. This mechanism is **completely stateless**—no local databases or runner caches are needed between PR reviews, as active handles are looked up dynamically on Google's API servers. Caches are securely isolated to your API key tenant. Billed input tokens receive a **90% discount**, and subsequent multi-turn tool/skill calls reference the cached context handle without re-billing the codebase context.
+3. **Gemini Context Caching & Multi-Turn Reuse**:
+   - **Gemini 4 (`gemini-4-*`, default)**: Skips explicit `CachedContent` provisioning (which Gemini 4 does not use) and places the static `codebase_context` *before* the dynamic PR diff/comment history. This preserves an invariant prefix across PR pushes and multi-turn tool calls, automatically receiving Gemini 4's **95% implicit cache discount** (on prompts ≥ 4,096 tokens) with zero management or storage overhead.
+   - **Gemini 3 (`gemini-3.*`)**: For repository contexts exceeding ~32,768 tokens (100,000+ characters), the action checks for an active server-side explicit cache (`repo-cache-{repo}-{model}-{persona}-{fingerprint}`, where the fingerprint hashes the system instruction and the cached context, so only an identical context is reused) via `client.caches.list()`. Billed input tokens receive a **90% discount**, and subsequent multi-turn tool/skill calls reference the cached handle without re-billing the codebase context.
 4. **Structured Review Generation**: The action sends the diff and file contexts to Gemini. It uses Gemini's native **Structured Outputs** (`response_schema`) to force the model to respond in a strict JSON format.
 5. **Interactive suggestions**: Change recommendations are wrapped in native GitHub ` ```suggestion ` blocks, allowing reviewers to apply the changes directly on the PR with one click.
 6. **Resilient Comment Posting**: The review is posted atomically via the GitHub Pull Request Review API. If the API call fails (e.g. if the model hallucinates an invalid line number in the diff), the script catches the error and falls back to posting comments individually, ensuring your CI status check stays green while still delivering all valid feedback.
@@ -299,7 +301,7 @@ jobs:
         with:
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          gemini_model: 'gemini-3.8-flash'
+          gemini_model: 'gemini-4-hydrogen'
           language: 'English (UK)'           # Optional (e.g. English (UK), French, Spanish)
           # persona: 'straight'                # Optional: straight (default), dazbo, palpatine, rick
           # timeout: '60'                     # Optional API timeout in seconds
@@ -431,7 +433,7 @@ jobs:
           command: 'triage'        
           gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          gemini_model: 'gemini-3.8-flash'
+          gemini_model: 'gemini-4-hydrogen'
           language: 'English (UK)'           # Optional
 ```
 
@@ -465,7 +467,7 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 | :--- | :--- | :--- | :--- |
 | `gemini_api_key` | Your Gemini Developer API Key (from Google AI Studio). | **Yes** (unless using WIF) | N/A |
 | `github_token` | Repository `GITHUB_TOKEN` (automatically provided by GitHub; no manual secret creation required). | **Yes** | N/A |
-| `gemini_model` | The Gemini model version to target for code review and dynamic context selection. | No | `gemini-3.8-flash` |
+| `gemini_model` | The Gemini model version to target for code review and dynamic context selection. | No | `gemini-4-hydrogen` |
 | `command` | The mode/command to run: `review` (for PR reviews) or `triage` (for issue triaging). | No | `review` |
 | `include_comment_history` | Whether to fetch prior inline review threads and conversation comments from GitHub. | No | `'true'` |
 | `exclude_comment_authors` | Comma-separated GitHub logins whose comments are kept out of the prompt, e.g. `claude[bot]`. Useful when a second automated reviewer posts on the same PRs — see [Excluding another reviewer's comments](#excluding-another-reviewers-comments). | No | `''` |
@@ -474,7 +476,7 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 | `persona` | Reviewer persona overlay (`straight`, `dazbo`, `palpatine`, `rick`). | No | `straight` |
 | `custom_instructions` | Custom instructions or guardrails to extend the review prompt. Can be inline text or a file path in the repository (e.g. `.github/review-instruction-additions.md`). | No | `.github/review-instruction-additions.md` |
 | `skip_inline_suggestions` | Whether to skip automated re-reviews when a commit is created by accepting an inline suggestion via GitHub UI. | No | `'true'` |
-| `thinking_level` | Thinking level or token budget for reasoning models (`low`, `medium`, `high`, `off`, or integer token budget). When omitted, the model's native default thinking behaviour applies. See [Reasoning & Thinking Budget Control](#reasoning--thinking-budget-control). | No | `''` |
+| `thinking_level` | Thinking level for reasoning models (`low`, `medium`, `high`, plus `xhigh` on `gemini-4-hydrogen`; or `off`/integer token budget on Gemini 3/2.5). When omitted, the model's native default thinking behaviour applies. See [Reasoning & Thinking Budget Control](#reasoning--thinking-budget-control). | No | `''` |
 | `max_candidate_files` | Maximum candidate non-core files to present to Dynamic Context Selection in Sparse Mode (default: 500). | No | `500` |
 | `extra_context_files` | Comma-separated list of repository file paths to attach as additional context, bypassing Dynamic Context Selection. | No | `''` |
 | `context_diff_directories_only` | Whether to restrict candidate context files in Sparse Mode strictly to directories containing modified files from the PR diff. | No | `'false'` |
@@ -487,27 +489,25 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 
 ### Reasoning & Thinking Budget Control
 
-When using reasoning models (such as `gemini-2.5-flash` or `gemini-2.5-pro`), Gemini uses internal reasoning ("thinking") tokens to analyse code diffs, architectural implications, and complex issue triage before outputting a response.
+When using reasoning models (such as `gemini-4-hydrogen`, `gemini-4-argon`, `gemini-4-carbon`, or `gemini-3.8-flash`), Gemini uses internal reasoning ("thinking") tokens to analyse code diffs, architectural implications, and complex issue triage before outputting a response.
 
 * **Default Behaviour (when omitted)**:
-  If `thinking_level` is left blank (the default), no thinking configuration override is passed to the Gemini API (`thinking_config=None`). The model's native default behaviour applies:
-  * For reasoning models (e.g. Gemini 2.5), thinking is **enabled dynamically** by default.
-  * For non-reasoning models, the request executes normally without thinking tokens.
-* **Disabling Thinking (`off`)**:
-  To disable reasoning tokens completely—reducing latency and token costs (especially recommended for fast issue triage)—set `thinking_level` to `'off'`, `'false'`, `'disabled'`, or `0`. This explicitly sets `thinking_budget=0`.
-* **Constraining Reasoning**:
-  * **Categorical Levels**: `'low'`, `'medium'`, or `'high'` to guide reasoning depth without hard token caps.
-  * **Explicit Token Budgets**: A positive integer (e.g. `1024`, `2048`, `4096`) capping the maximum reasoning tokens.
+  If `thinking_level` is left blank (the default), no thinking configuration override is passed to the Gemini API (`thinking_config=None`), so the model's native default reasoning behaviour applies dynamically.
+* **Categorical Thinking Levels (Gemini 4 & Gemini 3)**:
+  * **`gemini-4-hydrogen` / `gemini-4-*`**: Supports `'low'`, `'medium'`, `'high'`, plus `'xhigh'` (extra-high) on `gemini-4-hydrogen`. Because Gemini 4 enforces `'low'` as its minimum reasoning level (rejecting `'minimal'` and `thinking_budget=0` with `400 INVALID_ARGUMENT`), setting `'off'`, `'false'`, `'disabled'`, `'minimal'`, or `'0'` on any `gemini-4-*` model automatically logs a warning and clamps to `'low'` upfront.
+  * **Gemini 3 / 2.5**: Supports `'minimal'` (Gemini 3), `'low'`, `'medium'`, and `'high'`.
+* **Disabling Thinking or Explicit Token Budgets (Gemini 3 / 2.5 only)**:
+  * Set `thinking_level` to `'off'`, `'false'`, `'disabled'`, or `0` to pass `thinking_budget=0` on models that support disabling thinking (such as Gemini 3 / 2.5).
+  * Set a positive integer (e.g. `1024`, `2048`, `4096`) to cap `thinking_budget` on legacy models that accept explicit token budgets.
 
 Thinking token usage and its associated cost are tracked and reported separately in the comment telemetry summary alongside prompt and candidate tokens (priced at the model's standard output rate), allowing you to monitor reasoning overhead and costs accurately.
 
 ```yaml
         with:
-          # Turn off thinking for fast, lightweight issue triage
-          thinking_level: 'off'
-          # Or set a lightweight thinking level or token budget for PR reviews
-          # thinking_level: 'low'
-          # thinking_level: '2048'
+          # Recommended lightweight thinking level for fast issue triage or quick reviews on Gemini 4
+          thinking_level: 'low'
+          # Or choose 'medium', 'high', or 'xhigh' (on gemini-4-hydrogen) for deeper architectural analysis
+          # thinking_level: 'high'
 ```
 
 ### Codebase Context Configuration
@@ -675,35 +675,35 @@ Whenever a review run finishes, the action provides token telemetry in two place
    | **Thinking / Reasoning Tokens** | 2,048 |
    | **Output Tokens** | 210 |
    | **Total Session Tokens** | **268,107** |
-   | **Cost (uncached input)** | $0.0108 |
+   | **Cost (uncached input)** | $0.0223 |
    | **Cost (cached input)** | $0.0188 |
-   | **Cost (thinking / reasoning)** | $0.0077 |
-   | **Cost (response output)** | $0.0008 |
-   | **Estimated Total Cost** | **$0.0381** |
+   | **Cost (thinking / reasoning)** | $0.0154 |
+   | **Cost (response output)** | $0.0016 |
+   | **Estimated Total Cost** | **$0.0581** |
 
-   > Gemini 3.8 Flash: introductory rate $0.75/$3.75 per 1M applied; reverts to $1.5/$7.5 after 2026-12-31.
-   > Context-cache STORAGE is billed per token-hour and is not reported here, so the figure runs slightly low on repositories reviewed infrequently.
+   > Gemini 4 Hydrogen: standard tier, global endpoint; regional endpoints are 10% higher.
+   > Cache reads are priced here, but context-cache STORAGE, where the model charges for it separately per token-hour, is not included, so the figure can run slightly low.
 
    </details>
 
 2. **Workflow Execution Logs**: A concise single-line token summary log printed to the runner `stderr`:
 
 ```text
-Token Usage: 14,414 input tokens (94.4% cached), 2,048 thinking tokens, 210 output tokens. Total: 268,107 tokens. Estimated cost: $0.0381.
+Token Usage: 265,849 input tokens (94.4% cached), 210 output tokens, 2,048 thinking tokens. Total: 268,107 tokens. Estimated cost: $0.0581.
 ```
 
 ### Metrics Explained
 
 * **Total Input (Prompt) Tokens**: The total size (in LLM tokens) of the context sent to Gemini (full repository codebase files, system instructions, PR comment history, and PR diff patch).
-* **Cached Context Tokens (`├── Cached Context Tokens`)**: The portion of input tokens stored in Gemini's server-side context cache. Context caching applies **exclusively to input tokens**, providing an **automatic 90% rate discount** on cached input tokens.
+* **Cached Context Tokens (`├── Cached Context Tokens`)**: The portion of input tokens hitting Gemini's context cache. Context caching applies **exclusively to input tokens**, delivering a **95% discount** (`0.05x`) via automatic implicit prefix caching on Gemini 4 models (`gemini-4-hydrogen`, `gemini-4-argon`), and a **90% discount** (`0.1x`) via explicit `CachedContent` handles on Gemini 3 models.
 * **PR Comments History Tokens (`├── PR Comments History Tokens`)**: The exact token count consumed by historical inline review threads and conversation comments fetched via the GitHub API and included in the dynamic review context.
 * **Un-cached Fresh Tokens (`└── Un-cached Fresh Tokens`)**: The newly introduced PR diff lines and dynamic skill instructions, billed at standard input rates.
-* **Thinking / Reasoning Tokens**: The internal reasoning tokens consumed by thinking models (such as Gemini 2.5) while evaluating complex logic and diffs.
+* **Thinking / Reasoning Tokens**: The internal reasoning tokens consumed by Gemini reasoning models (e.g. `gemini-4-hydrogen`) while evaluating complex logic and diffs.
 * **Output Tokens**: The final structured review tokens (markdown comments and suggestions) returned by the model.
 * **Cost (thinking / reasoning) & Cost (response output)**: Under the Google Gemini API pricing model, reasoning/thinking tokens are billed at the **standard output rate** (`rate.output`). Whenever thinking tokens are generated, the cost report transparently splits out the cost of reasoning from the cost of final response candidates, giving you full visibility into the cost impact of your chosen `thinking_level`.
 * **Total Session Tokens**: The combined total of prompt, thinking, and candidate output tokens processed during the review.
 * **Estimated Total Cost**: The token counts above priced at the model's published rate. **A model with no entry in the rate table reports tokens and no cost** rather than borrowing another model's rate, because a missing number is obvious and a wrong one is not. Where a model has a time-boxed introductory rate, the end date is part of the table, so the figure stays correct on both sides of it and a note says which rate was applied.
-* **Cost caveats**: Rendered as quoted lines under the table rather than left to documentation — the introductory-rate note, and the fact that context-cache **storage** (billed per token-hour) is not counted, so the estimate runs slightly low.
+* **Cost caveats**: Rendered as quoted lines under the table rather than left to documentation — any introductory-rate or regional-tier note, plus the fact that context-cache **storage** (where a model charges for explicit storage per token-hour) is not counted, so estimates can run slightly low on infrequently reviewed explicit-cache runs.
 
 ## How It Works
 
@@ -785,7 +785,7 @@ jobs:
           GOOGLE_CLOUD_LOCATION: "global" # Or your preferred model endpoint region
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          gemini_model: 'gemini-3.8-flash'
+          gemini_model: 'gemini-4-hydrogen'
 ```
 
 > [!NOTE]
@@ -998,20 +998,21 @@ For a typical repository with **0.5 MB (~500 KB)** of tracked text files running
 | **Input Tokens** | ~130,000 – 140,000 tokens | ~125,000 tokens for 0.5 MB repo context + ~10,000 tokens for PR diff & system prompt. |
 | **Output Tokens** | ~500 – 1,500 tokens | Structured JSON review summary & line recommendations. |
 
-Rates for **`gemini-3.8-flash`** (and **`gemini-3.7-flash`**), which the action now applies for you and prints in the review:
-* **Input**: **$0.75** per 1,000,000 tokens (uncached) — introductory rate through **2026-12-31**, then $1.50
-* **Output**: **$3.75** per 1,000,000 tokens — then $7.50
-* **Cached input**: 0.1x the input rate
+Rates for **`gemini-4-hydrogen`** (default), which the action applies automatically and prints in the review:
+* **Input**: **$1.50** per 1,000,000 tokens (uncached)
+* **Output**: **$7.50** per 1,000,000 tokens (includes response candidates and reasoning tokens)
+* **Cached input**: **0.05x** the input rate (**$0.075** per 1,000,000 tokens — automatic **95% discount** via implicit prefix caching)
 
-**`gemini-4-argon`** is priced too: **$2.00 / $10.00** per 1M input / output through **2026-11-30** (Google pays this promo as a 50% credit back), then **$4.00 / $20.00**. Cached input is 0.05x the input rate. Rates are for the global endpoint; regional endpoints are 10% higher.
+Other supported models in the built-in rate table:
+* **`gemini-4-argon`**: **$2.00 / $10.00** per 1M input / output through **2026-11-30** (Google pays this promo as a 50% credit back), then **$4.00 / $20.00**. Cached input is `0.05x` the input rate. Rates are for the global endpoint; regional endpoints are 10% higher.
+* **`gemini-3.8-flash`** / **`gemini-3.7-flash`**: **$0.75 / $3.75** per 1M introductory rate through **2026-12-31**, then **$1.50 / $7.50**. Cached input is `0.1x` the input rate.
 
-**Calculated Cost Per PR Review** (at today's introductory rate):
-* **Input Cost**: 140,000 x ($0.75 / 1,000,000) = **$0.105**
-* **Output Cost**: 1,500 x ($3.75 / 1,000,000) = **$0.006**
-* **Total Estimated Cost**: **~$0.11 per PR review**, doubling to ~$0.22 once the introductory rate lapses
+**Calculated Cost Per PR Review** (`gemini-4-hydrogen`, uncached baseline):
+* **Input Cost**: 140,000 x ($1.50 / 1,000,000) = **$0.21**
+* **Output Cost**: 1,500 x ($7.50 / 1,000,000) = **$0.011**
+* **Total Estimated Cost (uncached)**: **~$0.22 per PR review**
 
-Since most input tokens will be cached, the actual cost is typically far lower again — a real review of a
-~4 MB repository in Sparse Context Mode with 85% cache hits came in at **$0.02**.
+Because Gemini 4 places the static repository context before the PR diff to lock in an invariant prompt prefix, repeated commits and reviews on a PR benefit from **95% cheaper cached reads** (`$0.075` / 1M tokens) — bringing typical cached runs down to **$0.01–$0.05** per review.
 
 ### Billing labels (Vertex AI only)
 
