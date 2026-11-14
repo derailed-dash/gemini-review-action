@@ -28,6 +28,7 @@ from gemini_review import (
     extract_response_text_or_raise,
     fetch_remote_image,
     filter_comment_authors,
+    generate_content_with_stream_fallback,
     get_default_model,
     parse_excluded_authors,
 )
@@ -239,16 +240,17 @@ def main():
         print("No repository labels found. Exiting.", file=sys.stderr)
         sys.exit(0)
 
-    # Initialise Gemini client
+    # Initialise Gemini client (HttpOptions.timeout is in milliseconds; enforce a 300s minimum floor)
+    http_options = types.HttpOptions(timeout=max(timeout, 300) * 1000)
     if use_vertexai:
         print(f"Initialising GenAI Client (Model: {model_name}) using Vertex AI authentication...", file=sys.stderr)
-        client = genai.Client(vertexai=True, project=project, location=location)
+        client = genai.Client(vertexai=True, project=project, location=location, http_options=http_options)
     else:
         print(
             f"Initialising GenAI Client (Model: {model_name}) using Google AI Studio API Key authentication...",
             file=sys.stderr,
         )
-        client = genai.Client(api_key=gemini_api_key)
+        client = genai.Client(api_key=gemini_api_key, http_options=http_options)
 
     triage_prompt = load_triage_prompt(issue_title, issue_body, available_labels, issue_comments=issue_comments)
 
@@ -263,7 +265,7 @@ def main():
     triage_contents: Any = [triage_prompt] + multimodal_parts if multimodal_parts else triage_prompt
 
     thinking_level = os.environ.get("GEMINI_THINKING_LEVEL")
-    thinking_cfg = build_thinking_config(thinking_level)
+    thinking_cfg = build_thinking_config(thinking_level, model=model_name)
 
     triage_config = types.GenerateContentConfig(
         response_mime_type="application/json",
@@ -273,7 +275,8 @@ def main():
 
     print("Running issue triage classification...", file=sys.stderr)
     try:
-        response = client.models.generate_content(
+        response = generate_content_with_stream_fallback(
+            client,
             model=model_name,
             contents=triage_contents,
             config=triage_config,
@@ -290,7 +293,8 @@ def main():
             )
             triage_config.thinking_config = None
             try:
-                response = client.models.generate_content(
+                response = generate_content_with_stream_fallback(
+                    client,
                     model=model_name,
                     contents=triage_contents,
                     config=triage_config,
@@ -301,7 +305,8 @@ def main():
                         f"Warning: Multimodal triage failed ({retry_err}). Falling back to text-only triage...",
                         file=sys.stderr,
                     )
-                    response = client.models.generate_content(
+                    response = generate_content_with_stream_fallback(
+                        client,
                         model=model_name,
                         contents=triage_prompt,
                         config=triage_config,
@@ -313,7 +318,8 @@ def main():
                 f"Warning: Multimodal triage failed ({gen_err}). Falling back to text-only triage...",
                 file=sys.stderr,
             )
-            response = client.models.generate_content(
+            response = generate_content_with_stream_fallback(
+                client,
                 model=model_name,
                 contents=triage_prompt,
                 config=triage_config,

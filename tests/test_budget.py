@@ -68,10 +68,14 @@ class TestCapFileContent:
 
 class TestLimits:
     def test_a_known_model_uses_its_published_window(self):
+        assert input_token_limit("gemini-4-hydrogen") == 1_048_576
+        assert input_token_limit("gemini-4-argon") == 1_048_576
+        assert input_token_limit("gemini-4-carbon") == 1_048_576
         assert input_token_limit("gemini-3.8-flash") == 1_048_576
         assert input_token_limit("gemini-3.7-flash") == 1_048_576
 
     def test_a_prefixed_model_id_resolves(self):
+        assert input_token_limit("publishers/google/models/GEMINI-4-HYDROGEN") == 1_048_576
         assert input_token_limit("publishers/google/models/GEMINI-3.8-FLASH") == 1_048_576
         assert input_token_limit("publishers/google/models/GEMINI-3.7-FLASH") == 1_048_576
 
@@ -81,6 +85,7 @@ class TestLimits:
     def test_the_budget_leaves_headroom_below_the_window(self):
         """The count is taken on the prompt; the request also carries system instruction,
         tools and the response schema, none of which are in it."""
+        assert prompt_token_budget("gemini-4-hydrogen") == int(1_048_576 * 0.90)
         assert prompt_token_budget("gemini-3.7-flash") < input_token_limit("gemini-3.7-flash")
 
     def test_config_can_override_the_budget(self):

@@ -27,7 +27,7 @@ inputs:
   gemini_model:
     description: 'Gemini model to use'
     required: false
-    default: 'gemini-3.8-flash'
+    default: 'gemini-4-hydrogen'
   command:
     description: 'Command to run (review, triage)'
     required: false
@@ -86,7 +86,7 @@ inputs:
     required: false
     default: '.github/review-instruction-additions.md'
   thinking_level:
-    description: 'Thinking / reasoning level for Gemini models (e.g. low, high, none, or numeric budget). Controls reasoning token output.'
+    description: 'Thinking / reasoning level for Gemini models (e.g. low, medium, high, xhigh, none, or numeric budget on Gemini 3/2.5). Controls reasoning token output.'
     required: false
     default: ''
   max_candidate_files:

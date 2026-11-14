@@ -149,6 +149,35 @@ class TestGemini38Flash:
         assert after.total == pytest.approx(1.50)
 
 
+class TestGemini4Hydrogen:
+    """Hydrogen has flat pricing ($1.50/$7.50) and 0.05x cached input (95% discount)."""
+
+    def test_a_usage_record_is_priced_correctly(self):
+        # 100k uncached in ($0.15), 900k cached in at 0.05x = $0.075/1M ($0.0675),
+        # 2k response + 3k thinking out at $7.50/1M ($0.015 + $0.0225 = $0.0375) -> $0.255.
+        record = {**usage(fresh=100_000, cached=900_000, output=2_000), "thoughts_tokens": 3_000}
+        cost = estimate_cost(record, "gemini-4-hydrogen", today=date(2026, 11, 14))
+        assert cost.rate is not None, "an unpriced model reports tokens and no cost"
+        assert cost.uncached_input == pytest.approx(0.15)
+        assert cost.cached_input == pytest.approx(0.0675)
+        assert cost.thinking == pytest.approx(0.0225)
+        assert cost.candidates_output == pytest.approx(0.015)
+        assert cost.output == pytest.approx(0.0375)
+        assert cost.total == pytest.approx(0.255)
+
+    def test_has_no_introductory_promo_and_is_flat_across_dates(self):
+        early = estimate_cost(usage(fresh=1_000_000, cached=1_000_000), "gemini-4-hydrogen", today=date(2026, 11, 14))
+        later = estimate_cost(usage(fresh=1_000_000, cached=1_000_000), "gemini-4-hydrogen", today=date(2027, 2, 1))
+        assert early.total == pytest.approx(1.50 + 0.075)
+        assert later.total == pytest.approx(early.total)
+        assert not any("introductory rate" in c for c in early.caveats)
+
+    def test_vertex_model_path_resolves(self):
+        vertex_id = "publishers/google/models/gemini-4-hydrogen"
+        cost = estimate_cost(usage(output=1_000_000), vertex_id, today=date(2026, 11, 14))
+        assert cost.total == pytest.approx(7.50)
+
+
 class TestGemini4Argon:
     """Argon's promo ends a month before the Flash one, and its cache reads are 0.05x, not 0.1x."""
 

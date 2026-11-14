@@ -232,8 +232,10 @@ def main():
         multimodal_parts=codebase_multimodal_parts,
     )
 
-    full_prompt = f"{dynamic_pr_prompt}\n\n{codebase_context}" if codebase_context else dynamic_pr_prompt
-    all_multimodal_parts = visual_diff_parts + codebase_multimodal_parts
+    # Place static repository context first so uncached requests keep an invariant prefix for
+    # Gemini 4 automatic implicit prefix caching across pushes.
+    full_prompt = f"{codebase_context}\n\n{dynamic_pr_prompt}" if codebase_context else dynamic_pr_prompt
+    all_multimodal_parts = codebase_multimodal_parts + visual_diff_parts
     contents_to_send: Any = [full_prompt] + all_multimodal_parts if all_multimodal_parts else full_prompt
 
     # Backstop. Per-file caps stop ONE huge file taking the review down; they cannot stop
@@ -267,8 +269,15 @@ def main():
     cache_ttl = f"{cache_ttl_seconds}s"
 
     cached_content_name = None
+    is_gemini_4 = gr._normalize_model_name(model_name).startswith("gemini-4")
 
-    if enable_caching and hasattr(client, "caches") and codebase_context:
+    if enable_caching and is_gemini_4 and codebase_context:
+        print(
+            f"Skipping explicit context cache creation for '{model_name}' "
+            "(Gemini 4 uses automatic implicit prefix caching).",
+            file=sys.stderr,
+        )
+    elif enable_caching and hasattr(client, "caches") and codebase_context:
         try:
             # Gemini Context Caching requires minimum 32,768 tokens (approx 100,000+ characters)
             if len(codebase_context) > 100000:
@@ -379,7 +388,7 @@ def main():
             contents_to_send = [full_prompt] + all_multimodal_parts if all_multimodal_parts else full_prompt
 
     thinking_level = config.get("thinking_level") or os.environ.get("GEMINI_THINKING_LEVEL")
-    thinking_cfg = gr.build_thinking_config(thinking_level)
+    thinking_cfg = gr.build_thinking_config(thinking_level, model=model_name)
 
     if cached_content_name:
         gen_config = types.GenerateContentConfig(

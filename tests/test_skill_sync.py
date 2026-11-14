@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from gemini_review.config import DEFAULT_MODEL
 from gemini_review.personas import (
     PERSONA_DAZBO,
     PERSONA_PALPATINE,
@@ -76,4 +77,32 @@ def test_install_skill_documents_all_personas() -> None:
     assert not missing_personas, (
         f"The following personas are missing from {SKILL_MD_PATH.relative_to(REPO_ROOT)}: "
         f"{missing_personas}. Please update SKILL.md (and sync to derailed-dash/dazbo-agent-skills)."
+    )
+
+
+def test_install_skill_matches_action_default_model() -> None:
+    """Verify gemini_model default in action.yml matches DEFAULT_MODEL and SKILL.md."""
+    action_yml_text = ACTION_YML_PATH.read_text(encoding="utf-8")
+    match = re.search(
+        r"^  gemini_model:\s*\n(?:    [^\n]+\n)*?    default:\s*['\"]?([^'\"\n]+)['\"]?\s*$",
+        action_yml_text,
+        re.MULTILINE,
+    )
+    assert match is not None, "Could not find default under gemini_model in action.yml"
+    action_default_model = match.group(1).strip()
+    assert action_default_model == DEFAULT_MODEL, (
+        f"action.yml gemini_model default ({action_default_model!r}) != DEFAULT_MODEL ({DEFAULT_MODEL!r})"
+    )
+
+    skill_content = SKILL_MD_PATH.read_text(encoding="utf-8")
+    row_match = re.search(
+        r"^\|\s*`gemini_model`\s*\|[^|]+\|\s*`['\"]?([^'\"`|]+)['\"]?`\s*\|",
+        skill_content,
+        re.MULTILINE,
+    )
+    assert row_match is not None, "Could not find gemini_model row in Action Input Reference table of SKILL.md"
+    skill_default_model = row_match.group(1).strip()
+    assert skill_default_model == DEFAULT_MODEL, (
+        f"SKILL.md Action Input Reference gemini_model default ({skill_default_model!r}) != "
+        f"DEFAULT_MODEL ({DEFAULT_MODEL!r}). Please update SKILL.md (and sync to derailed-dash/dazbo-agent-skills)."
     )

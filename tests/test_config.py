@@ -9,9 +9,9 @@ from gemini_review.config import DEFAULT_MODEL, DEFAULT_TIMEOUT, get_default_mod
 
 
 class TestConfigAndModelResolution:
-    def test_default_model_is_gemini_38_flash(self):
-        """Verify the repository default model is gemini-3.8-flash."""
-        assert DEFAULT_MODEL == "gemini-3.8-flash"
+    def test_default_model_is_gemini_4_hydrogen(self):
+        """Verify the repository default model is gemini-4-hydrogen."""
+        assert DEFAULT_MODEL == "gemini-4-hydrogen"
 
     def test_default_timeout_is_positive(self):
         """Verify the default timeout constant is set."""

@@ -92,7 +92,7 @@ def select_dynamic_context_files(
     eff_thinking_level = (
         thinking_level if thinking_level is not None else (os.environ.get("GEMINI_THINKING_LEVEL") or "low")
     )
-    thinking_cfg = build_thinking_config(eff_thinking_level)
+    thinking_cfg = build_thinking_config(eff_thinking_level, model=model)
 
     try:
         print(
@@ -103,7 +103,6 @@ def select_dynamic_context_files(
         gen_config = types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=DynamicContextSelection,
-            temperature=0.0,
             thinking_config=thinking_cfg,
         )
 

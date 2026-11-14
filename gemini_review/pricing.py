@@ -59,6 +59,15 @@ class Rate:
 # Keys are matched after normalising the model id (see `_normalise`), so
 # "models/gemini-3.8-flash" and "publishers/google/models/gemini-3.8-flash" both resolve.
 RATES: dict[str, Rate] = {
+    "gemini-4-hydrogen": Rate(
+        input=1.50,
+        output=7.50,
+        label="Gemini 4 Hydrogen",
+        # Cached input is $0.075 against $1.50, i.e. 0.05x (95% implicit cache discount),
+        # half the Flash multiplier. Leaving it on the 0.1x default would double every cache read.
+        cache_read=0.05,
+        note="standard tier, global endpoint; regional endpoints are 10% higher",
+    ),
     "gemini-4-argon": Rate(
         input=4.00,
         output=20.00,

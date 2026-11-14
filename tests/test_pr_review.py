@@ -637,10 +637,10 @@ def _setup_dry_run_main(mocker, extra_env: dict[str, str] | None = None, clear_e
 
 
 def test_context_caching_logic(mocker):
-    """Test that context caching creates a cache when prompt is large enough."""
+    """Test that context caching creates a cache on Gemini 3 when prompt is large enough."""
     from gemini_pr_review import main
 
-    mock_client, _ = _setup_dry_run_main(mocker)
+    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_MODEL": "gemini-3.8-flash"})
     mock_client.caches.create.return_value = mocker.Mock(name="cachedContents/test-cache-123")
     mock_client.caches.create.return_value.name = "cachedContents/test-cache-123"
 
@@ -657,11 +657,13 @@ def test_context_caching_reuse_existing_cache(mocker):
     """Test that existing active cache is reused without calling caches.create."""
     from gemini_pr_review import main
 
-    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_PERSONA": "straight"}, clear_env=True)
+    mock_client, _ = _setup_dry_run_main(
+        mocker, {"GEMINI_MODEL": "gemini-3.8-flash", "GEMINI_PERSONA": "straight"}, clear_env=True
+    )
     mocker.patch("gemini_review.context_cache_fingerprint", return_value="fp0123456789")
     existing_cache = mocker.Mock(
-        display_name=f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-straight-fp0123456789",
-        model=DEFAULT_MODEL,
+        display_name="repo-cache-test-owner-test-repo-gemini-3.8-flash-straight-fp0123456789",
+        model="gemini-3.8-flash",
     )
     existing_cache.name = "cachedContents/existing-cache-456"
     mock_client.caches.list.return_value = [existing_cache]
@@ -679,7 +681,7 @@ def test_context_caching_model_mismatch_skips_cache(mocker):
     """Test that an active cache for a different model is skipped and a new cache is created."""
     from gemini_pr_review import main
 
-    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_MODEL": DEFAULT_MODEL})
+    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_MODEL": "gemini-3.8-flash"})
     existing_cache = mocker.Mock(display_name="repo-cache-test-owner-test-repo", model="models/gemini-3.5-flash")
     existing_cache.name = "cachedContents/old-model-cache-789"
     mock_client.caches.list.return_value = [existing_cache]
@@ -692,8 +694,8 @@ def test_context_caching_model_mismatch_skips_cache(mocker):
 
     assert mock_client.caches.create.called
     create_call_args = mock_client.caches.create.call_args
-    assert create_call_args.kwargs["model"] == DEFAULT_MODEL
-    assert f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}" in create_call_args.kwargs["config"].display_name
+    assert create_call_args.kwargs["model"] == "gemini-3.8-flash"
+    assert "repo-cache-test-owner-test-repo-gemini-3.8-flash" in create_call_args.kwargs["config"].display_name
     assert (
         mock_client.models.generate_content.call_args.kwargs["config"].cached_content
         == "cachedContents/new-model-cache-101"
@@ -705,12 +707,12 @@ def test_context_caching_persona_mismatch_skips_cache(mocker):
     from gemini_pr_review import main
 
     mock_client, _ = _setup_dry_run_main(
-        mocker, {"GEMINI_MODEL": DEFAULT_MODEL, "GEMINI_PERSONA": "rick"}, clear_env=True
+        mocker, {"GEMINI_MODEL": "gemini-3.8-flash", "GEMINI_PERSONA": "rick"}, clear_env=True
     )
     mocker.patch("gemini_review.context_cache_fingerprint", return_value="fp0123456789")
     existing_cache = mocker.Mock(
-        display_name=f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-dazbo-fp0123456789",
-        model=DEFAULT_MODEL,
+        display_name="repo-cache-test-owner-test-repo-gemini-3.8-flash-dazbo-fp0123456789",
+        model="gemini-3.8-flash",
     )
     existing_cache.name = "cachedContents/old-dazbo-cache-123"
     mock_client.caches.list.return_value = [existing_cache]
@@ -725,7 +727,7 @@ def test_context_caching_persona_mismatch_skips_cache(mocker):
     create_call_args = mock_client.caches.create.call_args
     assert (
         create_call_args.kwargs["config"].display_name
-        == f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-rick-fp0123456789"
+        == "repo-cache-test-owner-test-repo-gemini-3.8-flash-rick-fp0123456789"
     )
     assert (
         mock_client.models.generate_content.call_args.kwargs["config"].cached_content
@@ -747,8 +749,8 @@ def _created_cache_name(mocker, mock_client) -> str:
     return display_name
 
 
-def _live_cache(mocker, display_name: str):
-    cache = mocker.Mock(display_name=display_name, model=DEFAULT_MODEL)
+def _live_cache(mocker, display_name: str, model: str = "gemini-3.8-flash"):
+    cache = mocker.Mock(display_name=display_name, model=model)
     cache.name = "cachedContents/first-run"
     return cache
 
@@ -757,7 +759,9 @@ def test_context_caching_reuses_cache_for_identical_context(mocker):
     """A second run with the same instruction and context reuses the first run's cache."""
     from gemini_pr_review import main
 
-    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_PERSONA": "straight"}, clear_env=True)
+    mock_client, _ = _setup_dry_run_main(
+        mocker, {"GEMINI_MODEL": "gemini-3.8-flash", "GEMINI_PERSONA": "straight"}, clear_env=True
+    )
     display_name = _created_cache_name(mocker, mock_client)
     mock_client.caches.list.return_value = [_live_cache(mocker, display_name)]
 
@@ -771,7 +775,9 @@ def test_context_caching_different_context_skips_cache(mocker):
     """A PR whose selected context differs must not be reviewed against another PR's cached files."""
     from gemini_pr_review import main
 
-    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_PERSONA": "straight"}, clear_env=True)
+    mock_client, _ = _setup_dry_run_main(
+        mocker, {"GEMINI_MODEL": "gemini-3.8-flash", "GEMINI_PERSONA": "straight"}, clear_env=True
+    )
     first_name = _created_cache_name(mocker, mock_client)
     mock_client.caches.list.return_value = [_live_cache(mocker, first_name)]
     mocker.patch("gemini_review.get_file_content", return_value="b" * 120000)
@@ -786,7 +792,9 @@ def test_context_caching_different_instructions_skips_cache(mocker):
     """A job with different review instructions must not reuse another job's cached system instruction."""
     from gemini_pr_review import main
 
-    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_PERSONA": "straight"}, clear_env=True)
+    mock_client, _ = _setup_dry_run_main(
+        mocker, {"GEMINI_MODEL": "gemini-3.8-flash", "GEMINI_PERSONA": "straight"}, clear_env=True
+    )
     first_name = _created_cache_name(mocker, mock_client)
     mock_client.caches.list.return_value = [_live_cache(mocker, first_name)]
     mocker.patch(
@@ -804,9 +812,11 @@ def test_context_caching_ignores_unhashed_legacy_cache(mocker):
     """A live cache named by an earlier release (no fingerprint) is never reused."""
     from gemini_pr_review import main
 
-    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_PERSONA": "straight"}, clear_env=True)
+    mock_client, _ = _setup_dry_run_main(
+        mocker, {"GEMINI_MODEL": "gemini-3.8-flash", "GEMINI_PERSONA": "straight"}, clear_env=True
+    )
     mock_client.caches.list.return_value = [
-        _live_cache(mocker, f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-straight")
+        _live_cache(mocker, "repo-cache-test-owner-test-repo-gemini-3.8-flash-straight")
     ]
     created = mocker.Mock()
     created.name = "cachedContents/fresh"
@@ -840,11 +850,13 @@ def test_context_caching_generate_content_fallback(mocker):
     """Test that if generate_content with cached_content fails, it falls back to direct context."""
     from gemini_pr_review import main
 
-    mock_client, mock_response = _setup_dry_run_main(mocker, {"GEMINI_PERSONA": "straight"}, clear_env=True)
+    mock_client, mock_response = _setup_dry_run_main(
+        mocker, {"GEMINI_MODEL": "gemini-3.8-flash", "GEMINI_PERSONA": "straight"}, clear_env=True
+    )
     mocker.patch("gemini_review.context_cache_fingerprint", return_value="fp0123456789")
     existing_cache = mocker.Mock(
-        display_name=f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-straight-fp0123456789",
-        model=DEFAULT_MODEL,
+        display_name="repo-cache-test-owner-test-repo-gemini-3.8-flash-straight-fp0123456789",
+        model="gemini-3.8-flash",
     )
     existing_cache.name = "cachedContents/invalid-cache-999"
     mock_client.caches.list.return_value = [existing_cache]
@@ -859,6 +871,41 @@ def test_context_caching_generate_content_fallback(mocker):
     first_call_args, second_call_args = mock_client.models.generate_content.call_args_list
     assert first_call_args.kwargs["config"].cached_content == "cachedContents/invalid-cache-999"
     assert second_call_args.kwargs["config"].cached_content is None
+
+
+@pytest.mark.parametrize(
+    "extra_env",
+    [{}, {"GEMINI_MODEL": "publishers/google/models/gemini-4-argon"}],
+)
+def test_gemini_4_skips_explicit_context_caching(mocker, capsys, extra_env):
+    """Gemini 4 models use implicit prefix caching and must skip caches.list() and caches.create()."""
+    from gemini_pr_review import main
+
+    mock_client, _ = _setup_dry_run_main(mocker, extra_env, clear_env=True)
+
+    main()
+
+    assert not mock_client.caches.list.called
+    assert not mock_client.caches.create.called
+    gen_config = mock_client.models.generate_content.call_args.kwargs["config"]
+    assert gen_config.cached_content is None
+    assert "Skipping explicit context cache creation" in capsys.readouterr().err
+
+
+def test_uncached_prompt_places_codebase_context_before_dynamic_diff(mocker):
+    """Uncached prompts place static codebase_context before dynamic PR diff for implicit prefix caching."""
+    from gemini_pr_review import main
+
+    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_MODEL": "gemini-4-hydrogen"}, clear_env=True)
+    mocker.patch("gemini_review.build_codebase_context", return_value="STATIC_REPO_CONTEXT_MARKER")
+
+    main()
+
+    sent_contents = mock_client.models.generate_content.call_args.kwargs["contents"]
+    assert isinstance(sent_contents, str)
+    assert "STATIC_REPO_CONTEXT_MARKER" in sent_contents
+    assert "large.py" in sent_contents
+    assert sent_contents.index("STATIC_REPO_CONTEXT_MARKER") < sent_contents.index("large.py")
 
 
 def test_normalize_model_name():
@@ -1567,6 +1614,7 @@ def test_select_dynamic_context_files_success(mocker):
     call_args = mock_client.models.generate_content.call_args
     assert call_args.kwargs["model"] == DEFAULT_MODEL
     assert call_args.kwargs["config"].response_schema == DynamicContextSelection
+    assert call_args.kwargs["config"].temperature is None
 
 
 def test_select_dynamic_context_files_filters_hallucinated_files(mocker):
@@ -1730,7 +1778,7 @@ def test_main_resolves_function_call_response_and_produces_review(mocker):
 
     from gemini_pr_review import main
 
-    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_MODEL": DEFAULT_MODEL}, clear_env=True)
+    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_MODEL": "gemini-3.8-flash"}, clear_env=True)
     mock_skills = mocker.patch(
         "gemini_review.list_available_skills",
         return_value=[{"id": "builtin:test/SKILL.md", "name": "Test Skill", "description": "Test desc"}],
@@ -1739,8 +1787,8 @@ def test_main_resolves_function_call_response_and_produces_review(mocker):
 
     mocker.patch("gemini_review.context_cache_fingerprint", return_value="fp0123456789")
     existing_cache = mocker.Mock(
-        display_name=f"repo-cache-test-owner-test-repo-{DEFAULT_MODEL}-straight-fp0123456789",
-        model=DEFAULT_MODEL,
+        display_name="repo-cache-test-owner-test-repo-gemini-3.8-flash-straight-fp0123456789",
+        model="gemini-3.8-flash",
     )
     existing_cache.name = "cachedContents/existing-cache-42"
     mock_client.caches.list.return_value = [existing_cache]
@@ -1913,7 +1961,9 @@ def test_context_caching_multimodal_invalid_argument_retries_text_only(mocker):
     """
     from gemini_pr_review import main
 
-    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_PERSONA": "straight"}, clear_env=True)
+    mock_client, _ = _setup_dry_run_main(
+        mocker, {"GEMINI_MODEL": "gemini-3.8-flash", "GEMINI_PERSONA": "straight"}, clear_env=True
+    )
     mock_client.caches.list.return_value = []
 
     def _fake_build_ctx(files, config, client=None, model=None, context_telemetry=None, multimodal_parts=None):

@@ -68,6 +68,37 @@ def test_build_thinking_config_numeric_budget():
     assert build_thinking_config("default") is None
 
 
+@pytest.mark.parametrize("bad_level", ["off", "false", "disabled", "minimal", "0"])
+@pytest.mark.parametrize(
+    "gemini4_model",
+    ["gemini-4-hydrogen", "publishers/google/models/gemini-4-carbon"],
+)
+def test_build_thinking_config_clamps_unsupported_gemini4_levels(bad_level, gemini4_model, capsys):
+    cfg = build_thinking_config(bad_level, model=gemini4_model)
+    assert cfg is not None
+    assert str(cfg.thinking_level).upper().endswith("LOW")
+    assert cfg.thinking_budget is None
+    assert "clamping to 'low'" in capsys.readouterr().err
+
+
+def test_build_thinking_config_gemini4_levels_and_legacy_preservation():
+    for level in ("low", "medium", "high", "xhigh"):
+        cfg = build_thinking_config(level, model="gemini-4-hydrogen")
+        assert cfg is not None
+        assert str(cfg.thinking_level).upper().endswith(level.upper())
+
+    assert build_thinking_config("none", model="gemini-4-hydrogen") is None
+    assert build_thinking_config("default", model="gemini-4-hydrogen") is None
+
+    # Legacy Gemini 3 models preserve 'off' -> thinking_budget=0 and 'minimal' -> MINIMAL
+    cfg_off = build_thinking_config("off", model="gemini-3.8-flash")
+    assert cfg_off is not None
+    assert cfg_off.thinking_budget == 0
+    cfg_min = build_thinking_config("minimal", model="gemini-3.8-flash")
+    assert cfg_min is not None
+    assert str(cfg_min.thinking_level).upper().endswith("MINIMAL")
+
+
 # ==============================================================================
 # 2. Expanded File Exclusions Tests
 # ==============================================================================

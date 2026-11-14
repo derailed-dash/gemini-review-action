@@ -10,7 +10,7 @@ import tomllib
 from google.genai import types
 
 DEFAULT_TIMEOUT = 60
-DEFAULT_MODEL = "gemini-3.8-flash"
+DEFAULT_MODEL = "gemini-4-hydrogen"
 
 
 def get_default_model(explicit_model: str | None = None) -> str:
@@ -39,8 +39,18 @@ def load_config() -> dict:
         return {}
 
 
-def build_thinking_config(thinking_level: str | int | None = None) -> types.ThinkingConfig | None:
-    """Build a ThinkingConfig from a string level (e.g. 'low', 'medium', 'high') or integer budget."""
+def _is_gemini_4(model: str | None) -> bool:
+    """Return True if the normalised model identifier targets the Gemini 4 family."""
+    if not model:
+        return False
+    return model.strip().lower().split("models/")[-1].startswith("gemini-4")
+
+
+def build_thinking_config(
+    thinking_level: str | int | None = None,
+    model: str | None = None,
+) -> types.ThinkingConfig | None:
+    """Build a ThinkingConfig from a string level (e.g. 'low', 'medium', 'high', 'xhigh') or integer budget."""
     val = None
     if thinking_level is not None:
         if isinstance(thinking_level, str):
@@ -58,20 +68,41 @@ def build_thinking_config(thinking_level: str | int | None = None) -> types.Thin
         else:
             return None
 
+    gemini_4 = _is_gemini_4(model)
+
     # Check if value is a numeric token budget
     if val.isdigit() or (val.startswith("-") and val[1:].isdigit()):
         try:
             budget = int(val)
+            if budget == 0 and gemini_4:
+                print(
+                    f"Warning: thinking_level='{val}' is not supported by Gemini 4 model '{model}'; clamping to 'low'.",
+                    file=sys.stderr,
+                )
+                return types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW)
             return types.ThinkingConfig(thinking_budget=budget)
         except ValueError:
             pass
 
-    # Treat as thinking level string (e.g. 'minimal', 'low', 'medium', 'high', 'off')
+    # Treat as thinking level string (e.g. 'minimal', 'low', 'medium', 'high', 'xhigh', 'off')
     level_str = val.lower()
     if level_str in ("off", "false", "disabled"):
-        return types.ThinkingConfig(thinking_budget=0)
+        if gemini_4:
+            print(
+                f"Warning: thinking_level='{val}' is not supported by Gemini 4 model '{model}'; clamping to 'low'.",
+                file=sys.stderr,
+            )
+            level_str = "low"
+        else:
+            return types.ThinkingConfig(thinking_budget=0)
     if level_str in ("none", "default"):
         return None
+    if level_str == "minimal" and gemini_4:
+        print(
+            f"Warning: thinking_level='{val}' is not supported by Gemini 4 model '{model}'; clamping to 'low'.",
+            file=sys.stderr,
+        )
+        level_str = "low"
 
     try:
         level_enum = getattr(types.ThinkingLevel, level_str.upper(), None)
