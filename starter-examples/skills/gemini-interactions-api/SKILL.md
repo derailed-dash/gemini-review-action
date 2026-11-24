@@ -1,6 +1,7 @@
 ---
 name: gemini-interactions-api
 metadata:
+  version: "2.0.2"
   category: AiAndMachineLearning
 description: Guides the usage of Gemini Interactions API on Gemini Enterprise Agent Platform. Use when the user wants to use the stateful, server-managed Interactions API for multi-turn conversations, background execution, streaming, structured output, and function calling on the Agent Platform.
 ---
@@ -12,40 +13,47 @@ This skill provides instructions for authenticating, connecting to, and utilizin
 
 The Interactions API is the modern, recommended way to execute Generative AI agent conversations, background research tasks, multi-turn chats, and structured, multi-step workflows.
 
-> [!IMPORTANT] **CRITICAL: Unified SDK, Latest Models & GEAP Targeting** *
+> [!IMPORTANT] **CRITICAL: Unified SDK, Latest Models & Model/Agent Targeting** *
 > **Unified SDK**: Use the Google Gen AI SDK (**`google-genai >= 2.3.0`** for
 > Python, **`@google/genai >= 2.3.0`** for JS/TS). SDK versions `>= 2.0.0` are
 > the minimum floor at which the steps schema activates, but `>= 2.3.0` is the
 > supported/recommended floor. Legacy SDKs like `google-cloud-aiplatform`,
-> `@google-cloud/vertexai`, and `google-generativeai` are strictly unsupported
-> for Interactions. * *Mandatory Instruction*: When explaining client
-> initialization or writing import code, you **must** explicitly state/warn the
-> user that legacy packages like `google-cloud-aiplatform` or
-> `google-generativeai` are strictly unsupported for interactions. * **Latest
-> Models Only**: Use `gemini-3.5-flash` (fast, balanced, multimodal — the
-> recommended default), `gemini-3.1-pro-preview` (complex reasoning, coding,
-> research), or `gemini-3.1-flash-lite` (cost-efficient, high-frequency
-> lightweight tasks). Refer to the
+> `@google-cloud/vertexai`, `google-generativeai`, and `@google/generative-ai`
+> are strictly unsupported for Interactions. * *Mandatory Instruction*: When
+> explaining client initialization or writing import code, you **must**
+> explicitly state/warn the user that legacy packages like
+> `google-cloud-aiplatform` or `google-generativeai` are strictly unsupported
+> for interactions. * **Latest Models Only**: Use `gemini-3.8-flash` (fast,
+> balanced, multimodal — the recommended default), `gemini-3.1-pro-preview`
+> (complex reasoning, coding, research), or `gemini-3.5-flash-lite`
+> (cost-efficient, high-frequency lightweight tasks). Refer to the
 > [latest model versions](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/migrate)
 > to check for new updates. Legacy models (`gemini-3-flash-preview`,
 > `gemini-2.5-*`, `gemini-2.0-*`, `gemini-1.5-*`) are deprecated and do not
 > support interactions. * *Mandatory Instruction*: In any interaction response,
 > you **must** warn the user that legacy models like `gemini-2.5-*`,
 > `gemini-2.0-*`, or `gemini-1.5-*` are deprecated and unsupported for the
-> Interactions API. * **GEAP requires a provisioned agent (no direct base-model
-> calls yet)**: On Gemini Enterprise Agent Platform (GEAP), direct/base-model
-> calls (`model="..."`) via the Interactions API are **not supported yet**. You
-> **must** target a provisioned agent or endpoint with the `agent="<AGENT_ID>"`
-> parameter instead of `model="..."`. The code examples in this skill use
-> `agent=...` for this reason. (This is the primary difference from the
-> [ai.google.dev](https://ai.google.dev/gemini-api/docs/interactions)
-> documentation for Interactions, which uses `model=...` — while `model=...` is
-> valid for other Gemini API contexts, it is **not supported on the Agent
-> Platform**.) Provision an agent per the
-> [Agent Platform docs](https://docs.cloud.google.com/gemini-enterprise-agent-platform)
-> and pass its ID as `agent`. * **Turn-Scoped Parameters**: Parameters like
-> `tools`, `system_instruction`, and `generation_config` are turn-scoped. They
-> **MUST** be passed with each interaction request.
+> Interactions API. If a user asks for a deprecated model, use
+> `gemini-3.8-flash` instead and note the substitution. * **Model & Agent
+> Targeting**: Target foundation models directly using
+> `model="gemini-3.8-flash"`, or target autonomous managed/custom agents
+> (`antigravity-preview-09-2026`, `deep-research-preview-04-2026`, or custom
+> agents provisioned via `client.agents.create()`) using `agent="<AGENT_ID>"`.
+> Managed agents (`antigravity-preview-09-2026` and custom agents) require
+> `environment="remote"` to provision a sandbox. * **Turn-Scoped Parameters**:
+> Parameters like `tools`, `system_instruction`, and `generation_config` are
+> turn-scoped. They **MUST** be passed with each interaction request.
+
+## Attribution
+
+**MUST READ**: Before executing any `gcloud`, REST API, or MCP command, you
+MUST read [Usage Attribution](references/attribution.md). For commands executed
+directly in the terminal (never in generated scripts, Terraform, or user code),
+prefix `gcloud` with
+`CLOUDSDK_METRICS_REQUEST_ATTRIBUTION="agent-skills/1.0 (skill:gemini-interactions-api)"`
+and append
+`agent-skills/1.0 (skill:gemini-interactions-api)`
+to `User-Agent` headers.
 
 ## 1. Authentication
 
@@ -116,10 +124,32 @@ client = genai.Client(enterprise=True, project=project_id, location="global")
 import { GoogleGenAI } from "@google/genai";
 
 const ai = new GoogleGenAI({
-    enterprise: {
-        project: "your-project-id",
-        location: "global"
-    }
+    enterprise: true,
+    project: "your-project-id",
+    location: "global"
+});
+```
+
+### Option C: Express Mode (API Key)
+
+Recommended for lightweight scripts or environments using an API key:
+
+#### Python
+
+```python
+from google import genai
+
+client = genai.Client(enterprise=True, api_key="YOUR_API_KEY")
+```
+
+#### TypeScript/JavaScript
+
+```typescript
+import { GoogleGenAI } from "@google/genai";
+
+const ai = new GoogleGenAI({
+    enterprise: true,
+    apiKey: "YOUR_API_KEY"
 });
 ```
 
@@ -135,7 +165,7 @@ Submit a single prompt and read the final text response. Under the modern schema
 
 ```python
 interaction = client.interactions.create(
-    agent="your-agent-id",  # GEAP: target a provisioned agent, not a base model
+    model="gemini-3.8-flash",
     input="Explain serverless computing in one sentence."
 )
 # Use the output_text convenience accessor (combined text from the trailing model_output steps)
@@ -146,7 +176,7 @@ print(interaction.output_text)
 
 ```typescript
 const interaction = await ai.interactions.create({
-    agent: "your-agent-id", // GEAP: target a provisioned agent, not a base model
+    model: "gemini-3.8-flash",
     input: "Explain serverless computing in one sentence."
 });
 console.log(interaction.output_text);
@@ -162,10 +192,10 @@ Interactions are stateful by default. Store the conversation state in the cloud 
 
 ```python
 # Turn 1: Introduce ourselves
-# Interactions are stored by default (store=True); pass store=False to disable
+# Interactions are stored by default (store=True, retained for 7 days); pass store=False to disable
 # server-side retention (which also disables previous_interaction_id and background).
 turn1 = client.interactions.create(
-    agent="your-agent-id",
+    model="gemini-3.8-flash",
     input="Hi! My name is John. I am working on AI agents.",
     store=True
 )
@@ -173,7 +203,7 @@ print(f"Turn 1: {turn1.output_text}")
 
 # Turn 2: Refer back to the stored turn state
 turn2 = client.interactions.create(
-    agent="your-agent-id",
+    model="gemini-3.8-flash",
     input="What is my name?",
     previous_interaction_id=turn1.id
 )
@@ -185,16 +215,16 @@ print(f"Turn 2: {turn2.output_text}")
 ```typescript
 // Turn 1 (interactions are stored by default; pass store: false to disable)
 const turn1 = await ai.interactions.create({
-    agent: "your-agent-id",
+    model: "gemini-3.8-flash",
     input: "Hi! My name is John. I am working on AI agents.",
     store: true
 });
 
 // Turn 2
 const turn2 = await ai.interactions.create({
-    agent: "your-agent-id",
+    model: "gemini-3.8-flash",
     input: "What is my name?",
-    previousInteractionId: turn1.id
+    previous_interaction_id: turn1.id
 });
 console.log(turn2.output_text);
 ```
@@ -211,7 +241,7 @@ Stream responses in real-time. Passing `stream=True` returns an iterable chunk g
 # The stream yields typed events, not full interaction snapshots. The sequence is:
 # interaction.created -> (step.start -> step.delta(s) -> step.stop)+ -> interaction.completed
 for event in client.interactions.create(
-    agent="your-agent-id",
+    model="gemini-3.8-flash",
     input="Write a short poem about debugging.",
     stream=True
 ):
@@ -228,7 +258,7 @@ for event in client.interactions.create(
 // The stream yields typed events, not full interaction snapshots. The sequence is:
 // interaction.created -> (step.start -> step.delta(s) -> step.stop)+ -> interaction.completed
 const responseStream = await ai.interactions.create({
-    agent: "your-agent-id",
+    model: "gemini-3.8-flash",
     input: "Write a short poem about debugging.",
     stream: true
 });
@@ -261,7 +291,7 @@ class Book(BaseModel):
     year_published: int
 
 interaction = client.interactions.create(
-    agent="your-agent-id",
+    model="gemini-3.8-flash",
     input="Recommend one famous sci-fi book.",
     response_format=Book
 )
@@ -286,9 +316,9 @@ const BookSchema = {
 };
 
 const interaction = await ai.interactions.create({
-    agent: "your-agent-id",
+    model: "gemini-3.8-flash",
     input: "Recommend one famous sci-fi book.",
-    responseFormat: BookSchema
+    response_format: BookSchema
 });
 
 console.log(interaction.output_text);
@@ -313,7 +343,7 @@ def get_stock_price(ticker: str) -> float:
 
 # Turn 1: Pass tools to the model
 interaction = client.interactions.create(
-    agent="your-agent-id",
+    model="gemini-3.8-flash",
     input="What is the stock price of GOOG?",
     tools=[get_stock_price]
 )
@@ -328,7 +358,7 @@ for step in interaction.steps:
         # Turn 2: Submit the result back as a function_result step. Reference the
         # originating call via call_id=step.id, and pass tools again (turn-scoped).
         final_turn = client.interactions.create(
-            agent="your-agent-id",
+            model="gemini-3.8-flash",
             input=[
                 {
                     "type": "function_result",
@@ -346,9 +376,7 @@ for step in interaction.steps:
 #### TypeScript/JavaScript
 
 ```typescript
-import { Type } from "@google/genai";
-
-// Define local tool
+// Define local tool and flat function tool declaration
 function getStockPrice({ ticker }: { ticker: string }): number {
     if (ticker.toUpperCase() === "GOOG") {
         return 175.50;
@@ -356,25 +384,24 @@ function getStockPrice({ ticker }: { ticker: string }): number {
     return 100.00;
 }
 
-// Turn 1: Pass tools to the model
-const toolDeclaration = {
-    functionDeclarations: [{
-        name: "getStockPrice",
-        description: "Gets the stock price for a given ticker symbol.",
-        parameters: {
-            type: Type.OBJECT,
-            properties: {
-                ticker: { type: Type.STRING, description: "The stock ticker symbol" }
-            },
-            required: ["ticker"]
-        }
-    }]
+const stockTool = {
+    type: "function",
+    name: "getStockPrice",
+    description: "Gets the stock price for a given ticker symbol.",
+    parameters: {
+        type: "object",
+        properties: {
+            ticker: { type: "string", description: "The stock ticker symbol" }
+        },
+        required: ["ticker"]
+    }
 };
 
+// Turn 1: Pass tools to the model
 const interaction = await ai.interactions.create({
-    agent: "your-agent-id",
+    model: "gemini-3.8-flash",
     input: "What is the stock price of GOOG?",
-    tools: [toolDeclaration]
+    tools: [stockTool]
 });
 
 // In the flat steps schema, a tool request is a top-level step of type
@@ -387,15 +414,15 @@ if (fcStep && fcStep.name === "getStockPrice") {
     // Turn 2: Submit the result back as a function_result step. Reference the
     // originating call via call_id=fcStep.id, and pass tools again (turn-scoped).
     const finalTurn = await ai.interactions.create({
-        agent: "your-agent-id",
+        model: "gemini-3.8-flash",
         input: [{
             type: "function_result",
             name: fcStep.name,
             call_id: fcStep.id,
             result: [{ type: "text", text: JSON.stringify(price) }]
         }],
-        tools: [toolDeclaration],
-        previousInteractionId: interaction.id
+        tools: [stockTool],
+        previous_interaction_id: interaction.id
     });
     console.log(finalTurn.output_text);
 }
@@ -403,189 +430,77 @@ if (fcStep && fcStep.name === "getStockPrice") {
 
 ---
 
-## 4. Accessing the Interactions API via REST
+### Agents & Long-Running Tasks
 
-For shell-based scripts, debugging, or non-Python/JS environments, you can communicate with the stateful Interactions API directly using raw HTTP/REST requests via `curl`.
+Beyond foundation models, the Interactions API provides access to specialized, autonomous agents via the `agent` parameter:
 
-### 1. REST Endpoint
+*   **`antigravity-preview-09-2026`**: Antigravity Agent — general-purpose
+    managed agent with code execution, file management, and web browsing in a
+    secure sandboxed Linux environment (pass `environment="remote"` to
+    provision a sandbox).
+*   **`deep-research-preview-04-2026`**: Deep Research Agent — executes multi-step web research tasks, synthesizing information from multiple sources into comprehensive reports.
+*   **Custom agents**: Configured and managed via `client.agents.create()`, `list()`, `get()`, and `delete()` (pass `environment="remote"` when invoking).
 
-The REST API endpoint for interactions is:
+Agents typically run asynchronously in the background using `background=True`. Poll the interaction status to retrieve the completed result:
 
-```http
-POST https://aiplatform.googleapis.com/v1beta1/projects/{PROJECT_ID}/locations/{LOCATION}/interactions
+#### Python
+
+```python
+import time
+
+interaction = client.interactions.create(
+    input="Analyze competitive positioning for solar energy providers.",
+    agent="deep-research-preview-04-2026",
+    background=True
+)
+print(f"Research started: {interaction.id}")
+
+while True:
+    interaction = client.interactions.get(interaction.id)
+    if interaction.status == "completed":
+        print(interaction.output_text)
+        break
+    elif interaction.status in ("failed", "cancelled"):
+        print(f"Research ended with status: {interaction.status}")
+        break
+    time.sleep(10)
 ```
 
-*   **LOCATION**: Use `global` (or custom region if required).
-*   **PROJECT_ID**: Your Google Cloud Project ID.
+#### TypeScript/JavaScript
 
-### 2. Set up Variables & Authentication Header
+```typescript
+const initialInteraction = await ai.interactions.create({
+    agent: "deep-research-preview-04-2026",
+    input: "Analyze competitive positioning for solar energy providers.",
+    background: true
+});
 
-Set your target agent ID (e.g., model or custom agent path) and access token generated from Application Default Credentials:
-
-```bash
-AGENT_ID="your-agent-id"
-ACCESS_TOKEN=$(gcloud auth print-access-token)
-```
-
-### 3. Single-Turn Interaction Payload
-
-Send a request to start an interaction using the agent variable:
-
-```bash
-curl -X POST "https://aiplatform.googleapis.com/v1beta1/projects/${PROJECT_ID}/locations/global/interactions" \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "agent": "'"${AGENT_ID}"'",
-    "input": [{
-      "type": "user_input",
-      "content": [{
-        "type": "text",
-        "text": "Explain serverless computing in one sentence."
-      }]
-    }]
-  }'
-```
-
-#### Response Example
-A synchronous POST request returns a JSON object containing the conversation step details and unique identifiers:
-
-```json
-{
-  "id": "your-interaction-id",
-  "status": "completed",
-  "steps": [
-    {
-      "type": "model_output",
-      "content": [
-        {
-          "type": "text",
-          "text": "Serverless computing is a cloud execution model where the cloud provider dynamically manages the allocation and provisioning of servers, charging customers based on actual usage rather than pre-purchased capacity."
-        }
-      ]
+while (true) {
+    const interaction = await ai.interactions.get(initialInteraction.id);
+    if (interaction.status === "completed") {
+        console.log(interaction.output_text);
+        break;
+    } else if (["failed", "cancelled"].includes(interaction.status)) {
+        console.log(`Research ended with status: ${interaction.status}`);
+        break;
     }
-  ],
-  "usage": {
-    "total_tokens": 24751,
-    "total_input_tokens": 23894,
-    "total_output_tokens": 857
-  },
-  "created": "2026-05-08T10:44:43Z",
-  "updated": "2026-05-08T10:44:43Z",
-  "environment_id": "your-environment-id",
-  "object": "interaction"
+    await new Promise(resolve => setTimeout(resolve, 10000));
 }
 ```
 
-### 4. Multi-Turn Stateful Interaction Payload
+---
 
-To continue an existing conversation statefully, specify the `previous_interaction_id` in the JSON payload:
+## 4. Accessing the Interactions API via REST
 
-```bash
-curl -X POST "https://aiplatform.googleapis.com/v1beta1/projects/${PROJECT_ID}/locations/global/interactions" \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "agent": "'"${AGENT_ID}"'",
-    "store": true,
-    "previous_interaction_id": "YOUR_PREVIOUS_INTERACTION_ID",
-    "input": [{
-      "type": "user_input",
-      "content": [{
-        "type": "text",
-        "text": "Can you elaborate on that?"
-      }]
-    }]
-  }'
-```
+For shell-based scripts, debugging, or non-Python/JS environments, communicate with the stateful Interactions API over HTTP/REST (`curl`) at `POST https://aiplatform.googleapis.com/v1beta1/projects/{PROJECT_ID}/locations/{LOCATION}/interactions` (or `POST https://aiplatform.googleapis.com/v1beta1/locations/global/interactions` with `x-goog-api-key` for Express Mode). Pass `"model"` or `"agent"`, `"input"` steps with `"type": "user_input"`, and optional `"previous_interaction_id"`, `"background": true`, or `"stream": true` (which streams Server-Sent Events via `Content-Type: text/event-stream` and `Transfer-Encoding: chunked` that `curl` prints continuously in real time).
 
-### 5. Streaming Output Payload
-To stream updates in real time (Server-Sent Events format), pass `"stream": true` in the payload:
+For complete `curl` examples (single-turn, multi-turn stateful, SSE streaming, and background managed agents) and response schemas, read [references/rest_api.md](references/rest_api.md).
 
-```bash
-curl -X POST "https://aiplatform.googleapis.com/v1beta1/projects/${PROJECT_ID}/locations/global/interactions" \
-  -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "agent": "'"${AGENT_ID}"'",
-    "stream": true,
-    "input": [{
-      "type": "user_input",
-      "content": [{
-        "type": "text",
-        "text": "Write a long story about space travel."
-      }]
-    }]
-  }'
-```
-
-The endpoint will return a chunked stream where each event begins with `data: ` containing JSON updates with the `event_type` and step contents.
-
-> **How `curl` handles streaming:**
-> By default, when `"stream": true` is passed, the server responds with `Transfer-Encoding: chunked` and `Content-Type: text/event-stream` (Server-Sent Events). `curl` will automatically keep the connection open and print the incoming data chunks to `stdout` in real time as they are pushed by the server. The user does not need to poll or pull further; the complete sequence of events streams continuously until completion.
-
---------------------------------------------------------------------------------
+---
 
 ## 5. Data Model & Step Types Reference
 
-An `Interaction` response contains `steps`, an array of typed step objects
-representing a structured timeline of the interaction turn. Read the current
-step `type` rather than assuming the last step is text — the trailing step may
-be a `function_call` or a `thought`.
+An `Interaction` response contains a flat `steps` timeline (`user_input`, `model_output`, `thought`, `function_call`, `function_result`, and built-in tool steps) along with convenience accessors (`output_text`, `output_image`, `output_audio`) and SSE streaming events (`interaction.created`, `step.start`, `step.delta`, `step.stop`, `interaction.completed`).
 
-### Step Types
+For the complete step types, content types, streaming event table, and 7-day retention rules, read [references/data_model.md](references/data_model.md).
 
-**User steps:**
-
-*   `user_input`: User input (text, audio, multimodal). Contains a `content`
-    array. (This is why REST input payloads use `"type": "user_input"`, **not**
-    `"role": "user"`.)
-
-**Model/server steps:**
-
-*   `model_output`: Final model generation. Contains a `content` array with
-    `text`, `image`, `audio`, etc. (REST responses use `"type": "model_output"`,
-    **not** `"role": "model"`.)
-*   `thought`: Model reasoning / chain of thought. Has a `signature` field and
-    optional `summary`.
-*   `function_call`: Tool call request, with flat `id`, `name`, and `arguments`
-    fields (there is **no** nested `tool_calls` list).
-*   `function_result`: Tool result you send back, with `call_id`, `name`, and
-    `result` fields.
-*   `google_search_call` / `google_search_result`, `code_execution_call` /
-    `code_execution_result`, `url_context_call` / `url_context_result`,
-    `mcp_server_tool_call` / `mcp_server_tool_result`, `file_search_call` /
-    `file_search_result`: built-in and remote tool steps.
-
-### Content types (inside the `content` array on `model_output` and `user_input` steps)
-
-*   `text`: Text content (`text` field).
-*   `image` / `audio` / `document` / `video`: Content with `data`, `mime_type`,
-    or `uri`.
-
-### Convenience accessor
-
-*   `output_text`: The combined text from the trailing `model_output` steps.
-    Prefer this over hand-walking `steps[-1].content[0].text`, which breaks when
-    the last step is a tool call or a thought.
-
-### Streaming Event Types
-
-| Event                   | Description                                       |
-| ----------------------- | ------------------------------------------------- |
-| `interaction.created`   | Interaction created; includes metadata.           |
-| `step.start`            | A new step begins. Contains the step `type` and   |
-:                         : initial metadata.                                 :
-| `step.delta`            | Incremental data for the current step. Contains a |
-:                         : typed `delta` object (e.g. `delta.type == "text"` :
-:                         : with `delta.text`).                               :
-| `step.stop`             | The step is complete. Contains `index`.           |
-| `interaction.completed` | Interaction finished. Contains final `usage`.     |
-
-### Storage & retention
-
-Interactions are stored by default (`store=True`), which enables stateful
-features like `previous_interaction_id` and background execution. Passing
-`store=False` disables server-side retention and therefore also disables
-`previous_interaction_id` and `background` — in that mode you must pass the full
-conversation history in `input` on each turn.

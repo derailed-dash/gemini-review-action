@@ -22,14 +22,14 @@ The code review action is organized into a modular Python package (`gemini_revie
 * **`gemini_review/diff.py`**: Unified diff patch parsing, line numbering annotations (`format_diff_patch_with_line_numbers`), suggestion indentation alignment, line-range auto-correction, and inline comment filtering (`filter_review_comments`).
 * **`gemini_review/repo.py`**: File discovery (`get_all_repo_files`), file tree formatting (`generate_file_tree`), core manifest pattern matching (`is_core_file`), import extraction, and candidate pool ranking & bounding (`rank_and_bound_candidates`).
 * **`gemini_review/context.py`**: Hybrid codebase context engine (Full vs Sparse mode), core documentation attachment, static extra context overrides, multimodal context binding, and Gemini dynamic context selection (`select_dynamic_context_files`).
-* **`gemini_review/prompts.py`**: Custom instruction loaders (`load_custom_instructions`), system prompt builder (`load_system_instruction`), PR diff prompt formatting (`build_pr_diff_prompt`), visual PR diff assembly (`build_visual_diff_parts`), and prompt assembly (`build_prompt`).
-* **`gemini_review/utils.py`**: Core primitives (token estimation, response extraction, streaming connection-reset fallback `generate_content_with_stream_fallback`, multi-turn tool resolution `resolve_tool_calls_loop`, workspace rules discovery) and facade re-exports for backward compatibility.
+* **`gemini_review/prompts.py`**: Custom instruction loaders (`load_custom_instructions`), system prompt builder (`load_system_instruction`), PR diff prompt formatting (`build_pr_diff_prompt`, omitting redundant full-file copies on added/removed files and supporting patch-only / capped fallback under budget pressure), visual PR diff assembly (`build_visual_diff_parts`), and prompt assembly (`build_prompt`).
+* **`gemini_review/utils.py`**: Core primitives (token estimation, response extraction, streaming connection-reset fallback `generate_content_with_stream_fallback`, `is_thinking_config_error` filtering, `create_genai_client`, `build_cache_tools`, multi-turn tool resolution `resolve_tool_calls_loop`, workspace rules discovery) and facade re-exports for backward compatibility.
 * **`gemini_review/github.py`**: GitHub REST API client functions for PR files, comment threads, author filtering, review postings, and raw file blob retrieval (`get_file_blob`).
 * **`gemini_review/threads.py`**: Pull request review thread retrieval and automated resolution of addressed threads (`resolve_addressed_threads`).
-* **`gemini_review/budget.py`**: Token budget allocation and per-file content truncation (`cap_file_content`) to prevent out-of-budget diffs.
+* **`gemini_review/budget.py`**: Token budget allocation (`prompt_token_budget`), water-fill ceiling calculation (`compute_waterfill_cap`), and line-boundary content/patch truncation (`cap_file_content`, `cap_patch_content`) to prevent out-of-budget diffs.
 * **`gemini_review/billing_labels.py`**: Google Cloud billing labels parser and sanitisation for GCP cost attribution.
 * **`gemini_review/personas.py`**: Reviewer persona registry and prompt generation (`straight`, `dazbo`, `palpatine`, `rick`).
-* **`gemini_review/pricing.py`**: Gemini model token pricing and cost estimation engine (supporting Gemini 4 Hydrogen, Gemini 4 Argon, and Gemini 3.6–3.8 Flash).
+* **`gemini_review/pricing.py`**: Gemini model token pricing and cost estimation engine (supporting Gemini 4 Carbon, Neon, Argon, and Hydrogen, Gemini Decision 1, and Gemini 3.6–3.8 Flash).
 * **`gemini_review/skills.py`**: Agent skill metadata parser and instruction loader for workspace and built-in skills.
 * **`gemini_review/developer_knowledge.py`**: MCP/RPC integration to search and fetch official Google developer documentation.
 * **`gemini_pr_review.py`**: Main CLI entrypoint script that re-exports all `gemini_review` package APIs and runs the primary review loop.
@@ -49,7 +49,7 @@ The PR review workflow is designed to retrieve PR details, collect local codebas
 
 To provide Gemini with project-wide awareness, the script traverses the workspace to find all tracked files via `get_all_repo_files()`. It then sums the file sizes (excluding the changed PR files) to determine the context mode:
 
-* **Per-File Content Truncation (`cap_file_content`):** To prevent a single abnormally large file (e.g. bundled assets, minified scripts, or large test fixtures) from monopolising the context budget, individual text files attached to the prompt are capped at 128 KB with a truncation notice.
+* **Per-File Content Truncation & Multi-Stage Prompt Budget Escalation (`cap_file_content`, `cap_patch_content`, `compute_waterfill_cap`)**: Individual modified file contents are capped at 128 KB with a loud truncation marker, while newly added and removed files omit duplicate `Full Current File Content` sections (since new files already appear in full inside the diff patch). Before sending a request, `gemini_pr_review.py` checks estimated prompt tokens against `prompt_token_budget()` and escalates cleanly through dropping `codebase_context` -> dropping remaining `Full Current File Content` sections (patches only) -> applying a water-fill patch byte cap so small changes stay intact while oversized diffs shrink within the model input window.
 * **Full Context Mode (≤ 1.5 MB):**
   If the rest of the text files in the repository fit within the size limit, the script reads their full contents using `get_file_content()` and appends them to the prompt under the section `=== Repository Context (Full Codebase) ===`.
 * **Sparse Context Mode (> 1.5 MB):**
@@ -65,6 +65,8 @@ To provide Gemini with project-wide awareness, the script traverses the workspac
 
 To drastically reduce API costs and latency for large codebase contexts, `gemini_pr_review.py` automatically selects between Gemini 4's implicit prefix caching and Gemini 3's explicit `CachedContent` engine:
 
+* **API Version Compatibility (`v1beta` across Developer API clients)**:
+  Under `google-genai >= 3.0.0` (which switched the Gemini Developer API default to `v1`), `create_genai_client()` pins `api_version="v1beta"` in `HttpOptions` for all non-Vertex Developer API clients (covering both `gemini_pr_review.py` and `gemini_issue_triage.py`, across Gemini 4, Gemini 3 explicit `cachedContents`, preview/`-latest` aliases, and the Decisions API), while Vertex AI / Enterprise clients preserve their native `v1beta1` default.
 * **Gemini 4 Automatic Implicit Prefix Caching (`gemini-4-*`, default)**:
   * **Zero Cache-Management Overhead**: When `gr._normalize_model_name(model_name)` starts with `"gemini-4"`, the script skips `client.caches.list()` and `client.caches.create()` (since Gemini 4 does not use explicit `CachedContent` handles).
   * **Prefix-Stable Prompt Ordering**: For uncached/direct requests, `gemini_pr_review.py` places static `codebase_context` (and `codebase_multimodal_parts`) *before* `dynamic_pr_prompt` (and `visual_diff_parts`). Because `system_instruction`, `tools`, and `codebase_context` come first, successive PR pushes and multi-turn tool calls retain an identical prefix and automatically receive Gemini 4's **95% cached-input discount** (`0.05x`) on prompts of 4,096+ tokens with no storage fee.

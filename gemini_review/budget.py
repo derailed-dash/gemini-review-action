@@ -48,8 +48,10 @@ DEFAULT_MAX_FILE_BYTES = 128 * 1024
 # fails safe (a trimmed review) instead of unsafe (a 400 and no review).
 MODEL_INPUT_TOKEN_LIMITS: dict[str, int] = {
     "gemini-4-carbon": 1_048_576,
+    "gemini-4-neon": 1_048_576,
     "gemini-4-argon": 1_048_576,
     "gemini-4-hydrogen": 1_048_576,
+    "gemini-decision-1": 262_144,
     "gemini-3.8-flash": 1_048_576,
     "gemini-3.7-flash": 1_048_576,
     "gemini-3.6-flash": 1_048_576,
@@ -112,14 +114,15 @@ def max_file_bytes(config: dict | None = None) -> int:
     return _int_setting("GEMINI_MAX_FILE_BYTES", config or {}, "max_file_bytes", DEFAULT_MAX_FILE_BYTES)
 
 
-def cap_file_content(content: str, filename: str, limit: int) -> tuple[str, bool]:
-    """Return `content` truncated to `limit` bytes, and whether it was truncated.
-
-    Truncation is on a line boundary so the retained portion stays parseable, and carries
-    a marker naming the file and both sizes. The marker is the point: it tells the model
-    the file continues, and it tells a human reading the review why a finding might be
-    partial.
-    """
+def _cap_utf8_content(
+    content: str,
+    limit: int,
+    *,
+    filename: str,
+    subject_prefix: str,
+    omission_detail: str,
+) -> tuple[str, bool]:
+    """Truncate `content` to `limit` UTF-8 bytes on a line boundary with a loud truncation marker."""
     if not content or limit <= 0:
         return content, False
 
@@ -134,11 +137,58 @@ def cap_file_content(content: str, filename: str, limit: int) -> tuple[str, bool
         kept = kept[:newline]
 
     marker = (
-        f"\n\n[TRUNCATED by gemini-review: '{filename}' is {len(encoded):,} bytes, "
-        f"showing the first {limit:,}. The rest of this file was NOT provided. "
-        f"Do not draw conclusions about the omitted portion.]"
+        f"\n\n[TRUNCATED by gemini-review: {subject_prefix}'{filename}' is {len(encoded):,} bytes, "
+        f"showing the first {limit:,}. {omission_detail} Do not draw conclusions about the omitted portion.]"
     )
     return kept + marker, True
+
+
+def compute_waterfill_cap(sizes: list[int], target_total: int, *, min_cap: int = 512) -> int:
+    """Compute a per-item byte ceiling so smaller items stay intact while oversized items share budget."""
+    if not sizes:
+        return 0
+    if sum(sizes) <= target_total:
+        return max(sizes)
+
+    remaining = max(0, target_total)
+    sorted_sizes = sorted(sizes)
+    count = len(sorted_sizes)
+    for idx, size in enumerate(sorted_sizes):
+        left = count - idx
+        fair_share = remaining // left
+        if size <= fair_share:
+            remaining -= size
+        else:
+            return max(min_cap, fair_share)
+    return max(sizes)
+
+
+def cap_file_content(content: str, filename: str, limit: int) -> tuple[str, bool]:
+    """Return `content` truncated to `limit` bytes, and whether it was truncated.
+
+    Truncation is on a line boundary so the retained portion stays parseable, and carries
+    a marker naming the file and both sizes. The marker is the point: it tells the model
+    the file continues, and it tells a human reading the review why a finding might be
+    partial.
+    """
+    return _cap_utf8_content(
+        content,
+        limit,
+        filename=filename,
+        subject_prefix="",
+        omission_detail="The rest of this file was NOT provided.",
+    )
+
+
+def cap_patch_content(patch: str, filename: str, limit: int) -> tuple[str, bool]:
+    """Return formatted diff `patch` truncated to `limit` bytes on a line boundary with a loud marker."""
+    return _cap_utf8_content(
+        patch,
+        limit,
+        filename=filename,
+        subject_prefix="diff patch for ",
+        omission_detail="The rest of this diff was NOT provided to stay within the model context window.",
+    )
 
 
 def report_capped(filenames: list[str], limit: int) -> None:
@@ -148,5 +198,16 @@ def report_capped(filenames: list[str], limit: int) -> None:
     print(
         f"Context budget: truncated {len(filenames)} file(s) to {limit:,} bytes of full content "
         f"(diffs are unaffected): {', '.join(filenames)}",
+        file=sys.stderr,
+    )
+
+
+def report_capped_patches(filenames: list[str], limit: int) -> None:
+    """Log once to stderr which oversized diff patches were shortened to fit within context budget."""
+    if not filenames:
+        return
+    print(
+        f"Context budget: truncated {len(filenames)} diff patch(es) to {limit:,} bytes "
+        f"to stay within the model input window: {', '.join(filenames)}",
         file=sys.stderr,
     )

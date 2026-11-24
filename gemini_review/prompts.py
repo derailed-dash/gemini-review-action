@@ -11,7 +11,13 @@ from typing import Any
 
 from google.genai import types
 
-from gemini_review.budget import cap_file_content, max_file_bytes, report_capped
+from gemini_review.budget import (
+    cap_file_content,
+    cap_patch_content,
+    max_file_bytes,
+    report_capped,
+    report_capped_patches,
+)
 from gemini_review.config import (
     get_image_target_bytes,
     get_image_trigger_bytes,
@@ -218,13 +224,20 @@ def load_system_instruction(
     return base_prompt
 
 
-def build_pr_diff_prompt(files: list, config: dict | None = None) -> str:
+def build_pr_diff_prompt(
+    files: list,
+    config: dict | None = None,
+    *,
+    include_full_content: bool = True,
+    max_patch_bytes: int | None = None,
+) -> str:
     """Build the dynamic PR diff patch prompt for modified files.
 
-    The DIFF is always attached in full: it is what is under review, and it stays small
-    even for enormous files. The FULL CURRENT CONTENT is capped per file, because one
-    generated artifact (an OpenAPI spec, a snapshot, a bundled schema) can exceed the
-    model's entire input window on its own and take the whole review down with it.
+    Newly added and removed files omit the duplicate ``Full Current File Content`` block because
+    their entire content already appears inside the unified diff patch (or no longer exists). Full
+    current file contents for modified files are capped per file, and when ``include_full_content`` is
+    False or ``max_patch_bytes`` is set under budget pressure, full contents are dropped or oversized
+    patches are loudly truncated to keep the request inside the model context window.
     """
     fn_is_text_file = _get_pr_review_func("is_text_file", is_text_file)
     fn_get_file_content = _get_pr_review_func("get_file_content", get_file_content)
@@ -237,6 +250,7 @@ def build_pr_diff_prompt(files: list, config: dict | None = None) -> str:
 
     limit = max_file_bytes(config)
     capped: list[str] = []
+    capped_patches: list[str] = []
 
     prompt_parts = []
     prompt_parts.append("Below are the files and changes included in this Pull Request:\n")
@@ -249,22 +263,32 @@ def build_pr_diff_prompt(files: list, config: dict | None = None) -> str:
         if not fn_is_text_file(filename) or not patch:
             continue
 
-        full_content = fn_get_file_content(filename)
-        if full_content:
-            full_content, was_capped = cap_file_content(full_content, filename, limit)
-            if was_capped:
-                capped.append(filename)
+        formatted_patch = fn_format_diff_patch(patch)
+        if max_patch_bytes is not None and max_patch_bytes > 0:
+            formatted_patch, was_patch_capped = cap_patch_content(formatted_patch, filename, max_patch_bytes)
+            if was_patch_capped:
+                capped_patches.append(filename)
+
+        full_content = None
+        if include_full_content and status not in ("added", "removed"):
+            full_content = fn_get_file_content(filename)
+            if full_content:
+                full_content, was_capped = cap_file_content(full_content, filename, limit)
+                if was_capped:
+                    capped.append(filename)
 
         prompt_parts.append(f"=== File: {filename} ===")
         prompt_parts.append(f"Status: {status}")
         prompt_parts.append("--- Diff (Patch) ---")
-        prompt_parts.append(fn_format_diff_patch(patch))
+        prompt_parts.append(formatted_patch)
         if full_content:
             prompt_parts.append("--- Full Current File Content ---")
             prompt_parts.append(fn_format_file_content(full_content))
         prompt_parts.append("=========================\n")
 
     report_capped(capped, limit)
+    if max_patch_bytes is not None and max_patch_bytes > 0:
+        report_capped_patches(capped_patches, max_patch_bytes)
     return "\n".join(prompt_parts)
 
 

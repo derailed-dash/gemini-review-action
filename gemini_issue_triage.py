@@ -24,12 +24,14 @@ from pydantic import BaseModel, Field
 from gemini_review import (
     build_thinking_config,
     build_triage_multimodal_parts,
+    create_genai_client,
     extract_remote_image_urls,
     extract_response_text_or_raise,
     fetch_remote_image,
     filter_comment_authors,
     generate_content_with_stream_fallback,
     get_default_model,
+    is_thinking_config_error,
     parse_excluded_authors,
 )
 
@@ -184,7 +186,6 @@ def main():
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     event_path = os.environ.get("GITHUB_EVENT_PATH")
 
-    use_vertexai = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "False").lower() in ("true", "1")
     project = os.environ.get("GOOGLE_CLOUD_PROJECT")
     location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
     model_name = get_default_model()
@@ -240,17 +241,15 @@ def main():
         print("No repository labels found. Exiting.", file=sys.stderr)
         sys.exit(0)
 
-    # Initialise Gemini client (HttpOptions.timeout is in milliseconds; enforce a 300s minimum floor)
-    http_options = types.HttpOptions(timeout=max(timeout, 300) * 1000)
-    if use_vertexai:
-        print(f"Initialising GenAI Client (Model: {model_name}) using Vertex AI authentication...", file=sys.stderr)
-        client = genai.Client(vertexai=True, project=project, location=location, http_options=http_options)
-    else:
-        print(
-            f"Initialising GenAI Client (Model: {model_name}) using Google AI Studio API Key authentication...",
-            file=sys.stderr,
-        )
-        client = genai.Client(api_key=gemini_api_key, http_options=http_options)
+    # Initialise Gemini client (enforce >=300s timeout floor and Developer API v1beta).
+    client, _ = create_genai_client(
+        model_name=model_name,
+        timeout=timeout,
+        api_key=gemini_api_key,
+        project=project,
+        location=location,
+        client_cls=genai.Client,
+    )
 
     triage_prompt = load_triage_prompt(issue_title, issue_body, available_labels, issue_comments=issue_comments)
 
@@ -282,10 +281,7 @@ def main():
             config=triage_config,
         )
     except Exception as gen_err:
-        err_msg = str(gen_err).lower()
-        if triage_config.thinking_config is not None and (
-            "thinking" in err_msg or "400" in err_msg or "invalid_argument" in err_msg
-        ):
+        if triage_config.thinking_config is not None and is_thinking_config_error(gen_err):
             print(
                 f"Warning: thinking_config not supported by model '{model_name}' ({gen_err}). "
                 "Retrying without thinking_config...",

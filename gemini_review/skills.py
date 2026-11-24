@@ -35,9 +35,13 @@ def parse_skill_metadata(skill_path: str) -> dict[str, str]:
                     if key in ("name", "description"):
                         metadata[key] = val
                         current_key = key
+                    else:
+                        current_key = None
                 elif current_key and line.startswith(" "):
                     val = line.strip().strip('"').strip("'")
-                    if metadata[current_key] in (">-", ">", "|", "|-"):
+                    if not val:
+                        continue
+                    if metadata[current_key] in ("", ">-", ">", "|", "|-"):
                         metadata[current_key] = val
                     else:
                         metadata[current_key] += " " + val

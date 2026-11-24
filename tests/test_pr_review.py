@@ -587,6 +587,58 @@ description: First line
     assert meta["name"] == "Standard Multiline Skill"
     assert meta["description"] == "First line and second line"
 
+    # 5. Nested metadata: block between name: and description:
+    yaml_nested_before = """---
+name: nested-before-skill
+metadata:
+  version: "1.0.4"
+  category: AiAndMachineLearning
+description: >-
+  Clean description after metadata block.
+---
+"""
+    mocker.patch("builtins.open", mocker.mock_open(read_data=yaml_nested_before))
+    meta = parse_skill_metadata("some/folder/path/SKILL.md")
+    assert meta["name"] == "nested-before-skill"
+    assert meta["description"] == "Clean description after metadata block."
+
+    # 6. Nested metadata: block after multiline description:
+    yaml_nested_after = """---
+name: nested-after-skill
+description: >-
+  First part of description
+  second part of description.
+metadata:
+  author: Google
+  license: Apache-2.0
+  install: "uv tool install google-agents-cli"
+---
+"""
+    mocker.patch("builtins.open", mocker.mock_open(read_data=yaml_nested_after))
+    meta = parse_skill_metadata("some/folder/path/SKILL.md")
+    assert meta["name"] == "nested-after-skill"
+    assert meta["description"] == "First part of description second part of description."
+
+
+def test_all_bundled_starter_skills_parse_cleanly():
+    """Verify all bundled starter skills parse cleanly without leaking nested metadata keys."""
+    from pathlib import Path
+
+    skills_root = Path(__file__).resolve().parent.parent / "starter-examples" / "skills"
+    skill_files = sorted(skills_root.glob("*/SKILL.md"))
+    assert len(skill_files) >= 25
+
+    leaked_markers = ("author:", "license:", "version:", "uv tool install", "category:")
+    for skill_md in skill_files:
+        meta = parse_skill_metadata(str(skill_md))
+        assert meta["name"].strip(), f"Empty name in {skill_md}"
+        assert meta["description"].strip(), f"Empty description in {skill_md}"
+        for marker in leaked_markers:
+            assert marker not in meta["name"].lower(), f"Leaked {marker!r} into name in {skill_md}: {meta['name']}"
+            assert marker not in meta["description"].lower(), (
+                f"Leaked {marker!r} into description in {skill_md}: {meta['description']}"
+            )
+
 
 def test_load_workspace_rules_success(mocker):
     from gemini_review import load_workspace_rules
@@ -620,7 +672,6 @@ def _setup_dry_run_main(mocker, extra_env: dict[str, str] | None = None, clear_e
     mocker.patch("gemini_review.get_file_content", return_value="a" * 120000)
 
     mock_client = mocker.Mock()
-    mock_client.models._parse_config.return_value = mocker.Mock(tools=[])
     mock_response = mocker.Mock(
         text='{"summary": "OK", "general_feedback": [], "comments": []}',
         usage_metadata=mocker.Mock(
@@ -647,10 +698,54 @@ def test_context_caching_logic(mocker):
     main()
 
     assert mock_client.caches.create.called
-    assert "repo-cache-test-owner-test-repo" in mock_client.caches.create.call_args.kwargs["config"].display_name
+    cache_cfg = mock_client.caches.create.call_args.kwargs["config"]
+    assert "repo-cache-test-owner-test-repo" in cache_cfg.display_name
+    assert cache_cfg.tools is not None
+    assert len(cache_cfg.tools) == 1
+    decl_names = [fn.name for fn in cache_cfg.tools[0].function_declarations]
+    assert "list_available_skills" in decl_names
+    assert "load_skill_instructions" in decl_names
     assert (
         mock_client.models.generate_content.call_args.kwargs["config"].cached_content == "cachedContents/test-cache-123"
     )
+
+
+def test_build_cache_tools_converts_callables_for_developer_and_enterprise():
+    """Verify build_cache_tools converts all action tools into types.Tool declarations and preserves Tool instances."""
+    from gemini_review import (
+        build_cache_tools,
+        get_google_developer_documents,
+        list_available_skills,
+        load_skill_instructions,
+        search_google_developer_knowledge,
+    )
+
+    action_tools = [
+        list_available_skills,
+        load_skill_instructions,
+        search_google_developer_knowledge,
+        get_google_developer_documents,
+    ]
+    existing_tool = types.Tool(
+        function_declarations=[types.FunctionDeclaration(name="custom_tool", description="Custom tool")]
+    )
+
+    for use_vertexai in (False, True):
+        built = build_cache_tools([existing_tool, *action_tools], use_vertexai=use_vertexai)
+        assert built is not None
+        assert len(built) == 2
+        assert built[0] is existing_tool
+        assert isinstance(built[1], types.Tool)
+        decl_names = [fn.name for fn in (built[1].function_declarations or [])]
+        assert decl_names == [
+            "list_available_skills",
+            "load_skill_instructions",
+            "search_google_developer_knowledge",
+            "get_google_developer_documents",
+        ]
+
+    assert build_cache_tools([]) is None
+    assert build_cache_tools(None) is None
 
 
 def test_context_caching_reuse_existing_cache(mocker):
@@ -2031,15 +2126,237 @@ def test_generate_content_stream_fallback_on_connection_reset(mocker):
 
 
 def test_client_initialised_with_http_options_timeout_in_ms(mocker):
-    """Verify genai.Client is initialised with HttpOptions(timeout=...) in milliseconds."""
+    """Verify genai.Client is initialised with HttpOptions(timeout=..., api_version='v1beta') on Developer API."""
+    from google import genai
+
     from gemini_pr_review import main
 
-    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_TIMEOUT": "420"}, clear_env=True)
+    _setup_dry_run_main(mocker, {"GEMINI_TIMEOUT": "420"}, clear_env=True)
     mocker.patch("gemini_review.build_codebase_context", return_value="short context")
-    mock_client_cls = mocker.patch("google.genai.Client", return_value=mock_client)
 
     main()
 
-    call_kwargs = mock_client_cls.call_args.kwargs
+    call_kwargs = genai.Client.call_args.kwargs
+    assert call_kwargs["vertexai"] is False
     assert "http_options" in call_kwargs
     assert call_kwargs["http_options"].timeout == 420000
+    assert call_kwargs["http_options"].api_version == "v1beta"
+
+
+def test_vertex_client_preserves_default_api_version(mocker):
+    """Verify Vertex AI client does not override api_version with Developer API v1beta."""
+    from google import genai
+
+    from gemini_pr_review import main
+
+    _setup_dry_run_main(
+        mocker,
+        {
+            "GOOGLE_GENAI_USE_VERTEXAI": "True",
+            "GOOGLE_CLOUD_PROJECT": "test-project",
+            "GOOGLE_CLOUD_LOCATION": "global",
+            "GEMINI_TIMEOUT": "60",
+        },
+        clear_env=True,
+    )
+    mocker.patch("gemini_review.build_codebase_context", return_value="short context")
+
+    main()
+
+    call_kwargs = genai.Client.call_args.kwargs
+    assert call_kwargs["vertexai"] is True
+    assert call_kwargs["http_options"].timeout == 300000
+    assert call_kwargs["http_options"].api_version is None
+
+
+def test_enterprise_env_var_uses_vertex_branch_without_v1beta(mocker):
+    """Verify GOOGLE_GENAI_USE_ENTERPRISE='true' selects vertexai=True and leaves api_version=None."""
+    from google import genai
+
+    from gemini_pr_review import main
+
+    _setup_dry_run_main(
+        mocker,
+        {
+            "GOOGLE_GENAI_USE_ENTERPRISE": "true",
+            "GOOGLE_CLOUD_PROJECT": "test-project",
+            "GOOGLE_CLOUD_LOCATION": "global",
+            "GEMINI_TIMEOUT": "60",
+        },
+        clear_env=True,
+    )
+    mocker.patch("gemini_review.build_codebase_context", return_value="short context")
+
+    main()
+
+    call_kwargs = genai.Client.call_args.kwargs
+    assert call_kwargs["vertexai"] is True
+    assert call_kwargs["http_options"].timeout == 300000
+    assert call_kwargs["http_options"].api_version is None
+
+
+def test_is_connection_or_timeout_error_matches_httpx2_transient_errors():
+    """Verify _is_connection_or_timeout_error recognises transient transport/socket errors without false positives."""
+    import google.auth.exceptions
+    import httpx2
+    from google.genai import errors as genai_errors
+
+    from gemini_review.utils import _is_connection_or_timeout_error
+
+    for exc_cls in (
+        httpx2.ReadError,
+        httpx2.ReadTimeout,
+        httpx2.ConnectTimeout,
+        httpx2.WriteTimeout,
+        httpx2.PoolTimeout,
+        httpx2.RemoteProtocolError,
+        httpx2.ConnectError,
+        httpx2.NetworkError,
+        httpx2.CloseError,
+        httpx2.WriteError,
+    ):
+        assert _is_connection_or_timeout_error(exc_cls("simulated network failure")) is True
+
+    assert _is_connection_or_timeout_error(google.auth.exceptions.TransportError("token refresh reset")) is True
+    assert _is_connection_or_timeout_error(RuntimeError("[Errno 104] Connection reset by peer")) is True
+    assert _is_connection_or_timeout_error(ValueError("bad input")) is False
+    assert _is_connection_or_timeout_error(ValueError("timeout must be positive")) is False
+    assert (
+        _is_connection_or_timeout_error(genai_errors.ClientError(400, {"error": {"message": "invalid timeout"}}))
+        is False
+    )
+
+
+def test_generate_content_with_stream_fallback_httpx2_and_client_error(mocker):
+    """Verify stream fallback retries on httpx2/TransportError and re-raises ClientError/ValueError immediately."""
+    import google.auth.exceptions
+    import httpx2
+    from google.genai import errors as genai_errors
+
+    from gemini_review.utils import generate_content_with_stream_fallback
+
+    for transient_err in (
+        httpx2.ReadError("stream interrupted"),
+        google.auth.exceptions.TransportError("auth transport failure"),
+    ):
+        mock_client = mocker.Mock()
+        mock_client.models.generate_content.side_effect = transient_err
+        chunk = mocker.Mock(
+            text="streamed ok",
+            candidates=[],
+            function_calls=None,
+            prompt_feedback=None,
+            usage_metadata=None,
+        )
+        mock_client.models.generate_content_stream.return_value = iter([chunk])
+
+        resp = generate_content_with_stream_fallback(
+            mock_client,
+            model="gemini-4-hydrogen",
+            contents="prompt",
+            config=mocker.Mock(),
+        )
+        assert resp.text == "streamed ok"
+        assert mock_client.models.generate_content.call_count == 1
+        assert mock_client.models.generate_content_stream.call_count == 1
+
+    for non_transient_err in (
+        genai_errors.ClientError(400, {"error": {"message": "request timeout invalid"}}),
+        ValueError("invalid timeout"),
+    ):
+        mock_client = mocker.Mock()
+        mock_client.models.generate_content.side_effect = non_transient_err
+        with pytest.raises(type(non_transient_err)):
+            generate_content_with_stream_fallback(
+                mock_client,
+                model="gemini-4-hydrogen",
+                contents="prompt",
+                config=mocker.Mock(),
+            )
+        assert mock_client.models.generate_content_stream.call_count == 0
+
+
+def test_oversized_pr_diff_drops_full_file_contents_then_caps_patches(mocker):
+    """Verify prompt budget fallback drops full file contents first, then caps oversized patches via water-fill."""
+    from gemini_pr_review import main
+
+    # Stage 2: dropping codebase_context leaves modified Full Current File Content over budget -> strips full content.
+    mock_client, _ = _setup_dry_run_main(
+        mocker,
+        {"GEMINI_MAX_PROMPT_TOKENS": "2000", "GEMINI_PERSONA": "straight"},
+        clear_env=True,
+    )
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[{"filename": "large.py", "status": "modified", "patch": "@@ -1 +1 @@\n-old\n+small_patch_only"}],
+    )
+    main()
+
+    sent_prompt = mock_client.models.generate_content.call_args.kwargs["contents"]
+    assert isinstance(sent_prompt, str)
+    assert "--- Full Current File Content ---" not in sent_prompt
+    assert "+ | small_patch_only" in sent_prompt
+
+    # Stage 3: when patches alone still exceed budget, water-fill preserves small patches and caps giant patches.
+    giant_patch = "@@ -0,0 +1,500 @@\n" + "\n".join(f"+giant_diff_row_{i}_" + ("x" * 35) for i in range(500))
+    mock_client_3, _ = _setup_dry_run_main(
+        mocker,
+        {"GEMINI_MAX_PROMPT_TOKENS": "4000", "GEMINI_PERSONA": "straight"},
+        clear_env=True,
+    )
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[
+            {"filename": "small.py", "status": "modified", "patch": "@@ -1 +1 @@\n-a\n+tiny_keep_me"},
+            {"filename": "giant.md", "status": "added", "patch": giant_patch},
+        ],
+    )
+    main()
+
+    sent_prompt_3 = mock_client_3.models.generate_content.call_args.kwargs["contents"]
+    assert isinstance(sent_prompt_3, str)
+    assert "+ | tiny_keep_me" in sent_prompt_3
+    assert "TRUNCATED by gemini-review: diff patch for 'giant.md'" in sent_prompt_3
+    assert len(sent_prompt_3) // 4 <= 4000
+
+
+def test_is_thinking_config_error_distinguishes_thinking_from_token_limit():
+    """Verify is_thinking_config_error matches unsupported thinking errors and rejects token-limit/auth/vision 400s."""
+    from gemini_review import is_thinking_config_error
+
+    assert is_thinking_config_error(
+        RuntimeError("400 INVALID_ARGUMENT: thinking_level is not supported for this model")
+    )
+    assert is_thinking_config_error(RuntimeError("400 INVALID_ARGUMENT: Unknown name 'thinkingConfig'"))
+    assert is_thinking_config_error(RuntimeError("400 INVALID_ARGUMENT: Cannot find field: thinking_budget"))
+
+    assert not is_thinking_config_error(
+        RuntimeError(
+            "400 INVALID_ARGUMENT. {'error': {'code': 400, "
+            "'message': 'The input token count exceeds the maximum number of tokens allowed (1048576); "
+            "input token count: 1363891.', 'status': 'INVALID_ARGUMENT'}}"
+        )
+    )
+    assert not is_thinking_config_error(RuntimeError("400 INVALID_ARGUMENT: API key not valid"))
+    assert not is_thinking_config_error(RuntimeError("400 INVALID_ARGUMENT: Unable to process input image"))
+
+
+def test_pr_review_does_not_retry_thinking_config_on_token_limit_400(mocker):
+    """Verify PR review does not waste a second doomed request retrying thinking_config on input token limit 400."""
+    from gemini_pr_review import main
+
+    mock_client, _ = _setup_dry_run_main(
+        mocker,
+        {"GEMINI_THINKING_LEVEL": "low", "GEMINI_PERSONA": "straight"},
+        clear_env=True,
+    )
+    mocker.patch("gemini_review.build_codebase_context", return_value="short context")
+    mock_client.models.generate_content.side_effect = RuntimeError(
+        "400 INVALID_ARGUMENT: The input token count exceeds the maximum number of tokens allowed (1048576); "
+        "input token count: 1363891."
+    )
+
+    with pytest.raises(RuntimeError, match="exceeds the maximum number of tokens"):
+        main()
+
+    assert mock_client.models.generate_content.call_count == 1

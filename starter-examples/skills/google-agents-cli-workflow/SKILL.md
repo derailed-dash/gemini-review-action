@@ -12,7 +12,7 @@ description: >
 metadata:
   author: Google
   license: Apache-2.0
-  version: 1.5.0
+  version: 1.15.0
   requires:
     bins:
       - agents-cli
@@ -26,8 +26,8 @@ metadata:
 > **Before writing agent code, make sure a scaffolded project exists (see Phase 2).** Skipping scaffolding loses eval boilerplate, CI/CD config, and project conventions.
 
 
-> Requires: google-agents-cli ~= 1.5.0
-> If version is behind, run: uv tool install "google-agents-cli~=1.5.0"
+> Requires: google-agents-cli ~= 1.15.0
+> If version is behind, run: uv tool install "google-agents-cli~=1.15.0"
 
 > Check version: agents-cli info
 > [Install uv](https://docs.astral.sh/uv/getting-started/installation/index.md) first if needed.
@@ -39,12 +39,12 @@ Re-read the relevant skill **before** each phase — not after you've already st
 | Phase | Skill | When to load |
 |-------|-------|--------------|
 | 0 — Understand | — | No skill needed — read `.agents-cli-spec.md` if present, else clarify goals with the user |
-| 1 — Study recipes | `/google-agents-cli-adk-code` | **Load it during design** — its `references/samples.md` topic index maps a need to the recipe that implements it. Yes, this early: the catalog lives there. |
+| 1 — Study recipes | `/google-agents-cli-adk-code` | **Load it during design**, before scaffolding. Python: the `references/recipes.md` topic index maps a need to the recipe that implements it. Go: the upstream [examples/](https://github.com/google/adk-go/tree/main/examples) are the equivalent. Yes, load this early. |
 | 2 — Scaffold | `/google-agents-cli-scaffold` | Before creating or enhancing a project |
 | 3 — Build | `/google-agents-cli-adk-code` | Before writing agent code — API patterns, tools, callbacks, state |
 | 4 — Evaluate | `/google-agents-cli-eval` | Before running any eval — dataset schema, metrics, eval-fix loop |
 | 5 — Deploy | `/google-agents-cli-deploy` | Before deploying — target selection, troubleshooting 403/timeouts |
-| 6 — Publish | `/google-agents-cli-publish` | After deploying, if registering with Gemini Enterprise (optional) |
+| 6 — Publish | `/google-agents-cli-publish` | After deploying, if registering with Gemini (optional) |
 | 7 — Observe | `/google-agents-cli-observability` | After deploying — traces, logging, monitoring setup |
 
 ---
@@ -62,7 +62,7 @@ Install `uv` following the [official installation guide](https://docs.astral.sh/
 
 ### Product name mapping
 
-Users name products inconsistently (Vertex AI → Agent Platform, Agent Engine → Agent Runtime, etc.). Map user terms to CLI values using `references/terminology.md`.
+Users name products inconsistently (Vertex AI or Agent Platform → Gemini platform, Agent Engine or Agent Runtime → Agent Runtime in Gemini platform, etc.). Map user terms to CLI values using `references/terminology.md`.
 
 ---
 
@@ -85,11 +85,12 @@ Do NOT proceed to planning, scaffolding, or coding until the user approves the s
 
 **Ask based on context:**
 
-- If the agent needs a **capability the scaffold doesn't ship** — retrieval over your data, sandboxed code execution, memory across sessions, OAuth consent, safety guardrails, event-driven triggers — that capability comes from a **clone-and-study recipe**, not a scaffold flag. Look the need up in the topic index in `/google-agents-cli-adk-code` → `references/samples.md` and study the matching recipe in Phase 1.
+- If the agent needs a **capability the scaffold doesn't ship** — retrieval over your data, sandboxed code execution, memory across sessions, OAuth consent, safety guardrails, event-driven triggers — that capability comes from a **clone-and-study recipe**, not a scaffold flag. Look the need up in the topic index in `/google-agents-cli-adk-code` → `references/recipes.md` and study the matching recipe in Phase 1.
+- If the agent is a **live or voice agent** (Live API, spoken conversation, barge-in, telephony) → load `/google-agents-cli-adk-code` (`references/adk-python-live.md`) **before writing the spec**. Live rules out A2A, the Gemini app, and the default model.
 - If agent should be **available to other agents** → **A2A protocol** is built into every Python agent scaffolded by agents-cli; no separate choice needed — just scaffold normally.
 - If **full deployment** chosen → **CI/CD runner?** GitHub Actions (default) or Google Cloud Build?
-- If agent should **remember user preferences or facts across sessions** → long-term memory across conversations. Load `/google-agents-cli-adk-code` — it has both the recipe (in `references/samples.md`) and the ADK memory API details.
-- If **Cloud Run** or **GKE** chosen → **Session storage?** In-memory (default), Cloud SQL (persistent), or Agent Platform Sessions (managed).
+- If agent should **remember user preferences or facts across sessions** → long-term memory across conversations. Load `/google-agents-cli-adk-code` — it has both the recipe (in `references/recipes.md`) and the ADK memory API details.
+- If **Cloud Run** or **GKE** chosen → **Session storage?** In-memory (default), Cloud SQL (persistent), or Sessions in Gemini platform (managed).
 - If **deployment with CI/CD** chosen → **Git repository?** Does one already exist, or should one be created? If creating, public or private?
 
 Once the design is agreed, write the spec to `.agents-cli-spec.md` using the template in `references/spec-template.md`, self-review it, then get the user's approval. See `/google-agents-cli-scaffold` for how these choices map to CLI flags.
@@ -105,14 +106,23 @@ Once you have a clear understanding, proceed to **Phase 1**.
 > blocking harmful content or moderating what agents say · acting with a user's own API keys or
 > credentials · OAuth consent to reach a user's own data · delegating to sub-agents with isolated
 > context · speaking A2A to other agents · reacting to events or a schedule · researching a topic
-> online and reporting it with citations · generating images or video — then a recipe already
+> online and reporting it with citations · generating images or video · monitoring a deployed
+> agent's quality from its production traces · talking to the agent by voice in real time — then a recipe already
 > implements it. Look it up **before you commit to an implementation.**
 >
-> This list covers the same capabilities as the topic index in `/google-agents-cli-adk-code` → `references/samples.md`. If you extend one, extend the other.
+> This list covers the same capabilities as the topic index in `/google-agents-cli-adk-code` → `references/recipes.md`. If you extend one, extend the other.
 
-**Load `/google-agents-cli-adk-code` now** — the catalog lives there, at `references/samples.md`. Load it even though nothing is scaffolded and you are not writing code yet; "wrong phase for the code skill" is the rationalisation that makes agents skip this step, and that skill's *Prerequisites for writing code* does not apply to you. Look each capability the design calls for up in its **topic index**. It maps needs (retrieval, sandboxed execution, memory, approval gates, guardrails, per-user credentials, scheduling) to the recipe that teaches them, and shows how to clone one. Multiple recipes can match — clone and study all that are relevant, starting with each one's `AGENTS.md`.
+**Load `/google-agents-cli-adk-code` now**.Load it even though nothing is scaffolded and you are not writing code yet; "wrong phase for the code skill" is the rationalisation that makes agents skip this step, and that skill's *Prerequisites for writing code* does not apply to you.
 
-If no recipe matches, proceed to Phase 2. But first — are you sure? Re-read the user's request and re-check the topic index in `/google-agents-cli-adk-code`. Skipping a matching recipe means rebuilding patterns that already exist, usually worse.
+Look up each capability the design calls for. **ADK Python:** the **topic index** in
+`references/recipes.md` maps needs (retrieval, sandboxed execution, memory, approval gates,
+guardrails, per-user credentials, scheduling) to the recipe that teaches them and shows how to
+clone one. **ADK Go:** there is no references catalog — read `references/adk-go.md` for the API and
+the upstream [`examples/`](https://github.com/google/adk-go/tree/main/examples).
+
+Multiple recipes can match — clone and study all that are relevant, starting with each one's `AGENTS.md`.
+
+If no recipe matches, proceed to Phase 2. But first — are you sure? Re-read the user's request and re-check the topic index for your language. Skipping a matching recipe means rebuilding patterns that already exist, usually worse.
 
 > **IMPORTANT — Exit criteria:** After studying a recipe, ask yourself: can I apply anything from it to help me deliver the design? Note what you'll reuse before moving on. Do NOT proceed until you've answered this.
 
@@ -123,7 +133,7 @@ If no recipe matches, proceed to Phase 2. But first — are you sure? Re-read th
 First check whether a project already exists: run `agents-cli info` from the project root. If one was already created or enhanced by agents-cli, skip this phase.
 
 Otherwise, scaffold **before writing any code**:
-- **No project yet** → `agents-cli scaffold create <name>`
+- **No project yet** → `agents-cli scaffold create <name> --agent <template> --deployment-target <target>`
 - **Existing code to import** → `agents-cli scaffold enhance .` (adds the agents-cli structure)
 
 Use `/google-agents-cli-scaffold` for the full workflow — it covers architecture choices (deployment target, agent type, session storage) and project creation or enhancement.
@@ -140,7 +150,7 @@ If the user asks for interactive testing, suggest `agents-cli playground` — it
 
 For ADK API patterns and code examples, use `/google-agents-cli-adk-code`.
 
-> **Smoke-test only here — do not write behavioral pytest.** LLM output is non-deterministic; behavioral checks belong in eval (Phase 4), not pytest. Use `agents-cli run "prompt"` for quick checks.
+> **Smoke-test only here — do not write behavioral unit tests.** LLM output is non-deterministic; behavioral checks belong in eval (Phase 4), not in `pytest` or `go test`. Use `agents-cli run "prompt"` for quick checks.
 
 ### Provision recipe infrastructure (if you adapted one)
 
@@ -158,19 +168,19 @@ It contains the dataset schema, config format, and critical gotchas. Do NOT skip
 
 **Do NOT skip this phase.** After building the agent, you MUST proceed to evaluation.
 
-**`uv run pytest` vs `agents-cli eval` — know the difference:**
-- **`uv run pytest`** — Tests *code correctness*: imports work, functions return expected types, API contracts hold. Does NOT test whether the agent behaves well.
+**Unit tests vs `agents-cli eval` — know the difference:**
+- **Unit tests** (`uv run pytest` for Python, `go test ./...` for Go) — Tests *code correctness*: imports work, functions return expected types, API contracts hold. Does NOT test whether the agent behaves well.
 - **`agents-cli eval`** — Tests *agent behavior*: response quality, tool usage, persona consistency, safety compliance. This is what validates your agent actually works.
-- **`agents-cli run "prompt"`** — Quick one-off smoke test during development. If testing multiple prompts use the `--start-server` option to persist the local server, which reduces overhead for repeated calls and allows resuming local sessions via `--session-id`. Use this for fast iteration, not pytest.
+- **`agents-cli run "prompt"`** — Quick one-off smoke test during development. If testing multiple prompts use the `--start-server` option to persist the local server, which reduces overhead for repeated calls and allows resuming local sessions via `--session-id`. Use this for fast iteration, not unit tests.
 
-**NEVER write pytest tests that check LLM response content** (e.g., asserting pirate keywords appear, checking if the agent mentions allergies). LLM outputs are non-deterministic. Use eval with LLM-as-judge criteria instead.
+**NEVER write unit tests that check LLM response content** (e.g., asserting pirate keywords appear, checking if the agent mentions allergies). LLM outputs are non-deterministic. Use eval with LLM-as-judge criteria instead.
 
 1. **Start small**: Begin with 1-2 sample eval cases, not a full suite
 2. Run evaluations: `agents-cli eval run` (chains `generate` + `grade`). For debugging or custom trace locations, use the two-step form: `agents-cli eval generate` then `agents-cli eval grade`.
 3. Discuss results with the user
 4. Fix issues and iterate on the core cases first
 5. Only after core cases pass, add edge cases and new scenarios
-6. Repeat until every case meets the bar you agreed with the user (`eval run` exits 0 whatever the scores are, so read them)
+6. Repeat until every case meets the bar you agreed with the user. Record that bar as `thresholds` in the eval config: `eval run` then ends with `RESULT: PASS` or `RESULT: FAIL (...)` and exits 1 on a miss or an errored case
 
 **Expect 5-10+ iterations here.**
 
@@ -190,7 +200,7 @@ Once the user agrees the eval scores are good enough:
 
 ## Phase 6: Publish (optional)
 
-Not all agents require this — currently supporting Gemini Enterprise. See `/google-agents-cli-publish` for registration modes, flags, and troubleshooting.
+Not all agents require this — currently supporting registration with Gemini. See `/google-agents-cli-publish` for registration modes, flags, and troubleshooting.
 
 ## Phase 7: Observe
 
@@ -209,7 +219,7 @@ Agents routinely skip steps with plausible-sounding excuses. Recognize these and
 | "The user's request is clear enough, no need to clarify" | You're guessing at requirements. Phase 0 exists to confirm intent before scaffolding — even one question can prevent a full rework. |
 | "The agent responded correctly in `agents-cli run`, so eval isn't needed" | One prompt is not a test suite. Eval catches regressions, edge cases, and tool trajectory issues that a single run never will. |
 | "I'll use a newer/better model" | The scaffolded model was chosen deliberately. Changing it without being asked violates code preservation (Principle 1) and often breaks things — wrong location, deprecated version, or 404. Your training data is likely out of date — rely on the skills and the model listing command, not your knowledge of model names. |
-| "I already know how to build this — sandbox, memory, approval gates" | You are about to reinvent a recipe, worse. These capabilities are already implemented and battle-tested in `/google-agents-cli-adk-code` → `references/samples.md`; check the topic index and open the matching recipe's `AGENTS.md` before designing anything custom. |
+| "I already know how to build this — sandbox, memory, approval gates" | You are about to reinvent a recipe, worse. These capabilities are already implemented and battle-tested in `/google-agents-cli-adk-code` → `references/recipes.md`; check the topic index and open the matching recipe's `AGENTS.md` before designing anything custom. |
 | "I can skip the scaffold and set up manually" | Manual setup misses eval boilerplate, CI/CD config, and project configuration manifest conventions. Use `agents-cli create` even for quick experiments. |
 
 ## Principle 1: Code Preservation & Isolation
@@ -238,7 +248,7 @@ Before finalizing any code replacement, verify the following:
   ```python
   root_agent = Agent(
       name="recipe_suggester",  # OK, related to new purpose
-      model="gemini-3.7-flash",  # PRESERVED
+      model="gemini-3.8-flash",  # PRESERVED
       instruction="You are a recipe suggester."  # OK, the direct target
   )
   ```
@@ -247,16 +257,16 @@ Before finalizing any code replacement, verify the following:
 
 - **Model Selection — CRITICAL:**
   - **NEVER change the model unless explicitly asked.**
-  - When creating NEW agents (not modifying existing), use the latest Gemini model. List available models to pick the newest one:
+  - When creating NEW agents (not modifying existing), use the latest Gemini model. List what is available in the location your agent actually uses (`GOOGLE_CLOUD_LOCATION`; `global` by default) — not every model is served from every location:
     ```bash
-    # Use 'global' or any supported region (e.g. 'us-east1')
     uv run --with google-genai python -c "
     from google import genai
+    # Use your GOOGLE_CLOUD_LOCATION ('global', or a region such as 'us-east1')
     client = genai.Client(vertexai=True, location='global')
     for m in client.models.list(): print(m.name)
     "
     ```
-  - Do NOT use older models unless explicitly requested. For model docs, fetch `https://adk.dev/agents/models/google-gemini/index.md`. See also [stable model versions](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions).
+  - Do NOT use older models unless explicitly requested. For model docs, fetch `https://adk.dev/agents/models/google-gemini/index.md`. See also [stable model versions](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/model-versions) and [model endpoint locations](https://docs.cloud.google.com/gemini-enterprise-agent-platform/resources/locations#google-models).
 
 - **Running Python Commands:**
   - Always use `uv` to execute Python commands (e.g., `uv run python script.py`)
@@ -303,7 +313,7 @@ When you need specific infrastructure files (Terraform, CI/CD, Dockerfile) but d
 
 | File | Contents |
 |------|----------|
-| `references/internals.md` | Underlying tools and commands that `agents-cli` wraps (adk, pytest, ruff, uvicorn) |
+| `references/internals.md` | Underlying tools and commands that `agents-cli` wraps, per language (Python: adk, uv, ruff; Go: adk-go, go, golangci-lint) |
 | `references/spec-template.md` | `.agents-cli-spec.md` template and optional sections |
 | `references/brainstorming.md` | Phase 0 design-dialogue playbook (one-at-a-time Q&A, approaches, gates) |
 | `references/terminology.md` | Product-name → CLI-value mapping |

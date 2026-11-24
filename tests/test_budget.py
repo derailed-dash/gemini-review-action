@@ -69,13 +69,16 @@ class TestCapFileContent:
 class TestLimits:
     def test_a_known_model_uses_its_published_window(self):
         assert input_token_limit("gemini-4-hydrogen") == 1_048_576
+        assert input_token_limit("gemini-4-neon") == 1_048_576
         assert input_token_limit("gemini-4-argon") == 1_048_576
         assert input_token_limit("gemini-4-carbon") == 1_048_576
+        assert input_token_limit("gemini-decision-1") == 262_144
         assert input_token_limit("gemini-3.8-flash") == 1_048_576
         assert input_token_limit("gemini-3.7-flash") == 1_048_576
 
     def test_a_prefixed_model_id_resolves(self):
         assert input_token_limit("publishers/google/models/GEMINI-4-HYDROGEN") == 1_048_576
+        assert input_token_limit("publishers/google/models/GEMINI-4-NEON") == 1_048_576
         assert input_token_limit("publishers/google/models/GEMINI-3.8-FLASH") == 1_048_576
         assert input_token_limit("publishers/google/models/GEMINI-3.7-FLASH") == 1_048_576
 
@@ -146,3 +149,74 @@ class TestDiffPromptIsBounded:
         prompt = build_pr_diff_prompt(files)
         assert "return 'world'" in prompt
         assert "TRUNCATED" not in prompt
+
+    def test_added_and_removed_files_omit_redundant_full_content(self, tmp_path, monkeypatch):
+        """Added files already appear in full inside the patch; omit duplicate Full Current File Content blocks."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "new_skill.md").write_text("line one\nline two\nUNIQUE_ADDED_BODY\n")
+        files = [
+            {
+                "filename": "new_skill.md",
+                "status": "added",
+                "patch": "@@ -0,0 +1,3 @@\n+line one\n+line two\n+UNIQUE_ADDED_BODY",
+            },
+            {
+                "filename": "old_skill.md",
+                "status": "removed",
+                "patch": "@@ -1,2 +0,0 @@\n-removed one\n-removed two",
+            },
+        ]
+        prompt = build_pr_diff_prompt(files)
+        assert "UNIQUE_ADDED_BODY" in prompt
+        assert "--- Diff (Patch) ---" in prompt
+        assert "--- Full Current File Content ---" not in prompt
+
+    def test_include_full_content_false_drops_full_file_content_even_for_modified(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "app.py").write_text("UNTOUCHED_FULL_CONTEXT\nchanged_line\n")
+        files = [{"filename": "app.py", "status": "modified", "patch": "@@ -2 +2 @@\n-old_line\n+changed_line"}]
+        prompt = build_pr_diff_prompt(files, include_full_content=False)
+        assert "+ | changed_line" in prompt
+        assert "--- Full Current File Content ---" not in prompt
+        assert "UNTOUCHED_FULL_CONTEXT" not in prompt
+
+    def test_max_patch_bytes_caps_large_patches_with_marker_and_preserves_small(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "small.py").write_text("tiny = 1\n")
+        (tmp_path / "giant.md").write_text("big\n")
+        giant_patch = "@@ -0,0 +1,200 @@\n" + "\n".join(f"+row_{i}_payload_padding" for i in range(200))
+        files = [
+            {"filename": "small.py", "status": "modified", "patch": "@@ -1 +1 @@\n-old\n+tiny_keep"},
+            {"filename": "giant.md", "status": "added", "patch": giant_patch},
+        ]
+        prompt = build_pr_diff_prompt(files, include_full_content=False, max_patch_bytes=800)
+        assert "+ | tiny_keep" in prompt
+        assert "TRUNCATED by gemini-review: diff patch for 'giant.md'" in prompt
+        assert "diff patch for 'small.py'" not in prompt
+
+
+class TestCapPatchAndWaterfill:
+    def test_cap_patch_content_truncates_on_line_boundary_with_loud_marker(self):
+        from gemini_review.budget import cap_patch_content
+
+        patch = "\n".join(f"{i} + | content_{i}" for i in range(200))
+        out, capped = cap_patch_content(patch, "big.diff", 400)
+        assert capped is True
+        assert "TRUNCATED by gemini-review: diff patch for 'big.diff'" in out
+        assert "400" in out
+        body = out.split("[TRUNCATED")[0]
+        assert body.endswith("\n\n") or body.rstrip("\n").split("\n")[-1].startswith(tuple(str(i) for i in range(200)))
+
+        assert cap_patch_content(patch, "big.diff", 0) == (patch, False)
+        assert cap_patch_content("short", "small.diff", 400) == ("short", False)
+
+    def test_compute_waterfill_cap_preserves_small_and_splits_remaining_across_giants(self):
+        from gemini_review.budget import compute_waterfill_cap
+
+        assert compute_waterfill_cap([], 10_000) == 0
+        # Fits under target_total -> returns max size untouched
+        assert compute_waterfill_cap([500, 1200], 5_000) == 1200
+        # Two small (1000 each = 2000) + two giant (50000 each) under 22000 budget -> remaining 20000 // 2 = 10000
+        assert compute_waterfill_cap([1_000, 50_000, 1_000, 50_000], 22_000) == 10_000
+        # Enforces min_cap floor even when budget is tiny
+        assert compute_waterfill_cap([10_000, 10_000], 100) == 512

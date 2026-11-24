@@ -12,8 +12,11 @@ from .billing_labels import (
 )
 from .budget import (
     cap_file_content,
+    cap_patch_content,
+    compute_waterfill_cap,
     max_file_bytes,
     prompt_token_budget,
+    report_capped_patches,
 )
 from .config import (
     DEFAULT_MODEL,
@@ -118,10 +121,14 @@ from .skills import (
 from .threads import fetch_review_threads, resolve_addressed_threads, reviewer_logins
 from .utils import (
     _normalize_model_name,
+    build_cache_tools,
     context_cache_fingerprint,
     count_text_tokens,
+    create_genai_client,
     extract_response_text_or_raise,
     generate_content_with_stream_fallback,
+    is_thinking_config_error,
+    is_vertexai_enabled,
     load_workspace_rules,
     resolve_tool_calls_loop,
 )
@@ -155,7 +162,11 @@ __all__ = [
     "_auto_align_suggestion_indentation",
     "_auto_correct_suggestion_range",
     "_normalize_model_name",
+    "build_cache_tools",
     "context_cache_fingerprint",
+    "create_genai_client",
+    "is_thinking_config_error",
+    "is_vertexai_enabled",
     "build_codebase_context",
     "build_pr_diff_prompt",
     "build_prompt",
@@ -224,5 +235,8 @@ __all__ = [
     "select_dynamic_context_files",
     "prompt_token_budget",
     "cap_file_content",
+    "cap_patch_content",
+    "compute_waterfill_cap",
     "max_file_bytes",
+    "report_capped_patches",
 ]

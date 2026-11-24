@@ -1,12 +1,12 @@
 # Phase 0 Brainstorming Playbook
 
 Turn the user's idea into an agreed `.agents-cli-spec.md` through a collaborative dialogue —
-*before* any sample study, scaffolding, or code. Adapt the depth to the agent's complexity.
+*before* any recipe study, scaffolding, or code. Adapt the depth to the agent's complexity.
 
 ## HARD-GATE
 
-Do NOT clone a sample, scaffold, run `agents-cli create`, or write any code until the user has
-approved the spec. **Reading the recipe index is exempt** — it is not "studying a sample". Scan it
+Do NOT clone a recipe, scaffold, run `agents-cli create`, or write any code until the user has
+approved the spec. **Reading the recipe index is exempt** — it is not "studying a recipe". Scan it
 before your first reply and name any matching recipe there, even when that reply is only a
 clarifying question. This applies even to "obvious" agents — unexamined assumptions cause the most
 wasted work.
@@ -30,8 +30,8 @@ When unsure, start light and escalate as complexity surfaces.
   your first reply.** Jumping straight to a finished spec is the most common failure — it skips the
   dialogue this phase exists for. (Exceptions: a trivial agent, or a genuinely non-interactive run.)
 - Prefer multiple-choice questions — they are easier to answer than open-ended ones.
-- Cover the Phase 0 topics (problem, tools/APIs + auth, safety, deployment, plus the context-based
-  ones in `SKILL.md`), but follow the user's lead rather than a fixed script.
+- Cover the Phase 0 topics (problem, tools/APIs + auth, safety, deployment, implementation
+  language, plus the context-based ones in `SKILL.md`), but follow the user's lead rather than a fixed script.
 - YAGNI: prune features that don't serve the stated purpose.
 
 ## When you can't ask (non-interactive, sparse, or deferred input)
@@ -46,7 +46,7 @@ schedule/cadence, and which model.**
 
 Non-interactive ≠ skip the thinking. For non-trivial agents you must still record the approaches you
 weighed and the one you chose, flag oversized scope, and route any capability the scaffold doesn't
-ship to its recipe (`/google-agents-cli-adk-code` → `references/samples.md`) — then commit to a design. The user-review gate is how they catch a wrong assumption.
+ship to its recipe (`/google-agents-cli-adk-code` → `references/recipes.md`) — then commit to a design. The user-review gate is how they catch a wrong assumption.
 
 ## Propose 2–3 approaches (non-trivial agents)
 
@@ -60,11 +60,13 @@ or override. Typical axes:
 - **Tool / integration choices** — which APIs or data sources, and how auth is handled.
 - **Capabilities the scaffold doesn't ship** — retrieval ("search / look up over our docs, incidents,
   tickets, or knowledge base"), sandboxed shell or code execution, memory across sessions, approval
-  gates before risky actions, OAuth consent, safety guardrails, event-driven or scheduled runs. Each
-  is a **clone-and-study recipe, never a scaffold flag**: look the need up in the topic index in
-  `/google-agents-cli-adk-code` → `references/samples.md` and list every matching recipe in the spec's
-  Reference Samples, to study in Phase 1. Don't silently downgrade a stated need to a plain tool
-  call, and flag it even when it's deferred to a later phase.
+  gates before risky actions, OAuth consent, safety guardrails, event-driven or scheduled runs. None
+  of these is a scaffold flag; each is something you build by studying a worked example first. List
+  every match in the spec's Reference Recipes, to study in Phase 1. Don't silently downgrade a stated
+  need to a plain tool call, and flag it even when it's deferred to a later phase.
+  **In Python**, look the need up in the topic index in `/google-agents-cli-adk-code` →
+  `references/recipes.md`, which maps it to a clone-and-study recipe. **In Go**, that catalog has no
+  equivalent — the same skill's `references/adk-go.md` says where to find Go examples.
 - **Deployment shape** — prototype-first (recommended) vs a deployment target.
 
 ## Present the design in sections
@@ -113,7 +115,7 @@ Fix issues inline, then continue.
 Ask the user to review `.agents-cli-spec.md` before moving on:
 
 > "Spec written to `.agents-cli-spec.md`. Please review it and tell me if you want changes before we
-> look at reference samples and scaffold."
+> look at reference recipes and scaffold."
 
 If they request changes, make them and re-run the self-review. Only once they approve do you proceed
-to **Phase 1 (study samples)** → **Phase 2 (scaffold)**.
+to **Phase 1 (study recipes)** → **Phase 2 (scaffold)**.

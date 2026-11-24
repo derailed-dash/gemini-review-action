@@ -21,7 +21,7 @@ For the public-docs version of this workflow, see the
 -   The user wants to evaluate a **custom-weights / Bring-Your-Own-Model
     (BYOM)** model deployed to an Agent Platform endpoint.
 -   The user wants to evaluate a **Model-as-a-Service (MaaS)** model (e.g.
-    `meta/llama3-8b`, `gemini-1.5-pro`) by model ID.
+    `meta/llama3-8b`, `gemini-2.5-pro`) by model ID.
 -   The user is at the deploy-then-eval stage: weights exist in GCS or in Model
     Garden but no endpoint has been provisioned yet.
 

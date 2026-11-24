@@ -51,7 +51,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6 # pin to a commit SHA in your own repo, see README
+        uses: actions/checkout@v7 # pin to a commit SHA in your own repo, see README
         with:
           # Automatically checks out the head ref for PR events,
           # and pulls the PR head branch for comment-based triggers

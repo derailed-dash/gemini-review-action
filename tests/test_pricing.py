@@ -204,6 +204,79 @@ class TestGemini4Argon:
         assert cost.total == pytest.approx(20.00)
 
 
+class TestGemini4Neon:
+    """Neon has flat pricing ($3.00/$15.00) and 0.05x cached input (95% discount)."""
+
+    def test_a_usage_record_is_priced_correctly(self):
+        # 100k uncached in ($0.30), 900k cached in at 0.05x = $0.15/1M ($0.135),
+        # 2k response + 3k thinking out at $15.00/1M ($0.03 + $0.045 = $0.075) -> $0.51.
+        record = {**usage(fresh=100_000, cached=900_000, output=2_000), "thoughts_tokens": 3_000}
+        cost = estimate_cost(record, "gemini-4-neon", today=date(2026, 11, 24))
+        assert cost.rate is not None, "an unpriced model reports tokens and no cost"
+        assert cost.uncached_input == pytest.approx(0.30)
+        assert cost.cached_input == pytest.approx(0.135)
+        assert cost.thinking == pytest.approx(0.045)
+        assert cost.candidates_output == pytest.approx(0.03)
+        assert cost.output == pytest.approx(0.075)
+        assert cost.total == pytest.approx(0.51)
+
+    def test_has_no_introductory_promo_and_is_flat_across_dates(self):
+        early = estimate_cost(usage(fresh=1_000_000, cached=1_000_000), "gemini-4-neon", today=date(2026, 11, 24))
+        later = estimate_cost(usage(fresh=1_000_000, cached=1_000_000), "gemini-4-neon", today=date(2027, 2, 1))
+        assert early.total == pytest.approx(3.00 + 0.15)
+        assert later.total == pytest.approx(early.total)
+        assert not any("introductory rate" in c for c in early.caveats)
+
+    def test_vertex_model_path_resolves(self):
+        vertex_id = "publishers/google/models/gemini-4-neon"
+        cost = estimate_cost(usage(output=1_000_000), vertex_id, today=date(2026, 11, 24))
+        assert cost.total == pytest.approx(15.00)
+
+
+class TestGemini4Carbon:
+    """Carbon has promo ($2.00/$10.00) through Nov 30, 2026, then $4.00/$20.00, with 0.05x cached input."""
+
+    def test_a_usage_record_is_priced_at_the_promo_rate(self):
+        # 100k uncached in ($0.20), 900k cached in at 0.05x = $0.10/1M ($0.09),
+        # 2k response + 3k thinking out at $10.00/1M ($0.02 + $0.03 = $0.05) -> $0.34.
+        record = {**usage(fresh=100_000, cached=900_000, output=2_000), "thoughts_tokens": 3_000}
+        cost = estimate_cost(record, "gemini-4-carbon", today=date(2026, 11, 24))
+        assert cost.rate is not None, "an unpriced model reports tokens and no cost"
+        assert cost.uncached_input == pytest.approx(0.20)
+        assert cost.cached_input == pytest.approx(0.09)
+        assert cost.thinking == pytest.approx(0.03)
+        assert cost.candidates_output == pytest.approx(0.02)
+        assert cost.output == pytest.approx(0.05)
+        assert cost.total == pytest.approx(0.34)
+
+    def test_the_promo_ends_with_november(self):
+        on = estimate_cost(usage(fresh=1_000_000, cached=1_000_000), "gemini-4-carbon", today=date(2026, 11, 30))
+        after = estimate_cost(usage(fresh=1_000_000, cached=1_000_000), "gemini-4-carbon", today=date(2026, 12, 1))
+        assert on.total == pytest.approx(2.00 + 0.10)
+        assert after.total == pytest.approx(4.00 + 0.20)
+
+    def test_vertex_model_path_resolves(self):
+        vertex_id = "publishers/google/models/gemini-4-carbon"
+        cost = estimate_cost(usage(output=1_000_000), vertex_id, today=date(2026, 12, 1))
+        assert cost.total == pytest.approx(20.00)
+
+
+class TestGeminiDecision1:
+    """Decision 1 bills $0.10/1M input tokens, $0.00 output tokens, and does not support caching."""
+
+    def test_a_usage_record_is_priced_correctly(self):
+        cost = estimate_cost(usage(fresh=1_000_000, output=500), "gemini-decision-1", today=date(2026, 11, 24))
+        assert cost.rate is not None, "an unpriced model reports tokens and no cost"
+        assert cost.uncached_input == pytest.approx(0.10)
+        assert cost.output == pytest.approx(0.0)
+        assert cost.total == pytest.approx(0.10)
+        assert any("context caching not supported" in c.lower() for c in cost.caveats)
+
+    def test_cached_multiplier_is_full_price_if_ever_passed(self):
+        cost = estimate_cost(usage(cached=1_000_000), "gemini-decision-1", today=date(2026, 11, 24))
+        assert cost.cached_input == pytest.approx(0.10)
+
+
 class TestRateTable:
     def test_every_promo_is_cheaper_than_its_standard_rate(self):
         """A promo dearer than the standard rate would mean the two were swapped."""

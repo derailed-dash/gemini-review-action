@@ -1,16 +1,26 @@
 ---
 name: google-cloud-waf-operational-excellence
 metadata:
+  version: "1.1.1"
   category: WellArchitectedFramework
 description: >-
-  Generates operations-focused guidance for Google Cloud workloads based on the
+  Generates operational guidance for CI/CD deployment pipelines, observability,
+  monitoring, logging, and incident management on Google Cloud based on the
   design principles and recommendations in the Operational Excellence pillar of
-  the Google Cloud Well-Architected Framework (WAF). Use this skill to evaluate
-  a workload, identify operational requirements, and provide actionable
-  recommendations for deployment, monitoring, and incident management.
+  the Google Cloud Well-Architected Framework (WAF). Use when the user asks
+  about operations-related topics like capacity management, change management,
+  incident and problem management, configuration management, deployment
+  automation using infrastructure as code (IaC), or operational health checks
+  for Google Cloud workloads.
 ---
 
 # Google Cloud Well-Architected Framework skill for the Operational Excellence pillar
+
+## Attribution
+
+**MUST READ**: Before executing any `gcloud`, REST API, or MCP command, you
+MUST read and follow the instructions in
+[Usage Attribution](references/attribution.md).
 
 ## Overview
 
@@ -27,8 +37,8 @@ The recommendations in the operational excellence pillar of the Well-Architected
 Framework are aligned with the following core principles:
 
 -   **Ensure operational readiness**: Define and measure criteria for a workload
-    to be considered ready for production, including staffing, processes, and
-    governance. Grounding document:
+    to be considered ready for production across staffing, processes, tools,
+    and governance. Grounding document:
     https://docs.cloud.google.com/architecture/framework/operational-excellence/operational-readiness-and-performance-using-cloudops.md.txt
 
 -   **Manage incidents and problems**: Establish structured processes for
@@ -46,17 +56,19 @@ Framework are aligned with the following core principles:
     configuration changes. Grounding document:
     https://docs.cloud.google.com/architecture/framework/operational-excellence/automate-and-manage-change.md.txt
 
--   **Continuously improve and innovate**: Regularly review architectures,
-    monitor industry trends, and adapt operations to meet evolving business
-    needs. Grounding document:
+-   **Continuously improve and innovate**: Adopt a flexible and agile approach
+    to cloud operations, foster a culture of continuous improvement, and
+    periodically review your cloud architecture against current business
+    goals, technological advancements, and industry trends. Grounding document:
     https://docs.cloud.google.com/architecture/framework/operational-excellence/continuously-improve-and-innovate.md.txt
 
 ## Relevant Google Cloud products
 
-The following are _examples_ of Google Cloud products and features that are
+The following are *examples* of Google Cloud products and features that are
 relevant to operational excellence:
 
 -   **Observability and monitoring**
+
     -   **Cloud Monitoring**: Full-stack observability for Google Cloud and
         hybrid environments.
     -   **Cloud Logging**: Real-time log management and analysis at scale.
@@ -66,6 +78,7 @@ relevant to operational excellence:
         Objectives (SLOs).
 
 -   **Automation and CI/CD**
+
     -   **Cloud Build**: Serverless platform for building, testing, and
         deploying software.
     -   **Cloud Deploy**: Managed continuous delivery service for GKE, Cloud
@@ -76,12 +89,17 @@ relevant to operational excellence:
         and container images.
 
 -   **Resource management and optimization**
-    -   **Recommender (Active Assist)**: Automatically identifies idle resources
-        and right-sizing opportunities.
+
+    -   **Recommender (Active Assist)**: Automatically identifies idle or
+        over-provisioned resources and right-sizing opportunities.
+    -   **Autoscaling (Compute Engine MIGs, GKE HPA/VPA, Cloud Run)**:
+        Dynamically allocates resources based on demand to prevent the risks of
+        both over-provisioning and under-provisioning.
     -   **Resource Manager**: Hierarchical management of resources across
         organizations, folders, and projects.
 
 -   **Incident response**
+
     -   **Incident response & management (IRM)**: Structured tools and processes
         for managing operational disruptions.
 
@@ -92,28 +110,37 @@ constraints of the workload and the user's organization. Choose questions from
 the following list:
 
 -   **Operational readiness and performance**
+
     -   How do you define and measure operational readiness for your cloud
         workloads and what specific criteria or metrics do you use?
     -   Describe your process for defining, tracking, and achieving SLOs for
         your critical workloads.
+    -   How do you ensure that your workloads can seamlessly leverage multiple
+        machine types or families for VMs during capacity constraints?
+    -   What is your strategy for modernizing your cloud resources to avoid
+        technical debt and availability risks?
 
 -   **Incident and problem management**
+
     -   Describe your incident management process, including roles,
         responsibilities, and communication channels.
     -   How do you conduct post-incident reviews (PIRs) to identify root causes
         and implement preventive measures?
 
 -   **Resource management and optimization**
+
     -   How do you ensure that your cloud resources are right-sized for your
         workloads, and what tools or techniques do you use?
 
 -   **Change automation**
+
     -   Describe your change management process, including approval workflows,
         testing procedures, and deployment strategies.
     -   How do you automate deployments, ensure their consistency and manage
         configuration?
 
 -   **Continuous improvement**
+
     -   How do you ensure that your cloud operations are continuously adapting
         to meet evolving business needs and technological advancements?
 
@@ -123,27 +150,54 @@ Use the following checklist to evaluate the architecture's alignment with
 operational excellence recommendations:
 
 -   **Operational readiness**
+
     -   [ ] A formal framework or set of criteria exists to assess operational
-        readiness before production deployment.
-    -   [ ] Service Level Objectives (SLOs) are explicitly defined and monitored
-        using automated tools.
+        readiness across staffing, processes, tooling, and governance before
+        deployment to production.
+    -   [ ] Service Level Indicators (SLIs) based on user journeys, Service
+        Level Objectives (SLOs), and error budgets are explicitly defined and
+        monitored using Cloud Monitoring.
+    -   [ ] Workloads achieve continuous availability by using automated
+        spillover mapping (via Managed Instance Groups (Flexible MIGs) with
+        mixed-instance templates or GKE Custom Compute Classes) to seamlessly
+        utilize cross-generation machine types across multiple zones in a
+        region.
+    -   [ ] Workloads follow a "Migration-by-Design" strategy that leverages
+        instance flexibility and automated spillover mapping to naturally
+        transition workloads to newer hardware generations (evergreen capacity),
+        decouple workloads from rigid, specific machine types to avoid capacity
+        constraints, and align deployments with Google Cloud's most obtainable
+        physical fleet to minimize availability risks.
 
 -   **Incident management**
-    -   [ ] Incident response roles and communication channels are clearly
-        defined and documented.
-    -   [ ] A structured, blameless post-mortem process is followed for all
-        major incidents.
+
+    -   [ ] Incident response roles (such as an Incident Commander),
+        communication channels, escalation paths, and automated response tasks
+        are clearly defined and documented.
+    -   [ ] A structured, blameless post-incident review (PIR) process is
+        followed for all major incidents to conduct thorough root cause analysis
+        and implement preventive measures.
 
 -   **Change automation**
+
     -   [ ] All infrastructure changes are performed using Infrastructure as
-        Code (IaC) to ensure consistency.
-    -   [ ] CI/CD pipelines are integrated with automated testing for all
-        deployment changes.
+        Code (IaC) stored in version control (using modern tools like Terraform)
+        to ensure consistency and enable automated deployments.
+    -   [ ] CI/CD pipelines (using Cloud Build for continuous integration and
+        Cloud Deploy for continuous delivery) are integrated with automated
+        testing for all deployment changes.
 
 -   **Resource optimization**
-    -   [ ] Resource utilization is regularly reviewed using recommendations
-        from Active Assist or performance data.
+
+    -   [ ] Resource utilization is regularly reviewed, and resources are
+        right-sized using Recommender (Active Assist) and autoscaling to
+        mitigate the risks of over-provisioning and under-provisioning.
 
 -   **Culture of improvement**
-    -   [ ] A documented strategy is in place for regularly reviewing and
-        adapting cloud operations to industry advancements.
+
+    -   [ ] The organization uses agile operational practices, iterative
+        workflows, and adaptable operating models.
+    -   [ ] Leadership fosters a culture of continuous improvement,
+        psychological safety, and ongoing learning.
+    -   [ ] Teams periodically review their cloud architecture against business
+        goals, industry trends, and technological advancements.
