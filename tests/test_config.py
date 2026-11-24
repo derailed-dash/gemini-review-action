@@ -62,3 +62,29 @@ class TestConfigAndModelResolution:
         """load_config should return a dictionary from existing TOML or defaults."""
         config = load_config()
         assert isinstance(config, dict)
+
+    def test_get_diff_exclude_patterns_parsing_and_normalisation(self, monkeypatch):
+        """get_diff_exclude_patterns, get_context_exclude_patterns, and get_extra_context_files normalise cleanly."""
+        from gemini_review.config import (
+            get_context_exclude_patterns,
+            get_diff_exclude_patterns,
+            get_extra_context_files,
+        )
+
+        monkeypatch.delenv("GEMINI_DIFF_EXCLUDE_PATTERNS", raising=False)
+        assert get_diff_exclude_patterns() == []
+
+        monkeypatch.setenv("GEMINI_DIFF_EXCLUDE_PATTERNS", "  ./starter-examples\\skills/** , \n generated/** , ")
+        assert get_diff_exclude_patterns() == ["starter-examples/skills/**", "generated/**"]
+        assert get_diff_exclude_patterns("") == []
+        assert get_diff_exclude_patterns("./") == []
+        assert get_diff_exclude_patterns(["  ./dir/** ", "  ", "./", "/root/gen/**"]) == [
+            "dir/**",
+            "root/gen/**",
+        ]
+
+        assert get_context_exclude_patterns({"context_exclude_patterns": ["./", "  /vendor/**  "]}) == ["vendor/**"]
+        assert get_extra_context_files({"extra_context_files": ["/tmp/abs.md", "  ./rel.md "]}) == [
+            "/tmp/abs.md",
+            "rel.md",
+        ]

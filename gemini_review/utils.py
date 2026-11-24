@@ -48,6 +48,7 @@ from gemini_review.multimodal import (
 # Re-export repository and filesystem utilities
 from gemini_review.repo import (
     extract_import_references,
+    filter_excluded_diff_files,
     generate_file_tree,
     get_all_repo_files,
     get_file_content,
@@ -55,6 +56,7 @@ from gemini_review.repo import (
     get_local_git_files,
     is_core_file,
     is_text_file,
+    matches_exclude_patterns,
     rank_and_bound_candidates,
 )
 
@@ -99,6 +101,8 @@ __all__ = [
     "filter_review_comments",
     # Repo re-exports
     "is_text_file",
+    "matches_exclude_patterns",
+    "filter_excluded_diff_files",
     "get_file_content",
     "get_local_git_files",
     "get_git_blob",

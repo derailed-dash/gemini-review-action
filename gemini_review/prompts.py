@@ -230,6 +230,7 @@ def build_pr_diff_prompt(
     *,
     include_full_content: bool = True,
     max_patch_bytes: int | None = None,
+    excluded_files: list[str] | None = None,
 ) -> str:
     """Build the dynamic PR diff patch prompt for modified files.
 
@@ -254,6 +255,13 @@ def build_pr_diff_prompt(
 
     prompt_parts = []
     prompt_parts.append("Below are the files and changes included in this Pull Request:\n")
+    if excluded_files:
+        sample = ", ".join(excluded_files[:10])
+        more = f", and {len(excluded_files) - 10} more" if len(excluded_files) > 10 else ""
+        prompt_parts.append(
+            f"Note: {len(excluded_files)} changed file(s) were intentionally excluded from this diff by "
+            f"diff_exclude_patterns ({sample}{more}). Do not assume they are missing from the repository.\n"
+        )
 
     for f in files:
         filename = f["filename"]
@@ -299,12 +307,22 @@ def build_prompt(
     client: Any = None,
     model: str | None = None,
     context_telemetry: dict[str, Any] | None = None,
+    *,
+    excluded_files: list[str] | None = None,
 ) -> str:
     """Consolidate file patches, PR comment history, and file contents into a single review context."""
     fn_build_pr_diff_prompt = _get_pr_review_func("build_pr_diff_prompt", build_pr_diff_prompt)
     fn_build_codebase_context = _get_pr_review_func("build_codebase_context", build_codebase_context)
 
-    diff_context = fn_build_pr_diff_prompt(files, config)
+    excluded_kwargs: dict[str, Any] = {"excluded_files": excluded_files} if excluded_files else {}
+    if excluded_kwargs:
+        try:
+            diff_context = fn_build_pr_diff_prompt(files, config, **excluded_kwargs)
+        except TypeError:
+            diff_context = fn_build_pr_diff_prompt(files, config)
+    else:
+        diff_context = fn_build_pr_diff_prompt(files, config)
+
     try:
         codebase_context = fn_build_codebase_context(
             files,
@@ -312,10 +330,20 @@ def build_prompt(
             client=client,
             model=model,
             context_telemetry=context_telemetry,
+            **excluded_kwargs,
         )
     except TypeError:
-        # Fallback for custom or mocked fn_build_codebase_context that don't accept context_telemetry
-        codebase_context = fn_build_codebase_context(files, config, client=client, model=model)
+        try:
+            codebase_context = fn_build_codebase_context(
+                files,
+                config,
+                client=client,
+                model=model,
+                context_telemetry=context_telemetry,
+            )
+        except TypeError:
+            # Fallback for custom or mocked fn_build_codebase_context that don't accept context_telemetry
+            codebase_context = fn_build_codebase_context(files, config, client=client, model=model)
 
     parts = [diff_context]
     if comment_history:

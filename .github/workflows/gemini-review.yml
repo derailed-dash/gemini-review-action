@@ -48,3 +48,5 @@ jobs:
           thinking_level: 'low'
           language: 'English (UK)'
           persona: 'dazbo'  # Optional: straight (default), dazbo, palpatine, rick
+          diff_exclude_patterns: 'starter-examples/skills/**'
+          context_exclude_patterns: 'starter-examples/skills/**'

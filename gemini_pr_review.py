@@ -121,6 +121,22 @@ def main():
         print("No files modified in this PR. Exiting.", file=sys.stderr)
         sys.exit(0)
 
+    diff_exclude_patterns = gr.get_diff_exclude_patterns()
+    excluded_diff_files: list[str] = []
+    if diff_exclude_patterns:
+        files, excluded_diff_files = gr.filter_excluded_diff_files(files, diff_exclude_patterns)
+        if excluded_diff_files:
+            sample = ", ".join(excluded_diff_files[:5])
+            suffix = f" (+{len(excluded_diff_files) - 5} more)" if len(excluded_diff_files) > 5 else ""
+            print(
+                f"Diff exclusion: excluded {len(excluded_diff_files)} PR file(s) matching "
+                f"diff_exclude_patterns: {sample}{suffix}",
+                file=sys.stderr,
+            )
+        if not files:
+            print("All modified files in this PR were excluded by diff_exclude_patterns. Exiting.", file=sys.stderr)
+            sys.exit(0)
+
     # Filter text and image files
     text_files = [f for f in files if gr.is_text_file(f["filename"])]
     image_files = [f for f in files if gr.is_supported_image(f["filename"])]
@@ -222,7 +238,8 @@ def main():
         )
         return f"{prompt}\n\n{comment_history_str}" if comment_history_str else prompt
 
-    pr_diff_prompt = gr.build_pr_diff_prompt(text_files, config)
+    excluded_kwargs: dict[str, Any] = {"excluded_files": excluded_diff_files} if excluded_diff_files else {}
+    pr_diff_prompt = gr.build_pr_diff_prompt(text_files, config, **excluded_kwargs)
     dynamic_pr_prompt = _assemble_dynamic_prompt(pr_diff_prompt)
     context_telemetry: dict[str, Any] = {}
     codebase_multimodal_parts: list[Any] = []
@@ -233,6 +250,7 @@ def main():
         model=model_name,
         context_telemetry=context_telemetry,
         multimodal_parts=codebase_multimodal_parts,
+        **excluded_kwargs,
     )
 
     # Place static repository context first so uncached requests keep an invariant prefix for
@@ -264,7 +282,7 @@ def main():
             "Dropping Full Current File Content blocks and keeping diff patches only.",
             file=sys.stderr,
         )
-        pr_diff_prompt = gr.build_pr_diff_prompt(text_files, config, include_full_content=False)
+        pr_diff_prompt = gr.build_pr_diff_prompt(text_files, config, include_full_content=False, **excluded_kwargs)
         dynamic_pr_prompt = _assemble_dynamic_prompt(pr_diff_prompt)
         all_multimodal_parts = visual_diff_parts
         full_prompt = dynamic_pr_prompt
@@ -291,6 +309,7 @@ def main():
                 config,
                 include_full_content=False,
                 max_patch_bytes=patch_cap,
+                **excluded_kwargs,
             )
             dynamic_pr_prompt = _assemble_dynamic_prompt(pr_diff_prompt)
             full_prompt = dynamic_pr_prompt

@@ -194,6 +194,23 @@ class TestDiffPromptIsBounded:
         assert "TRUNCATED by gemini-review: diff patch for 'giant.md'" in prompt
         assert "diff patch for 'small.py'" not in prompt
 
+    def test_excluded_files_header_notice_and_truncation(self, tmp_path, monkeypatch):
+        """build_pr_diff_prompt logs a concise omission notice when PR files are excluded by diff_exclude_patterns."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "app.py").write_text("x = 1\n")
+        files = [{"filename": "app.py", "status": "modified", "patch": "@@ -1 +1 @@\n+x = 1"}]
+
+        small_prompt = build_pr_diff_prompt(files, excluded_files=["starter-examples/skills/a/SKILL.md", "gen/b.py"])
+        assert "2 changed file(s) were intentionally excluded from this diff by diff_exclude_patterns" in small_prompt
+        assert "starter-examples/skills/a/SKILL.md, gen/b.py" in small_prompt
+        assert "Do not assume they are missing from the repository." in small_prompt
+
+        many_excluded = [f"starter-examples/skills/s{i}/SKILL.md" for i in range(14)]
+        large_prompt = build_pr_diff_prompt(files, excluded_files=many_excluded)
+        assert "14 changed file(s) were intentionally excluded" in large_prompt
+        assert "s9/SKILL.md, and 4 more" in large_prompt
+        assert "s10/SKILL.md" not in large_prompt
+
 
 class TestCapPatchAndWaterfill:
     def test_cap_patch_content_truncates_on_line_boundary_with_loud_marker(self):
