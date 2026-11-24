@@ -102,7 +102,11 @@ inputs:
     required: false
     default: 'false'
   context_exclude_patterns:
-    description: 'Comma-separated glob patterns to exclude from codebase context candidate selection.'
+    description: 'Comma-separated glob patterns (supports ** recursive globs) to exclude from codebase background context (Full and Sparse modes).'
+    required: false
+    default: ''
+  diff_exclude_patterns:
+    description: 'Comma-separated glob patterns (supports ** recursive globs) to exclude from PR diff and visual diff review (e.g. starter-examples/skills/**,generated/**).'
     required: false
     default: ''
   max_multimodal_images:
@@ -156,6 +160,7 @@ runs:
         GEMINI_EXTRA_CONTEXT_FILES: ${{ inputs.extra_context_files }}
         GEMINI_CONTEXT_DIFF_DIRECTORIES_ONLY: ${{ inputs.context_diff_directories_only }}
         GEMINI_CONTEXT_EXCLUDE_PATTERNS: ${{ inputs.context_exclude_patterns }}
+        GEMINI_DIFF_EXCLUDE_PATTERNS: ${{ inputs.diff_exclude_patterns }}
         GEMINI_MAX_MULTIMODAL_IMAGES: ${{ inputs.max_multimodal_images }}
         GEMINI_MAX_TRIAGE_IMAGES: ${{ inputs.max_triage_images }}
         GEMINI_IMAGE_TRIGGER_BYTES: ${{ inputs.image_trigger_bytes }}

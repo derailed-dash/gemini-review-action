@@ -250,6 +250,73 @@ def test_rank_and_bound_candidates_diff_dirs_only():
     assert "docs/readme.md" not in bounded
 
 
+def test_rank_and_bound_candidates_exclude_patterns_recursive_globs():
+    """rank_and_bound_candidates excludes nested ** globs, trailing slashes, and basenames cleanly."""
+    modified_files = [{"filename": "src/app.py", "patch": ""}]
+    candidates = [
+        "starter-examples/skills/skills-manifest.json",
+        "starter-examples/skills/bigquery-basics/SKILL.md",
+        "starter-examples/skills/bigquery-basics/references/ai_score.md",
+        "generated/sub/a.py",
+        "tests/ui.snap",
+        "src/app.py",
+        "other/starter-examples/skills/a.md",
+    ]
+    bounded = rank_and_bound_candidates(
+        candidates,
+        modified_files,
+        exclude_patterns=["starter-examples/skills/**", "generated/", "*.snap", "./", "  "],
+    )
+    assert bounded == ["src/app.py", "other/starter-examples/skills/a.md"]
+
+
+def test_build_codebase_context_honours_context_exclude_patterns_in_full_and_sparse_modes(mocker, monkeypatch):
+    """context_exclude_patterns omits matches (including core_patterns hits) across Full and Sparse modes."""
+    monkeypatch.delenv("GEMINI_CONTEXT_EXCLUDE_PATTERNS", raising=False)
+    all_files = [
+        "src/app.py",
+        "src/keep.py",
+        "starter-examples/skills/foo/references/deployment.md",
+        "starter-examples/skills/foo/references/core-concepts.md",
+    ]
+    sizes = {
+        "src/keep.py": 400,
+        "starter-examples/skills/foo/references/deployment.md": 2000,
+        "starter-examples/skills/foo/references/core-concepts.md": 2000,
+    }
+    mocker.patch("gemini_review.get_all_repo_files", return_value=all_files)
+    mocker.patch("os.path.getsize", side_effect=lambda p: sizes.get(p, 100))
+    mocker.patch("gemini_review.get_file_content", side_effect=lambda p: f"CONTENT:{p}")
+
+    # Full Context Mode: max_context_bytes=1000 fits src/keep.py (400B) once 4000B of excluded skills are filtered!
+    full_ctx = build_codebase_context(
+        [{"filename": "src/app.py", "status": "modified", "patch": ""}],
+        {"max_context_bytes": 1000, "context_exclude_patterns": ["starter-examples/skills/**"]},
+    )
+    assert "=== Repository Context (Full Codebase) ===" in full_ctx
+    assert "CONTENT:src/keep.py" in full_ctx
+    assert "deployment.md" not in full_ctx
+    assert "core-concepts.md" not in full_ctx
+
+    # Sparse Mode: excluded skill core_patterns hits never enter core_files or dynamic selection candidates.
+    mock_select = mocker.patch(
+        "gemini_review.select_dynamic_context_files",
+        return_value=(["src/keep.py"], "ok", {}),
+    )
+    mock_client = MagicMock()
+    sparse_ctx = build_codebase_context(
+        [{"filename": "src/app.py", "status": "modified", "patch": ""}],
+        {"max_context_bytes": 100, "context_exclude_patterns": ["starter-examples/skills/**"]},
+        client=mock_client,
+        model="gemini-4-hydrogen",
+    )
+    assert "=== Repository Context (Large Codebase) ===" in sparse_ctx
+    assert "deployment.md" not in sparse_ctx
+    assert "core-concepts.md" not in sparse_ctx
+    passed_candidates = mock_select.call_args.kwargs["candidate_files"]
+    assert passed_candidates == ["src/keep.py"]
+
+
 # ==============================================================================
 # 5. Static extra_context_files Bypass Tests
 # ==============================================================================

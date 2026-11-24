@@ -1003,6 +1003,49 @@ def test_uncached_prompt_places_codebase_context_before_dynamic_diff(mocker):
     assert sent_contents.index("STATIC_REPO_CONTEXT_MARKER") < sent_contents.index("large.py")
 
 
+def test_uncached_multimodal_places_static_images_before_dynamic_diff(mocker):
+    """Uncached multimodal requests keep static codebase context and images ahead of the dynamic diff."""
+    from gemini_pr_review import main
+
+    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_MODEL": "gemini-4-hydrogen"}, clear_env=True)
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[
+            {"filename": "large.py", "status": "modified", "patch": "diff patch"},
+            {"filename": "assets/demo.png", "status": "modified"},
+        ],
+    )
+    static_part = types.Part.from_bytes(data=b"static-png", mime_type="image/png")
+    diff_part = types.Part.from_bytes(data=b"diff-png", mime_type="image/png")
+
+    def _fake_build_ctx(*args, multimodal_parts=None, **kwargs):
+        if multimodal_parts is not None:
+            multimodal_parts.extend(["Static Image Label", static_part])
+        return "STATIC_REPO_CONTEXT_MARKER"
+
+    mocker.patch("gemini_review.build_codebase_context", side_effect=_fake_build_ctx)
+    mocker.patch(
+        "gemini_review.build_visual_diff_parts",
+        return_value=("VISUAL_DIFF_SUMMARY", ["Visual Diff Label", diff_part]),
+    )
+
+    main()
+
+    sent_contents = mock_client.models.generate_content.call_args.kwargs["contents"]
+    assert isinstance(sent_contents, list)
+    assert sent_contents[0] == "STATIC_REPO_CONTEXT_MARKER"
+    static_label_idx = sent_contents.index("Static Image Label")
+    static_part_idx = sent_contents.index(static_part)
+    diff_text_indices = [i for i, item in enumerate(sent_contents) if isinstance(item, str) and "large.py" in item]
+    assert len(diff_text_indices) == 1
+    diff_text_idx = diff_text_indices[0]
+    assert "VISUAL_DIFF_SUMMARY" in sent_contents[diff_text_idx]
+    visual_label_idx = sent_contents.index("Visual Diff Label")
+    diff_part_idx = sent_contents.index(diff_part)
+
+    assert 0 < static_label_idx < static_part_idx < diff_text_idx < visual_label_idx < diff_part_idx
+
+
 def test_normalize_model_name():
     """Test model name normalisation across various SDK and Vertex AI format strings."""
     from gemini_review import _normalize_model_name
@@ -1197,6 +1240,39 @@ def test_post_review_with_usage_metadata(mocker):
     assert "| **PR Comments History Tokens** | 50 |" in body
     assert "| **Output Tokens** | 100 |" in body
     assert "| **Total Session Tokens** | **1,100** |" in body
+
+
+def test_post_review_shows_zero_cached_tokens_row(mocker):
+    """Test post_review still displays Input Tokens (cached) as 0 when there are no cache hits."""
+    mock_post = mocker.patch("requests.post")
+    mock_post.return_value = mocker.Mock(status_code=200)
+
+    review = ReviewResult(
+        summary="PR LGTM",
+        general_feedback=[],
+        comments=[],
+    )
+
+    usage_metadata = {
+        "prompt_tokens": 280451,
+        "fresh_tokens": 278603,
+        "cached_tokens": 0,
+        "candidates_tokens": 526,
+        "thoughts_tokens": 1322,
+        "total_tokens": 280451,
+        "cache_percentage": 0.0,
+        "model": "gemini-4-hydrogen",
+    }
+
+    post_review("owner/repo", 42, "head_sha", review, {"Authorization": "token abc"}, usage_metadata=usage_metadata)
+
+    assert mock_post.call_count == 1
+    body = mock_post.call_args[1]["json"]["body"]
+
+    assert "| **Input Tokens (uncached)** | 278,603 |" in body
+    assert "| **Input Tokens (cached)** | 0 |" in body
+    assert "⚡" not in body
+    assert "| **Cost (cached input)** |" not in body
 
 
 # --- Personas Feature Tests ---
@@ -2360,3 +2436,173 @@ def test_pr_review_does_not_retry_thinking_config_on_token_limit_400(mocker):
         main()
 
     assert mock_client.models.generate_content.call_count == 1
+
+
+def test_matches_exclude_patterns_and_filter_excluded_diff_files():
+    """Verify POSIX-normalised recursive globs, directory prefixes, and basename matching for diff exclusions."""
+    from gemini_review import filter_excluded_diff_files, matches_exclude_patterns
+
+    patterns = [
+        "starter-examples/skills/**",
+        "generated/",
+        "*.snap",
+        "generated_*.py",
+        "**/foo.md",
+        "a/**/b.py",
+        "/root-only/**",
+    ]
+
+    assert matches_exclude_patterns("starter-examples/skills/skills-manifest.json", patterns) is True
+    assert matches_exclude_patterns("starter-examples/skills/bigquery/SKILL.md", patterns) is True
+    assert matches_exclude_patterns("starter-examples/skills/bigquery/references/a.md", patterns) is True
+    assert matches_exclude_patterns(r"starter-examples\skills\a\SKILL.md", patterns) is True
+    assert matches_exclude_patterns("././starter-examples/skills/a/SKILL.md", patterns) is True
+    assert matches_exclude_patterns("generated/a.py", patterns) is True
+    assert matches_exclude_patterns("generated/sub/b.json", patterns) is True
+    assert matches_exclude_patterns("root.snap", patterns) is True
+    assert matches_exclude_patterns("tests/__snapshots__/ui.snap", patterns) is True
+    assert matches_exclude_patterns("tests/__snapshots__/ui.SNAP", ["*.snap"]) is False
+    assert matches_exclude_patterns("src/pkg/generated_client.py", patterns) is True
+    assert matches_exclude_patterns("docs/sub/foo.md", patterns) is True
+    assert matches_exclude_patterns("a/b.py", patterns) is True
+    assert matches_exclude_patterns("a/x/y/b.py", patterns) is True
+    assert matches_exclude_patterns("root-only/file.py", patterns) is True
+
+    assert matches_exclude_patterns("other/starter-examples/skills/a.md", patterns) is False
+    assert matches_exclude_patterns("other/root-only/file.py", patterns) is False
+    assert matches_exclude_patterns("src/app.py", patterns) is False
+    assert matches_exclude_patterns("src/app.py", []) is False
+
+    pr_files = [
+        {"filename": "starter-examples/skills/a/SKILL.md", "status": "added", "patch": "+skill"},
+        {"filename": "src/app.py", "status": "modified", "patch": "+app"},
+        {"filename": "generated/schema.json", "status": "modified", "patch": "+schema"},
+        {"filename": "tests/test_app.py", "status": "modified", "patch": "+test"},
+    ]
+    kept, excluded = filter_excluded_diff_files(pr_files, patterns)
+    assert [f["filename"] for f in kept] == ["src/app.py", "tests/test_app.py"]
+    assert excluded == ["starter-examples/skills/a/SKILL.md", "generated/schema.json"]
+
+
+def test_diff_exclude_patterns_filters_text_and_visual_diffs_and_exits_when_all_excluded(mocker):
+    """Verify diff_exclude_patterns strips text/visual PR diffs before context assembly and exits 0 if empty."""
+    from google import genai
+
+    from gemini_pr_review import main
+
+    # 1. Mixed PR: excluded skill text and excluded image never reach diff prompt, visual diff, or codebase context.
+    mock_client, _ = _setup_dry_run_main(
+        mocker,
+        {
+            "GEMINI_DIFF_EXCLUDE_PATTERNS": "starter-examples/skills/**,assets/generated/**",
+            "GEMINI_PERSONA": "straight",
+        },
+        clear_env=True,
+    )
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[
+            {
+                "filename": "starter-examples/skills/foo/SKILL.md",
+                "status": "modified",
+                "patch": "@@ -1 +1 @@\n+EXCLUDED_SKILL_DIFF_LINE",
+            },
+            {
+                "filename": "assets/generated/shot.png",
+                "status": "added",
+                "patch": "",
+            },
+            {
+                "filename": "assets/keep.png",
+                "status": "modified",
+                "patch": "",
+            },
+            {
+                "filename": "src/app.py",
+                "status": "modified",
+                "patch": "@@ -1 +1 @@\n+keep_app_line",
+            },
+        ],
+    )
+    mocker.patch(
+        "gemini_review.get_all_repo_files",
+        return_value=["starter-examples/skills/foo/SKILL.md", "other.py"],
+    )
+    mocker.patch(
+        "gemini_review.get_file_content",
+        side_effect=lambda path: "EXCLUDED_SKILL_FULL_CONTENT" if "skills" in path else "keep_content",
+    )
+    mock_visual_diff = mocker.patch("gemini_review.build_visual_diff_parts", return_value=("", []))
+
+    main()
+
+    mock_visual_diff.assert_called_once()
+    passed_visual_files = mock_visual_diff.call_args.args[0]
+    assert [f["filename"] for f in passed_visual_files] == ["assets/keep.png"]
+    sent_prompt = mock_client.models.generate_content.call_args.kwargs["contents"]
+    assert isinstance(sent_prompt, str)
+    assert "+ | keep_app_line" in sent_prompt
+    assert "diff_exclude_patterns (starter-examples/skills/foo/SKILL.md, assets/generated/shot.png)" in sent_prompt
+    assert "EXCLUDED_SKILL_DIFF_LINE" not in sent_prompt
+    assert "EXCLUDED_SKILL_FULL_CONTENT" not in sent_prompt
+
+    # 2. Budget fallback (include_full_content=False) preserves the diff_exclude_patterns omission notice.
+    mock_client_2, _ = _setup_dry_run_main(
+        mocker,
+        {
+            "GEMINI_DIFF_EXCLUDE_PATTERNS": "starter-examples/skills/**",
+            "GEMINI_MAX_PROMPT_TOKENS": "2000",
+            "GEMINI_PERSONA": "straight",
+        },
+        clear_env=True,
+    )
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[
+            {"filename": "starter-examples/skills/a/SKILL.md", "status": "added", "patch": "+excl"},
+            {"filename": "large.py", "status": "modified", "patch": "@@ -1 +1 @@\n-old\n+kept_after_fallback"},
+        ],
+    )
+    main()
+    sent_prompt_2 = mock_client_2.models.generate_content.call_args.kwargs["contents"]
+    assert "--- Full Current File Content ---" not in sent_prompt_2
+    assert "+ | kept_after_fallback" in sent_prompt_2
+    assert "diff_exclude_patterns (starter-examples/skills/a/SKILL.md)" in sent_prompt_2
+
+    # 3. All PR files excluded -> exit cleanly with code 0 without initialising Gemini client.
+    _setup_dry_run_main(
+        mocker,
+        {"GEMINI_DIFF_EXCLUDE_PATTERNS": "starter-examples/skills/**"},
+        clear_env=True,
+    )
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[{"filename": "starter-examples/skills/a/SKILL.md", "status": "added", "patch": "+a"}],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    assert exc_info.value.code == 0
+    assert genai.Client.call_count == 0
+
+
+def test_build_prompt_forwards_excluded_files(mocker):
+    """Verify build_prompt() forwards excluded_files to both diff prompt and codebase context builders."""
+    mocker.patch(
+        "gemini_review.get_all_repo_files",
+        return_value=["starter-examples/skills/a/SKILL.md", "src/helper.py"],
+    )
+    mocker.patch(
+        "gemini_review.get_file_content",
+        side_effect=lambda p: "EXCLUDED_BODY" if "skills" in p else f"BODY:{p}",
+    )
+
+    prompt = build_prompt(
+        [{"filename": "src/app.py", "status": "modified", "patch": "@@ -1 +1 @@\n+x"}],
+        {"max_context_bytes": 1_000_000},
+        excluded_files=["starter-examples/skills/a/SKILL.md"],
+    )
+    assert "diff_exclude_patterns (starter-examples/skills/a/SKILL.md)" in prompt
+    assert "BODY:src/helper.py" in prompt
+    assert "EXCLUDED_BODY" not in prompt

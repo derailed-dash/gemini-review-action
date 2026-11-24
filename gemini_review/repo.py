@@ -116,6 +116,53 @@ def is_text_file(filename: str) -> bool:
     return True
 
 
+def _normalise_relative_posix(value: str) -> str:
+    """Normalise a relative path or glob pattern to POSIX separators without leading slashes or `./`."""
+    norm = value.strip().replace("\\", "/").lstrip("/")
+    while norm.startswith("./"):
+        norm = norm[2:]
+    return norm.lstrip("/")
+
+
+def matches_exclude_patterns(filename: str, patterns: list[str]) -> bool:
+    """Return True if POSIX-normalised `filename` matches any exclusion glob pattern (including `**`)."""
+    if not filename or not patterns:
+        return False
+    norm_path = _normalise_relative_posix(filename)
+    if not norm_path:
+        return False
+
+    posix_path = PurePosixPath(norm_path)
+    for pattern in patterns:
+        norm_pat = _normalise_relative_posix(pattern)
+        if not norm_pat:
+            continue
+        if norm_pat.endswith("/"):
+            norm_pat = f"{norm_pat}**"
+        if "/" in norm_pat:
+            if posix_path.full_match(norm_pat):
+                return True
+        elif fnmatch.fnmatchcase(posix_path.name, norm_pat) or posix_path.full_match(norm_pat):
+            return True
+    return False
+
+
+def filter_excluded_diff_files(files: list[dict], patterns: list[str]) -> tuple[list[dict], list[str]]:
+    """Partition PR diff entries into `(kept_files, excluded_filenames)` using `matches_exclude_patterns`."""
+    if not files or not patterns:
+        return list(files), []
+
+    kept: list[dict] = []
+    excluded: list[str] = []
+    for f in files:
+        fname = f.get("filename", "")
+        if matches_exclude_patterns(fname, patterns):
+            excluded.append(fname)
+        else:
+            kept.append(f)
+    return kept, excluded
+
+
 def get_file_content(path: str) -> str:
     """Read file content safely as UTF-8."""
     try:
@@ -307,23 +354,7 @@ def rank_and_bound_candidates(
 
     # Filter out candidates matching explicit exclude patterns
     if exclude_patterns:
-        filtered = []
-        for c in candidate_files:
-            c_posix = PurePosixPath(c.replace("\\", "/").removeprefix("./"))
-            matched = False
-            for pat in exclude_patterns:
-                norm_pat = pat.replace("\\", "/").removeprefix("./")
-                if "/" in norm_pat:
-                    if c_posix.match(norm_pat):
-                        matched = True
-                        break
-                else:
-                    if fnmatch.fnmatch(c_posix.name, norm_pat) or c_posix.match(norm_pat):
-                        matched = True
-                        break
-            if not matched:
-                filtered.append(c)
-        candidate_files = filtered
+        candidate_files = [c for c in candidate_files if not matches_exclude_patterns(c, exclude_patterns)]
 
     modified_paths = [
         f.get("filename", "").replace("\\", "/").removeprefix("./") for f in modified_files if f.get("filename")

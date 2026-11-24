@@ -338,9 +338,8 @@ def post_review(
 
         table_rows = [
             f"| **Input Tokens (uncached)** | {fresh_tokens:,d} |",
+            f"| **Input Tokens (cached)** | {cached_tokens:,d}{cache_str} |",
         ]
-        if cached_tokens > 0:
-            table_rows.append(f"| **Input Tokens (cached)** | {cached_tokens:,d}{cache_str} |")
         if comment_history_tokens > 0:
             table_rows.append(f"| **PR Comments History Tokens** | {comment_history_tokens:,d} |")
         if thoughts_tokens > 0:

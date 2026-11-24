@@ -25,6 +25,7 @@ from .config import (
     get_context_diff_directories_only,
     get_context_exclude_patterns,
     get_default_model,
+    get_diff_exclude_patterns,
     get_extra_context_files,
     get_image_target_bytes,
     get_image_trigger_bytes,
@@ -103,6 +104,7 @@ from .prompts import (
 )
 from .repo import (
     extract_import_references,
+    filter_excluded_diff_files,
     generate_file_tree,
     get_all_repo_files,
     get_file_content,
@@ -110,6 +112,7 @@ from .repo import (
     get_local_git_files,
     is_core_file,
     is_text_file,
+    matches_exclude_patterns,
     rank_and_bound_candidates,
 )
 from .schemas import DynamicContextSelection, InlineComment, ResolvedItem, ReviewResult
@@ -187,6 +190,7 @@ __all__ = [
     "get_all_repo_files",
     "get_context_diff_directories_only",
     "get_context_exclude_patterns",
+    "get_diff_exclude_patterns",
     "get_extra_context_files",
     "get_file_blob",
     "get_file_content",
@@ -210,6 +214,8 @@ __all__ = [
     "is_supported_image",
     "is_supported_multimodal_file",
     "is_text_file",
+    "matches_exclude_patterns",
+    "filter_excluded_diff_files",
     "list_available_skills",
     "load_config",
     "load_custom_instructions",

@@ -32,11 +32,13 @@ from gemini_review.multimodal import (
     optimize_image_bytes,
 )
 from gemini_review.repo import (
+    _normalise_relative_posix,
     generate_file_tree,
     get_all_repo_files,
     get_file_content,
     is_core_file,
     is_text_file,
+    matches_exclude_patterns,
     rank_and_bound_candidates,
 )
 from gemini_review.schemas import DynamicContextSelection
@@ -172,6 +174,8 @@ def build_codebase_context(
     model: str | None = None,
     context_telemetry: dict[str, Any] | None = None,
     multimodal_parts: list[Any] | None = None,
+    *,
+    excluded_files: list[str] | None = None,
 ) -> str:
     """Build the repository codebase context (Full or Sparse mode) for Gemini code review."""
     fn_get_all_repo_files = _get_pr_review_func("get_all_repo_files", get_all_repo_files)
@@ -224,6 +228,9 @@ def build_codebase_context(
 
     prompt_parts = []
     pr_filenames = {f["filename"] if isinstance(f, dict) else str(f) for f in files}
+    skip_filenames = {_normalise_relative_posix(p) for p in pr_filenames}
+    if excluded_files:
+        skip_filenames.update(_normalise_relative_posix(excl) for excl in excluded_files)
 
     def _attach_extra_files() -> None:
         prompt_parts.append("--- Relevant Codebase Context (Static Extra Files) ---")
@@ -344,7 +351,14 @@ def build_codebase_context(
     )
 
     all_files = fn_get_all_repo_files()
-    other_files = [f for f in all_files if f not in pr_filenames and fn_is_text_file(f)]
+    context_exclude_patterns = get_context_exclude_patterns(config)
+    other_files = [
+        f
+        for f in all_files
+        if _normalise_relative_posix(f) not in skip_filenames
+        and fn_is_text_file(f)
+        and not matches_exclude_patterns(f, context_exclude_patterns)
+    ]
     extra_files = get_extra_context_files(config)
 
     if not other_files and not extra_files:
@@ -397,7 +411,10 @@ def build_codebase_context(
             " configuration/documentation files for context:\n"
         )
 
-        full_tree_files = list(pr_filenames.union(set(other_files)))
+        visible_repo_files = {
+            f for f in all_files if fn_is_text_file(f) and not matches_exclude_patterns(f, context_exclude_patterns)
+        }
+        full_tree_files = list(pr_filenames.union(visible_repo_files))
         file_tree = fn_generate_file_tree(full_tree_files)
         prompt_parts.append("--- Repository File Structure ---")
         prompt_parts.append(file_tree)
@@ -477,14 +494,13 @@ def build_codebase_context(
             if client and dynamic_candidates:
                 max_candidates = get_max_candidate_files(config)
                 diff_dirs_only = get_context_diff_directories_only(config)
-                exclude_patterns = get_context_exclude_patterns(config)
                 orig_count = len(dynamic_candidates)
                 bounded_candidates = rank_and_bound_candidates(
                     dynamic_candidates,
                     files,
                     max_candidates=max_candidates,
                     diff_dirs_only=diff_dirs_only,
-                    exclude_patterns=exclude_patterns,
+                    exclude_patterns=context_exclude_patterns,
                 )
                 if len(bounded_candidates) < orig_count:
                     print(

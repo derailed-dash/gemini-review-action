@@ -133,22 +133,35 @@ def get_max_candidate_files(config: dict | None = None) -> int:
     return default_val
 
 
+def _parse_path_list(raw: object, *, strip_leading_slash: bool = False) -> list[str]:
+    """Parse a comma- or newline-separated path/glob setting into normalised POSIX strings."""
+    if not raw:
+        return []
+    if isinstance(raw, (list, tuple)):
+        items = [str(p).strip() for p in raw]
+    else:
+        items = [p.strip() for line in str(raw).splitlines() for p in line.split(",")]
+
+    result: list[str] = []
+    for item in items:
+        norm = item.replace("\\", "/")
+        while norm.startswith("./"):
+            norm = norm[2:]
+        if strip_leading_slash:
+            norm = norm.lstrip("/")
+            while norm.startswith("./"):
+                norm = norm[2:]
+        if norm:
+            result.append(norm)
+    return result
+
+
 def get_extra_context_files(config: dict | None = None) -> list[str]:
     """Return explicit list of static extra context files from env or config."""
     raw = os.environ.get("GEMINI_EXTRA_CONTEXT_FILES")
     if not raw and config:
         raw = config.get("extra_context_files")
-
-    if not raw:
-        return []
-
-    if isinstance(raw, list):
-        items = raw
-    else:
-        # Split by comma or newline
-        items = [p.strip() for line in str(raw).splitlines() for p in line.split(",") if p.strip()]
-
-    return [item.replace("\\", "/").removeprefix("./") for item in items if item]
+    return _parse_path_list(raw, strip_leading_slash=False)
 
 
 def get_context_diff_directories_only(config: dict | None = None) -> bool:
@@ -164,20 +177,17 @@ def get_context_diff_directories_only(config: dict | None = None) -> bool:
 
 
 def get_context_exclude_patterns(config: dict | None = None) -> list[str]:
-    """Return exclusion glob patterns for dynamic context candidates."""
+    """Return exclusion glob patterns for codebase context filtering."""
     raw = os.environ.get("GEMINI_CONTEXT_EXCLUDE_PATTERNS")
     if not raw and config:
         raw = config.get("context_exclude_patterns")
+    return _parse_path_list(raw, strip_leading_slash=True)
 
-    if not raw:
-        return []
 
-    if isinstance(raw, list):
-        items = raw
-    else:
-        items = [p.strip() for line in str(raw).splitlines() for p in line.split(",") if p.strip()]
-
-    return [item.replace("\\", "/").removeprefix("./") for item in items if item]
+def get_diff_exclude_patterns(raw: str | list[str] | None = None) -> list[str]:
+    """Return comma/newline-separated glob patterns excluded from PR diff and visual diff review."""
+    value: object = os.environ.get("GEMINI_DIFF_EXCLUDE_PATTERNS") if raw is None else raw
+    return _parse_path_list(value, strip_leading_slash=True)
 
 
 def get_max_multimodal_images(config: dict | None = None) -> int:
