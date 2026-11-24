@@ -26,6 +26,26 @@ def __getattr__(name: str):
     return getattr(gr, name)
 
 
+def _assemble_direct_contents(
+    codebase_context: str,
+    codebase_multimodal_parts: list[Any],
+    dynamic_pr_prompt: str,
+    visual_diff_parts: list[Any],
+) -> str | list[Any]:
+    """Assemble uncached request contents with static context and images ordered ahead of the diff."""
+    if not codebase_multimodal_parts and not visual_diff_parts:
+        return f"{codebase_context}\n\n{dynamic_pr_prompt}" if codebase_context else dynamic_pr_prompt
+
+    contents: list[Any] = []
+    if codebase_context:
+        contents.append(codebase_context)
+    contents.extend(codebase_multimodal_parts)
+    if dynamic_pr_prompt:
+        contents.append(dynamic_pr_prompt)
+    contents.extend(visual_diff_parts)
+    return contents
+
+
 def main():
     github_token = os.environ.get("GITHUB_TOKEN")
     gemini_api_key = os.environ.get("GEMINI_API_KEY")
@@ -253,11 +273,11 @@ def main():
         **excluded_kwargs,
     )
 
-    # Place static repository context first so uncached requests keep an invariant prefix for
-    # Gemini 4 automatic implicit prefix caching across pushes.
-    full_prompt = f"{codebase_context}\n\n{dynamic_pr_prompt}" if codebase_context else dynamic_pr_prompt
-    all_multimodal_parts = codebase_multimodal_parts + visual_diff_parts
-    contents_to_send: Any = [full_prompt] + all_multimodal_parts if all_multimodal_parts else full_prompt
+    # Place static repository context (and its static visual attachments) first so uncached
+    # requests keep an invariant prefix for Gemini 4 automatic implicit prefix caching.
+    contents_to_send: Any = _assemble_direct_contents(
+        codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, visual_diff_parts
+    )
 
     # Backstop. Per-file caps stop ONE huge file taking the review down; multi-stage escalation
     # handles PRs where many files or large patches together exceed the model input window.
@@ -271,9 +291,9 @@ def main():
         )
         codebase_context = ""
         codebase_multimodal_parts = []
-        all_multimodal_parts = visual_diff_parts
-        full_prompt = dynamic_pr_prompt
-        contents_to_send = [full_prompt] + all_multimodal_parts if all_multimodal_parts else full_prompt
+        contents_to_send = _assemble_direct_contents(
+            codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, visual_diff_parts
+        )
         prompt_tokens = gr.count_text_tokens(client, model_name, contents_to_send)
 
     if prompt_tokens > budget:
@@ -284,9 +304,9 @@ def main():
         )
         pr_diff_prompt = gr.build_pr_diff_prompt(text_files, config, include_full_content=False, **excluded_kwargs)
         dynamic_pr_prompt = _assemble_dynamic_prompt(pr_diff_prompt)
-        all_multimodal_parts = visual_diff_parts
-        full_prompt = dynamic_pr_prompt
-        contents_to_send = [full_prompt] + all_multimodal_parts if all_multimodal_parts else full_prompt
+        contents_to_send = _assemble_direct_contents(
+            codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, visual_diff_parts
+        )
         prompt_tokens = gr.count_text_tokens(client, model_name, contents_to_send)
 
     if prompt_tokens > budget:
@@ -312,8 +332,9 @@ def main():
                 **excluded_kwargs,
             )
             dynamic_pr_prompt = _assemble_dynamic_prompt(pr_diff_prompt)
-            full_prompt = dynamic_pr_prompt
-            contents_to_send = [full_prompt] + all_multimodal_parts if all_multimodal_parts else full_prompt
+            contents_to_send = _assemble_direct_contents(
+                codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, visual_diff_parts
+            )
             prompt_tokens = gr.count_text_tokens(client, model_name, contents_to_send)
 
     if prompt_tokens > budget:
@@ -419,7 +440,6 @@ def main():
                                 file=sys.stderr,
                             )
                             codebase_multimodal_parts = []
-                            all_multimodal_parts = list(visual_diff_parts)
                             fingerprint = gr.context_cache_fingerprint(system_instruction, codebase_context)
                             display_name = f"repo-cache-{clean_repo}-{clean_model}-{clean_persona}-{fingerprint}"
                             cache_obj = _find_matching_cache(display_name) or client.caches.create(
@@ -445,7 +465,9 @@ def main():
                 file=sys.stderr,
             )
             cached_content_name = None
-            contents_to_send = [full_prompt] + all_multimodal_parts if all_multimodal_parts else full_prompt
+            contents_to_send = _assemble_direct_contents(
+                codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, visual_diff_parts
+            )
 
     thinking_level = config.get("thinking_level") or os.environ.get("GEMINI_THINKING_LEVEL")
     thinking_cfg = gr.build_thinking_config(thinking_level, model=model_name)
@@ -507,7 +529,9 @@ def main():
                 file=sys.stderr,
             )
             cached_content_name = None
-            contents_to_send = [full_prompt] + all_multimodal_parts if all_multimodal_parts else full_prompt
+            contents_to_send = _assemble_direct_contents(
+                codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, visual_diff_parts
+            )
             gen_config = types.GenerateContentConfig(
                 system_instruction=system_instruction,
                 tools=tools,
@@ -529,13 +553,20 @@ def main():
         # Stage 3: If multimodal parts were attached and request still failed with 400 / invalid_argument,
         # fall back to text-only
         err_msg = str(last_err).lower()
-        if response is None and all_multimodal_parts and ("400" in err_msg or "invalid_argument" in err_msg):
+        if (
+            response is None
+            and (codebase_multimodal_parts or visual_diff_parts)
+            and ("400" in err_msg or "invalid_argument" in err_msg)
+        ):
             print(
                 f"Warning: Multimodal review request failed ({last_err}). Falling back to text-only review...",
                 file=sys.stderr,
             )
-            all_multimodal_parts = []
-            contents_to_send = full_prompt
+            codebase_multimodal_parts = []
+            visual_diff_parts = []
+            contents_to_send = _assemble_direct_contents(
+                codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, visual_diff_parts
+            )
             response = gr.generate_content_with_stream_fallback(
                 client,
                 model=model_name,
@@ -546,7 +577,9 @@ def main():
         if response is None:
             raise last_err
 
-    direct_contents = [full_prompt] + all_multimodal_parts if all_multimodal_parts else full_prompt
+    direct_contents = _assemble_direct_contents(
+        codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, visual_diff_parts
+    )
     response = gr.resolve_tool_calls_loop(
         client=client,
         model_name=model_name,

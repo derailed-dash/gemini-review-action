@@ -1003,6 +1003,49 @@ def test_uncached_prompt_places_codebase_context_before_dynamic_diff(mocker):
     assert sent_contents.index("STATIC_REPO_CONTEXT_MARKER") < sent_contents.index("large.py")
 
 
+def test_uncached_multimodal_places_static_images_before_dynamic_diff(mocker):
+    """Uncached multimodal requests keep static codebase context and images ahead of the dynamic diff."""
+    from gemini_pr_review import main
+
+    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_MODEL": "gemini-4-hydrogen"}, clear_env=True)
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[
+            {"filename": "large.py", "status": "modified", "patch": "diff patch"},
+            {"filename": "assets/demo.png", "status": "modified"},
+        ],
+    )
+    static_part = types.Part.from_bytes(data=b"static-png", mime_type="image/png")
+    diff_part = types.Part.from_bytes(data=b"diff-png", mime_type="image/png")
+
+    def _fake_build_ctx(*args, multimodal_parts=None, **kwargs):
+        if multimodal_parts is not None:
+            multimodal_parts.extend(["Static Image Label", static_part])
+        return "STATIC_REPO_CONTEXT_MARKER"
+
+    mocker.patch("gemini_review.build_codebase_context", side_effect=_fake_build_ctx)
+    mocker.patch(
+        "gemini_review.build_visual_diff_parts",
+        return_value=("VISUAL_DIFF_SUMMARY", ["Visual Diff Label", diff_part]),
+    )
+
+    main()
+
+    sent_contents = mock_client.models.generate_content.call_args.kwargs["contents"]
+    assert isinstance(sent_contents, list)
+    assert sent_contents[0] == "STATIC_REPO_CONTEXT_MARKER"
+    static_label_idx = sent_contents.index("Static Image Label")
+    static_part_idx = sent_contents.index(static_part)
+    diff_text_indices = [i for i, item in enumerate(sent_contents) if isinstance(item, str) and "large.py" in item]
+    assert len(diff_text_indices) == 1
+    diff_text_idx = diff_text_indices[0]
+    assert "VISUAL_DIFF_SUMMARY" in sent_contents[diff_text_idx]
+    visual_label_idx = sent_contents.index("Visual Diff Label")
+    diff_part_idx = sent_contents.index(diff_part)
+
+    assert 0 < static_label_idx < static_part_idx < diff_text_idx < visual_label_idx < diff_part_idx
+
+
 def test_normalize_model_name():
     """Test model name normalisation across various SDK and Vertex AI format strings."""
     from gemini_review import _normalize_model_name
@@ -1197,6 +1240,39 @@ def test_post_review_with_usage_metadata(mocker):
     assert "| **PR Comments History Tokens** | 50 |" in body
     assert "| **Output Tokens** | 100 |" in body
     assert "| **Total Session Tokens** | **1,100** |" in body
+
+
+def test_post_review_shows_zero_cached_tokens_row(mocker):
+    """Test post_review still displays Input Tokens (cached) as 0 when there are no cache hits."""
+    mock_post = mocker.patch("requests.post")
+    mock_post.return_value = mocker.Mock(status_code=200)
+
+    review = ReviewResult(
+        summary="PR LGTM",
+        general_feedback=[],
+        comments=[],
+    )
+
+    usage_metadata = {
+        "prompt_tokens": 280451,
+        "fresh_tokens": 278603,
+        "cached_tokens": 0,
+        "candidates_tokens": 526,
+        "thoughts_tokens": 1322,
+        "total_tokens": 280451,
+        "cache_percentage": 0.0,
+        "model": "gemini-4-hydrogen",
+    }
+
+    post_review("owner/repo", 42, "head_sha", review, {"Authorization": "token abc"}, usage_metadata=usage_metadata)
+
+    assert mock_post.call_count == 1
+    body = mock_post.call_args[1]["json"]["body"]
+
+    assert "| **Input Tokens (uncached)** | 278,603 |" in body
+    assert "| **Input Tokens (cached)** | 0 |" in body
+    assert "⚡" not in body
+    assert "| **Cost (cached input)** |" not in body
 
 
 # --- Personas Feature Tests ---
