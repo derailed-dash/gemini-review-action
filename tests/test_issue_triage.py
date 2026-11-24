@@ -391,3 +391,41 @@ def test_triage_enterprise_env_var_uses_vertex_branch(mocker, monkeypatch, tmp_p
     assert call_kwargs["vertexai"] is True
     assert call_kwargs["http_options"].timeout == 300000
     assert call_kwargs["http_options"].api_version is None
+
+
+def test_triage_does_not_retry_thinking_config_on_token_limit_400(mocker, monkeypatch, tmp_path):
+    """Verify issue triage raises immediately on token-limit 400 instead of retrying without thinking_config."""
+    import json
+
+    import pytest
+
+    import gemini_issue_triage
+
+    event_file = tmp_path / "event.json"
+    event_file.write_text(
+        json.dumps({"issue": {"number": 73, "title": "Token limit", "body": "Huge payload"}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token")
+    monkeypatch.setenv("GEMINI_API_KEY", "ai_test_key")
+    monkeypatch.setenv("GEMINI_THINKING_LEVEL", "low")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "derailed-dash/gemini-review-action")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+
+    mocker.patch("gemini_issue_triage.get_available_labels", return_value=["bug"])
+    mocker.patch("gemini_issue_triage.get_issue_comments", return_value=[])
+    mocker.patch("gemini_issue_triage.build_triage_multimodal_parts", return_value=[])
+
+    mock_client_cls = mocker.patch("gemini_issue_triage.genai.Client")
+    mock_client = mock_client_cls.return_value
+    mock_client.models.generate_content.side_effect = RuntimeError(
+        "400 INVALID_ARGUMENT: The input token count exceeds the maximum number of tokens allowed (1048576); "
+        "input token count: 1363891."
+    )
+
+    with pytest.raises(RuntimeError, match="exceeds the maximum number of tokens"):
+        gemini_issue_triage.main()
+
+    assert mock_client.models.generate_content.call_count == 1

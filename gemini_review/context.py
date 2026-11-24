@@ -40,7 +40,7 @@ from gemini_review.repo import (
     rank_and_bound_candidates,
 )
 from gemini_review.schemas import DynamicContextSelection
-from gemini_review.utils import _get_pr_review_func
+from gemini_review.utils import _get_pr_review_func, is_thinking_config_error
 
 
 def select_dynamic_context_files(
@@ -114,10 +114,7 @@ def select_dynamic_context_files(
             )
         except Exception as api_err:
             # If the model rejects thinking_config, retry without thinking_config for backward/forward compatibility
-            err_msg = str(api_err).lower()
-            if thinking_cfg is not None and (
-                "thinking" in err_msg or "400" in err_msg or "invalid_argument" in err_msg
-            ):
+            if thinking_cfg is not None and is_thinking_config_error(api_err):
                 print(
                     f"Warning: thinking_config not supported by model '{model}' ({api_err}). "
                     "Retrying without thinking_config...",

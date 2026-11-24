@@ -214,10 +214,16 @@ def main():
             head_sha=head_sha,
         )
 
+    def _assemble_dynamic_prompt(pr_diff: str) -> str:
+        prompt = (
+            f"{pr_diff}\n\n### Changed Visual Image Assets in PR:\n{visual_diff_summary}"
+            if visual_diff_summary
+            else pr_diff
+        )
+        return f"{prompt}\n\n{comment_history_str}" if comment_history_str else prompt
+
     pr_diff_prompt = gr.build_pr_diff_prompt(text_files, config)
-    if visual_diff_summary:
-        pr_diff_prompt = f"{pr_diff_prompt}\n\n### Changed Visual Image Assets in PR:\n{visual_diff_summary}"
-    dynamic_pr_prompt = f"{pr_diff_prompt}\n\n{comment_history_str}" if comment_history_str else pr_diff_prompt
+    dynamic_pr_prompt = _assemble_dynamic_prompt(pr_diff_prompt)
     context_telemetry: dict[str, Any] = {}
     codebase_multimodal_parts: list[Any] = []
     codebase_context = gr.build_codebase_context(
@@ -235,10 +241,8 @@ def main():
     all_multimodal_parts = codebase_multimodal_parts + visual_diff_parts
     contents_to_send: Any = [full_prompt] + all_multimodal_parts if all_multimodal_parts else full_prompt
 
-    # Backstop. Per-file caps stop ONE huge file taking the review down; they cannot stop
-    # many files each under the cap. Check here rather than letting the API reject it: a
-    # 400 costs the entire review and posts nothing, whereas dropping repository context
-    # still produces a real review of the diff.
+    # Backstop. Per-file caps stop ONE huge file taking the review down; multi-stage escalation
+    # handles PRs where many files or large patches together exceed the model input window.
     budget = gr.prompt_token_budget(model_name, config)
     prompt_tokens = gr.count_text_tokens(client, model_name, contents_to_send)
     if prompt_tokens > budget and (codebase_context or codebase_multimodal_parts):
@@ -253,6 +257,45 @@ def main():
         full_prompt = dynamic_pr_prompt
         contents_to_send = [full_prompt] + all_multimodal_parts if all_multimodal_parts else full_prompt
         prompt_tokens = gr.count_text_tokens(client, model_name, contents_to_send)
+
+    if prompt_tokens > budget:
+        print(
+            f"Context budget: prompt is {prompt_tokens:,} tokens against a budget of {budget:,}. "
+            "Dropping Full Current File Content blocks and keeping diff patches only.",
+            file=sys.stderr,
+        )
+        pr_diff_prompt = gr.build_pr_diff_prompt(text_files, config, include_full_content=False)
+        dynamic_pr_prompt = _assemble_dynamic_prompt(pr_diff_prompt)
+        all_multimodal_parts = visual_diff_parts
+        full_prompt = dynamic_pr_prompt
+        contents_to_send = [full_prompt] + all_multimodal_parts if all_multimodal_parts else full_prompt
+        prompt_tokens = gr.count_text_tokens(client, model_name, contents_to_send)
+
+    if prompt_tokens > budget:
+        patch_sizes = [
+            len(gr.format_diff_patch_with_line_numbers(f["patch"]).encode("utf-8", errors="replace"))
+            for f in text_files
+            if f.get("patch")
+        ]
+        if patch_sizes:
+            scale = (budget * 0.85) / prompt_tokens
+            target_patch_bytes = max(4096, int(sum(patch_sizes) * scale))
+            patch_cap = gr.compute_waterfill_cap(patch_sizes, target_patch_bytes)
+            print(
+                f"Context budget: diff patches alone are {prompt_tokens:,} tokens against a budget of {budget:,}. "
+                f"Applying water-fill patch cap ({patch_cap:,} bytes) so smaller diffs stay intact.",
+                file=sys.stderr,
+            )
+            pr_diff_prompt = gr.build_pr_diff_prompt(
+                text_files,
+                config,
+                include_full_content=False,
+                max_patch_bytes=patch_cap,
+            )
+            dynamic_pr_prompt = _assemble_dynamic_prompt(pr_diff_prompt)
+            full_prompt = dynamic_pr_prompt
+            contents_to_send = [full_prompt] + all_multimodal_parts if all_multimodal_parts else full_prompt
+            prompt_tokens = gr.count_text_tokens(client, model_name, contents_to_send)
 
     if prompt_tokens > budget:
         print(
@@ -419,12 +462,8 @@ def main():
     except Exception as gen_err:
         last_err: Exception = gen_err
 
-        # Stage 1: If thinking_config is set and error is 400 / invalid_argument / thinking,
-        # retry without thinking_config
-        err_msg = str(last_err).lower()
-        if gen_config.thinking_config is not None and (
-            "thinking" in err_msg or "400" in err_msg or "invalid_argument" in err_msg
-        ):
+        # Stage 1: Only retry without thinking_config when the API error is actually about thinking config
+        if gen_config.thinking_config is not None and gr.is_thinking_config_error(last_err):
             print(
                 f"Warning: thinking_config not supported by model '{model_name}' ({last_err}). "
                 "Retrying without thinking_config...",

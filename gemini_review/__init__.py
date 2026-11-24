@@ -12,8 +12,11 @@ from .billing_labels import (
 )
 from .budget import (
     cap_file_content,
+    cap_patch_content,
+    compute_waterfill_cap,
     max_file_bytes,
     prompt_token_budget,
+    report_capped_patches,
 )
 from .config import (
     DEFAULT_MODEL,
@@ -124,6 +127,7 @@ from .utils import (
     create_genai_client,
     extract_response_text_or_raise,
     generate_content_with_stream_fallback,
+    is_thinking_config_error,
     is_vertexai_enabled,
     load_workspace_rules,
     resolve_tool_calls_loop,
@@ -161,6 +165,7 @@ __all__ = [
     "build_cache_tools",
     "context_cache_fingerprint",
     "create_genai_client",
+    "is_thinking_config_error",
     "is_vertexai_enabled",
     "build_codebase_context",
     "build_pr_diff_prompt",
@@ -230,5 +235,8 @@ __all__ = [
     "select_dynamic_context_files",
     "prompt_token_budget",
     "cap_file_content",
+    "cap_patch_content",
+    "compute_waterfill_cap",
     "max_file_bytes",
+    "report_capped_patches",
 ]

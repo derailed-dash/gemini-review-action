@@ -31,6 +31,7 @@ from gemini_review import (
     filter_comment_authors,
     generate_content_with_stream_fallback,
     get_default_model,
+    is_thinking_config_error,
     parse_excluded_authors,
 )
 
@@ -280,10 +281,7 @@ def main():
             config=triage_config,
         )
     except Exception as gen_err:
-        err_msg = str(gen_err).lower()
-        if triage_config.thinking_config is not None and (
-            "thinking" in err_msg or "400" in err_msg or "invalid_argument" in err_msg
-        ):
+        if triage_config.thinking_config is not None and is_thinking_config_error(gen_err):
             print(
                 f"Warning: thinking_config not supported by model '{model_name}' ({gen_err}). "
                 "Retrying without thinking_config...",

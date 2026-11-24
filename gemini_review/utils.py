@@ -71,6 +71,7 @@ __all__ = [
     "is_vertexai_enabled",
     "create_genai_client",
     "build_cache_tools",
+    "is_thinking_config_error",
     # Multimodal re-exports
     "DEFAULT_MAX_REMOTE_IMAGE_BYTES",
     "DEFAULT_MAX_TRIAGE_IMAGES",
@@ -415,6 +416,43 @@ def build_cache_tools(tools: list[Any] | None, *, use_vertexai: bool = False) ->
         parsed_tools.append(types.Tool(function_declarations=function_declarations))
 
     return parsed_tools or None
+
+
+def is_thinking_config_error(err: Exception) -> bool:
+    """Return True only when an API error indicates unsupported or rejected thinking configuration."""
+    err_msg = str(err).lower()
+    non_thinking_markers = (
+        "exceeds the maximum number of tokens",
+        "token count exceeds",
+        "maximum number of tokens",
+        "context length",
+        "api key",
+        "api_key",
+        "permission denied",
+        "quota",
+        "resource_exhausted",
+        "unsupported mime",
+        "unable to process input image",
+    )
+    if any(marker in err_msg for marker in non_thinking_markers):
+        return False
+
+    if "thinking" in err_msg:
+        return True
+
+    if "400" in err_msg or "invalid_argument" in err_msg:
+        thinking_hints = (
+            "thinking",
+            "budget",
+            "level",
+            "unknown name",
+            "cannot find field",
+            "not supported",
+            "unsupported",
+        )
+        return any(hint in err_msg for hint in thinking_hints)
+
+    return False
 
 
 def _is_connection_or_timeout_error(err: Exception) -> bool:

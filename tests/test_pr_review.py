@@ -2274,3 +2274,89 @@ def test_generate_content_with_stream_fallback_httpx2_and_client_error(mocker):
                 config=mocker.Mock(),
             )
         assert mock_client.models.generate_content_stream.call_count == 0
+
+
+def test_oversized_pr_diff_drops_full_file_contents_then_caps_patches(mocker):
+    """Verify prompt budget fallback drops full file contents first, then caps oversized patches via water-fill."""
+    from gemini_pr_review import main
+
+    # Stage 2: dropping codebase_context leaves modified Full Current File Content over budget -> strips full content.
+    mock_client, _ = _setup_dry_run_main(
+        mocker,
+        {"GEMINI_MAX_PROMPT_TOKENS": "2000", "GEMINI_PERSONA": "straight"},
+        clear_env=True,
+    )
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[{"filename": "large.py", "status": "modified", "patch": "@@ -1 +1 @@\n-old\n+small_patch_only"}],
+    )
+    main()
+
+    sent_prompt = mock_client.models.generate_content.call_args.kwargs["contents"]
+    assert isinstance(sent_prompt, str)
+    assert "--- Full Current File Content ---" not in sent_prompt
+    assert "+ | small_patch_only" in sent_prompt
+
+    # Stage 3: when patches alone still exceed budget, water-fill preserves small patches and caps giant patches.
+    giant_patch = "@@ -0,0 +1,500 @@\n" + "\n".join(f"+giant_diff_row_{i}_" + ("x" * 35) for i in range(500))
+    mock_client_3, _ = _setup_dry_run_main(
+        mocker,
+        {"GEMINI_MAX_PROMPT_TOKENS": "4000", "GEMINI_PERSONA": "straight"},
+        clear_env=True,
+    )
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[
+            {"filename": "small.py", "status": "modified", "patch": "@@ -1 +1 @@\n-a\n+tiny_keep_me"},
+            {"filename": "giant.md", "status": "added", "patch": giant_patch},
+        ],
+    )
+    main()
+
+    sent_prompt_3 = mock_client_3.models.generate_content.call_args.kwargs["contents"]
+    assert isinstance(sent_prompt_3, str)
+    assert "+ | tiny_keep_me" in sent_prompt_3
+    assert "TRUNCATED by gemini-review: diff patch for 'giant.md'" in sent_prompt_3
+    assert len(sent_prompt_3) // 4 <= 4000
+
+
+def test_is_thinking_config_error_distinguishes_thinking_from_token_limit():
+    """Verify is_thinking_config_error matches unsupported thinking errors and rejects token-limit/auth/vision 400s."""
+    from gemini_review import is_thinking_config_error
+
+    assert is_thinking_config_error(
+        RuntimeError("400 INVALID_ARGUMENT: thinking_level is not supported for this model")
+    )
+    assert is_thinking_config_error(RuntimeError("400 INVALID_ARGUMENT: Unknown name 'thinkingConfig'"))
+    assert is_thinking_config_error(RuntimeError("400 INVALID_ARGUMENT: Cannot find field: thinking_budget"))
+
+    assert not is_thinking_config_error(
+        RuntimeError(
+            "400 INVALID_ARGUMENT. {'error': {'code': 400, "
+            "'message': 'The input token count exceeds the maximum number of tokens allowed (1048576); "
+            "input token count: 1363891.', 'status': 'INVALID_ARGUMENT'}}"
+        )
+    )
+    assert not is_thinking_config_error(RuntimeError("400 INVALID_ARGUMENT: API key not valid"))
+    assert not is_thinking_config_error(RuntimeError("400 INVALID_ARGUMENT: Unable to process input image"))
+
+
+def test_pr_review_does_not_retry_thinking_config_on_token_limit_400(mocker):
+    """Verify PR review does not waste a second doomed request retrying thinking_config on input token limit 400."""
+    from gemini_pr_review import main
+
+    mock_client, _ = _setup_dry_run_main(
+        mocker,
+        {"GEMINI_THINKING_LEVEL": "low", "GEMINI_PERSONA": "straight"},
+        clear_env=True,
+    )
+    mocker.patch("gemini_review.build_codebase_context", return_value="short context")
+    mock_client.models.generate_content.side_effect = RuntimeError(
+        "400 INVALID_ARGUMENT: The input token count exceeds the maximum number of tokens allowed (1048576); "
+        "input token count: 1363891."
+    )
+
+    with pytest.raises(RuntimeError, match="exceeds the maximum number of tokens"):
+        main()
+
+    assert mock_client.models.generate_content.call_count == 1

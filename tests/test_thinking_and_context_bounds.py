@@ -417,6 +417,25 @@ def test_select_dynamic_context_files_retries_on_unsupported_thinking(mocker):
     assert usage_dict["prompt_tokens"] == 100
 
 
+def test_select_dynamic_context_files_does_not_retry_thinking_on_token_limit_400():
+    """Verify dynamic context selection does not retry thinking_config when rejected for token limits."""
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = RuntimeError(
+        "400 INVALID_ARGUMENT: The input token count exceeds the maximum number of tokens allowed (1048576)."
+    )
+
+    selected, _, _ = select_dynamic_context_files(
+        mock_client,
+        "gemini-4-hydrogen",
+        [{"filename": "src/app.py", "patch": ""}],
+        ["src/main.py"],
+        thinking_level="low",
+    )
+
+    assert selected == []
+    assert mock_client.models.generate_content.call_count == 1
+
+
 # ==============================================================================
 # 8. Huge Monorepo Simulation Test
 # ==============================================================================
