@@ -168,7 +168,7 @@ metric = types.LLMMetric(
             "5": "Expert-level accuracy, depth, and actionability",
         },
     ),
-    judge_model="gemini-2.5-flash",
+    judge_model=f"projects/{PROJECT_ID}/locations/{LOCATION}/publishers/google/models/gemini-2.5-flash",
     judge_model_sampling_count=3,
 )
 ```
@@ -178,21 +178,30 @@ metric = types.LLMMetric(
 For programmatic checks that go beyond text comparison.
 
 ```python
-# Validate JSON output structure
+# Validate JSON output structure (remote evaluate must return float, not dict)
 json_validator = types.CodeExecutionMetric(
     name="json_structure_check",
     custom_function='''
 import json
-def evaluate(instance: dict) -> dict:
+def evaluate(instance: dict) -> float:
+    # Remote evaluate() wraps fields in contents.gemini_contents -- see
+    # metric_registry.md, "What the function receives (Local vs. Remote Contract)".
+    resp = instance.get("response") or {}
+    if "contents" in resp:
+        parts = [
+            p for c in (resp.get("contents") or {}).get("gemini_contents") or []
+            for p in (c.get("parts") or [])
+        ]
+    else:
+        parts = resp.get("parts") or []
+    text = "".join(p.get("text", "") for p in parts)
     try:
-        data = json.loads(instance.get("response", ""))
+        data = json.loads(text)
         required_keys = {"name", "status", "result"}
         missing = required_keys - set(data.keys())
-        if missing:
-            return {"score": 0.0, "explanation": f"Missing keys: {missing}"}
-        return {"score": 1.0, "explanation": "All required keys present"}
-    except json.JSONDecodeError as e:
-        return {"score": 0.0, "explanation": f"Invalid JSON: {e}"}
+        return 0.0 if missing else 1.0
+    except json.JSONDecodeError:
+        return 0.0
 ''',
 )
 ```

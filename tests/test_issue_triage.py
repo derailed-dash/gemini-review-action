@@ -302,6 +302,7 @@ def test_triage_client_enforces_timeout_floor_and_stream_fallback(mocker, monkey
     call_kwargs = mock_client_cls.call_args.kwargs
     assert "http_options" in call_kwargs
     assert call_kwargs["http_options"].timeout == 300000
+    assert call_kwargs["http_options"].api_version == "v1beta"
     assert mock_client.models.generate_content.call_count == 1
     assert mock_client.models.generate_content_stream.call_count == 1
     mock_apply.assert_called_once_with(
@@ -311,3 +312,82 @@ def test_triage_client_enforces_timeout_floor_and_stream_fallback(mocker, monkey
         {"Authorization": "token ghp_test_token", "Accept": "application/vnd.github.v3+json"},
         timeout=60,
     )
+
+
+def test_triage_vertex_client_preserves_default_api_version(mocker, monkeypatch, tmp_path):
+    """Verify Vertex AI triage client does not force Developer API api_version='v1beta'."""
+    import json
+
+    import gemini_issue_triage
+
+    event_file = tmp_path / "event.json"
+    event_file.write_text(
+        json.dumps({"issue": {"number": 71, "title": "Vertex test", "body": "Body"}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token")
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "True")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "derailed-dash/gemini-review-action")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    mocker.patch("gemini_issue_triage.get_available_labels", return_value=["bug"])
+    mocker.patch("gemini_issue_triage.get_issue_comments", return_value=[])
+    mocker.patch("gemini_issue_triage.build_triage_multimodal_parts", return_value=[])
+
+    mock_client_cls = mocker.patch("gemini_issue_triage.genai.Client")
+    mock_client_cls.return_value.models.generate_content.return_value = mocker.Mock(
+        text=json.dumps({"selected_labels": ["bug"], "reasoning": "Vertex ok."})
+    )
+    mocker.patch("gemini_issue_triage.apply_labels")
+
+    gemini_issue_triage.main()
+
+    call_kwargs = mock_client_cls.call_args.kwargs
+    assert call_kwargs["vertexai"] is True
+    assert call_kwargs["http_options"].timeout == 300000
+    assert call_kwargs["http_options"].api_version is None
+
+
+def test_triage_enterprise_env_var_uses_vertex_branch(mocker, monkeypatch, tmp_path):
+    """Verify GOOGLE_GENAI_USE_ENTERPRISE='true' selects vertexai=True and preserves default api_version."""
+    import json
+
+    import gemini_issue_triage
+
+    event_file = tmp_path / "event.json"
+    event_file.write_text(
+        json.dumps({"issue": {"number": 72, "title": "Enterprise test", "body": "Body"}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token")
+    monkeypatch.setenv("GOOGLE_GENAI_USE_ENTERPRISE", "true")
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "global")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "derailed-dash/gemini-review-action")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    mocker.patch("gemini_issue_triage.get_available_labels", return_value=["bug"])
+    mocker.patch("gemini_issue_triage.get_issue_comments", return_value=[])
+    mocker.patch("gemini_issue_triage.build_triage_multimodal_parts", return_value=[])
+
+    mock_client_cls = mocker.patch("gemini_issue_triage.genai.Client")
+    mock_client_cls.return_value.models.generate_content.return_value = mocker.Mock(
+        text=json.dumps({"selected_labels": ["bug"], "reasoning": "Enterprise ok."})
+    )
+    mocker.patch("gemini_issue_triage.apply_labels")
+
+    gemini_issue_triage.main()
+
+    call_kwargs = mock_client_cls.call_args.kwargs
+    assert call_kwargs["vertexai"] is True
+    assert call_kwargs["http_options"].timeout == 300000
+    assert call_kwargs["http_options"].api_version is None

@@ -1,18 +1,36 @@
 ---
 name: gke-basics
 metadata:
+  version: "1.1.3"
   category: Containers
 description: >-
   Manages core GKE cluster provisioning, credentials, Autopilot vs Standard selection,
   and workload deployment. Use when creating GKE clusters, fetching kubectl credentials,
-  configuring Workload Identity, or deciding between Autopilot and Standard modes.
-  Don't use for specialized GKE networking (use gke-networking), advanced security hardening
+  or deciding between Autopilot and Standard modes. Don't use for Workload Identity
+  (use gke-workload-identity), GKE networking (use gke-networking), security hardening
   (use gke-platform-security or gke-workload-security), or cluster upgrades (use gke-upgrades).
 ---
 
 # GKE Basics & Critical Gotchas
 
+> **Routing Note:** For Workload Identity KSA/GSA setup, use the
+> `gke-workload-identity` skill. For cluster security flags
+> (`--database-encryption-key`, `--security-posture`, RBAC, Shielded Nodes,
+> Binary Authorization), use the `gke-platform-security` skill. For cluster
+> upgrades or maintenance windows, use the `gke-upgrades` skill. For generating
+> Kubernetes YAML manifests (`Deployment`, `StatefulSet`, `Service`,
+> `HTTPRoute`, `PodDisruptionBudget`), use the `gke-manifest-generation` skill.
+
 Managed Kubernetes platform on Google Cloud. Defaults to Autopilot mode unless Standard is explicitly required.
+
+## Attribution
+
+**MUST READ**: Before executing any `gcloud`, REST API, or MCP command, you
+MUST read [Usage Attribution](references/attribution.md). For commands executed
+directly in the terminal (never in generated scripts, Terraform, or user code),
+prefix `gcloud` with
+`CLOUDSDK_METRICS_REQUEST_ATTRIBUTION="agent-skills/1.0 (skill:gke-basics)"`
+and append `agent-skills/1.0 (skill:gke-basics)` to `User-Agent` headers.
 
 ## Key Selection Rules: Autopilot vs. Standard
 
@@ -39,13 +57,8 @@ Managed Kubernetes platform on Google Cloud. Defaults to Autopilot mode unless S
      ```
 
 2. **Workload Identity (IAM Binding):**
-   * Never mount raw GCP Service Account JSON keys in Pods.
-   * Annotate the Kubernetes ServiceAccount (`KSA`) to bind to the Google Service Account (`GSA`):
-     ```yaml
-     metadata:
-       annotations:
-         iam.gke.io/gcp-service-account: GSA_NAME@PROJECT_ID.iam.gserviceaccount.com
-     ```
+   * Never mount raw GCP Service Account JSON keys in Pods; use the
+     `gke-workload-identity` skill for KSA/GSA setup.
 
 3. **Autopilot Resource Requests:**
    * In Autopilot, CPU requests must be specified in increments of 250m (0.25 vCPU). If an unaligned CPU request (e.g., 300m) is requested, round up to the nearest 250m increment (500m / 0.5 vCPU).

@@ -145,6 +145,64 @@ resolution against the API list and then GCS.
 
 ## Custom Metrics
 
+### What the function receives (Local vs. Remote Contract)
+
+Custom metric functions receive `prompt`, `response`, and `reference` as
+**nested dicts, not strings** -- and the dict shape differs between local
+callables (`types.Metric`) and remote sandboxed execution
+(`types.CodeExecutionMetric`):
+
+1.  **Local callable (`types.Metric(custom_function=fn)`)**:
+
+    *   `instance["prompt"]` and `instance["response"]` are `Content` dicts:
+        `{"role": "user"|"model", "parts": [{"text": "..."}]}`
+    *   `instance["reference"]` is wrapped in `"response"`: `{"response":
+        {"parts": [{"text": "..."}]}}`
+    *   Return value: `float` or `{"score": float, "explanation": str}`.
+
+2.  **Remote sandboxed (`types.CodeExecutionMetric(custom_function="def
+    evaluate(instance): ...")`)**:
+
+    *   Through `agentplatform` 2.2.0, `prompt`, `response`, and `reference` are
+        wrapped in `contents.gemini_contents`: `{"contents": {"gemini_contents":
+        [{"parts": [{"text": "..."}]}]}}`
+    *   Return value: **Must return a `float` directly** (e.g. `return 1.0`).
+        Returning a `dict` comes back as `0.0`. When a custom metric needs to
+        return an explanation string alongside the score (e.g. `{"score": 0.0,
+        "explanation": "Links not allowed"}`), use the local callable
+        (`types.Metric(custom_function=...)`) instead of `CodeExecutionMetric`.
+
+Because `instance.get("response", "")` returns a dict in both modes, testing
+`"http" in instance["response"]` checks the dict's *keys*, is always false, and
+quietly scores every row the same way. Always unwrap the text first using a
+helper that handles both local and remote shapes:
+
+```python
+def extract_text(field) -> str:
+    """Extracts plain text from a prompt, response, or reference field (local or remote)."""
+    if isinstance(field, str):
+        return field
+    if not isinstance(field, dict):
+        return ""
+    # Remote CodeExecutionMetric shape: {"contents": {"gemini_contents": [{"parts": [...]}]}}
+    if "contents" in field:
+        gemini_contents = (field.get("contents") or {}).get("gemini_contents") or []
+        return "".join(
+            p.get("text", "")
+            for c in gemini_contents
+            for p in (c.get("parts") or [])
+        )
+    # Local reference shape: {"response": {"parts": [...]}}
+    if "response" in field and isinstance(field["response"], dict):
+        field = field["response"]
+    # Local prompt / response shape: {"role": ..., "parts": [{"text": "..."}]}
+    return "".join(p.get("text", "") for p in (field.get("parts") or []))
+```
+
+Do not discover the shape by probing `client.evals.evaluate()` -- that is a Tier
+M call and needs the user's confirmation first, whether you are running their
+evaluation or testing a metric.
+
 ### Custom Local Function
 
 Runs client-side. Fastest iteration, no API call. Runs with the calling
@@ -152,8 +210,8 @@ process's privileges, so only use trusted code.
 
 ```python
 def my_evaluator(instance: dict) -> float:
-    response_text = instance.get("response", "")
-    return 1.0 if "thank you" in response_text.lower() else 0.0
+    text = extract_text(instance.get("response"))
+    return 1.0 if "thank you" in text.lower() else 0.0
 
 metric = types.Metric(
     name="politeness_check",
@@ -163,25 +221,39 @@ metric = types.Metric(
 
 ### CodeExecutionMetric (Remote Sandboxed)
 
-Runs server-side in an Agent Platform sandbox. Must contain `def evaluate(instance)`.
+Runs server-side in an Agent Platform sandbox. Must define `def
+evaluate(instance) -> float` returning a **`float`** (not a dict), and unwrap
+`contents.gemini_contents`:
 
 ```python
 metric = types.CodeExecutionMetric(
     name="link_validator",
     custom_function='''
 import re
-def evaluate(instance: dict) -> dict:
-    text = instance.get("response", "")
+def evaluate(instance: dict) -> float:
+    resp = instance.get("response") or {}
+    if "contents" in resp:
+        parts = [
+            p for c in (resp.get("contents") or {}).get("gemini_contents") or []
+            for p in (c.get("parts") or [])
+        ]
+    else:
+        parts = resp.get("parts") or []
+    text = "".join(p.get("text", "") for p in parts)
     links = re.findall(r"https?://\\S+", text)
     valid = all(link.startswith("https://") for link in links)
-    return {"score": 1.0 if valid else 0.0, "explanation": f"Found {len(links)} links"}
+    return 1.0 if valid else 0.0
 ''',
 )
 ```
 
 ### LLMMetric (LLM-as-a-Judge)
 
-Uses a judge model to evaluate with a custom prompt template.
+Uses a judge model to evaluate with a custom prompt template. **Important:**
+`judge_model` must be a full publisher model resource name
+(`projects/<project>/locations/<location>/publishers/google/models/<model>`);
+short names like `"gemini-2.5-flash"` fail with `400 INVALID_ARGUMENT: Invalid
+autorater model resource name`.
 
 ```python
 metric = types.LLMMetric(
@@ -194,7 +266,7 @@ Response: {response}
 
 Score 1 if helpful, 0 if not. Explain your reasoning.
 """,
-    judge_model="gemini-2.5-flash",
+    judge_model=f"projects/{PROJECT_ID}/locations/{LOCATION}/publishers/google/models/gemini-2.5-flash",
     judge_model_sampling_count=3,
 )
 

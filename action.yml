@@ -128,14 +128,13 @@ runs:
     - name: Set up Python
       # Pinned to the commit the tag points at. A moving major tag means the code that runs in a
       # consumer's CI can change without the consumer's pin changing.
-      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
       with:
         python-version: '3.13'
 
     - name: Install uv
-      # NOTE: v5 is an annotated tag, so `git rev-parse v5` returns the tag object, not the commit.
-      # This is `git rev-parse v5^{commit}`.
-      uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+      # Pinned to the commit the v10.4.0 release tag points at (commit SHA, not tag object).
+      uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
 
     - name: Run Script
       shell: bash

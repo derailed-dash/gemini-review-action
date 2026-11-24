@@ -1,17 +1,28 @@
 ---
 name: google-cloud-waf-reliability
 metadata:
+  version: "1.1.0"
   category: WellArchitectedFramework
 description: >-
-  Generates guidance for reliability, resilience, availability, redundancy,
-  fault-tolerance, and disaster recovery (DR) for Google Cloud workloads based
-  on the design principles and recommendations in the Google Cloud
-  Well-Architected Framework. Use when the user asks to evaluate, design, or
-  improve the reliability, resilience, availability, or disaster recovery
-  capabilities of Google Cloud workloads.
+  Evaluates, designs, and improves the reliability, resilience, availability,
+  fault tolerance, and disaster recovery (DR) of Google Cloud workloads based
+  on the design principles and recommendations in the Reliability pillar of the
+  Google Cloud Well-Architected Framework. Use when the user asks about
+  reliability-related topics like workload uptime, designing for high
+  availability (HA) or DR, setting and meeting RTO/RPO targets, SRE best
+  practices, backup strategies, multi-region failover, or fault-tolerant
+  architecture on Google Cloud. Don't use for other Well-Architected Framework
+  pillars such as Cost Optimization, Operational Excellence, or Security, or
+  for hands-on resource deployment and live incident troubleshooting.
 ---
 
 # Google Cloud Well-Architected Framework skill for the Reliability pillar
+
+## Usage attribution
+
+**MUST READ**: Before executing any `gcloud`, REST API, or MCP command, you
+MUST read and follow the instructions in
+[Usage Attribution](references/attribution.md).
 
 ## Overview
 
@@ -104,27 +115,61 @@ relevant to reliability:
 ## Workload assessment questions
 
 Ask appropriate questions to understand the reliability-related requirements and
-constraints of the workload and the user's organization. Choose questions from
-the following list:
+constraints of the workload and the user's organization. For focused inquiries,
+choose the most relevant questions from the following list; when preparing a
+comprehensive reliability assessment across a workload, cover all core
+principles and include the full set of discovery questions under each principle
+so key operational practices aren't overlooked:
 
-- How does your organization define and measure the reliability of your systems
-  in relation to user experience?
-- How does your organization approach setting reliability targets for your
-  services?
-- What is your organization's strategy for ensuring high availability through
-  resource redundancy?
-- How does your organization leverage horizontal scalability to maintain
-  performance and reliability?
-- How does your organization utilize observability (metrics, logs, traces) to
-  gain insights and detect potential failures?
-- How does your organization manage alerting based on observability data to
-  ensure timely responses to significant issues without causing alert fatigue?
-- What measures does your organization take to ensure systems can gracefully
-  degrade during high load or partial failures?
-- How frequently and comprehensively does your organization test for recovery
-  from system failures (e.g., regional failovers, release rollbacks)?
-- What is your organization's approach to testing for recovery from data loss?
-- How does your organization conduct and utilize postmortems after incidents?
+- **Define reliability based on user-experience goals**:
+  - How does your organization define and measure the reliability of your
+    systems in relation to user experience?
+  - How do you define reliability for your application in a way that is
+    meaningful to your end-users?
+  - What tools and processes do you use to gather direct user feedback on
+    reliability and performance?
+
+- **Set realistic targets for reliability**:
+  - How does your organization approach setting reliability targets for your
+    services?
+  - What's your process for reviewing and adjusting your SLOs?
+
+- **Build highly available systems through resource redundancy**:
+  - What is your organization's strategy for ensuring high availability through
+    resource redundancy?
+  - What's your strategy for distributing workloads across different geographic
+    regions or availability zones?
+
+- **Take advantage of horizontal scalability**:
+  - How does your organization leverage horizontal scalability to maintain
+    performance and reliability?
+  - How do you monitor for performance bottlenecks that might prevent your
+    system from scaling effectively?
+
+- **Detect potential failures by using observability**:
+  - How does your organization utilize observability (metrics, logs, traces) to
+    gain insights and detect potential failures?
+  - How does your organization manage alerting based on observability data to
+    ensure timely responses to significant issues without causing alert fatigue?
+
+- **Design for graceful degradation**:
+  - What measures does your organization take to ensure systems can gracefully
+    degrade during high load or partial failures?
+  - How are the impacts of degraded performance on user experience measured and
+    mitigated?
+  - How is user experience prioritized during periods of degradation?
+
+- **Perform testing for recovery from failures**:
+  - How frequently and comprehensively does your organization test for recovery
+    from system failures (e.g., regional failovers, release rollbacks)?
+
+- **Perform testing for recovery from data loss**:
+  - What is your organization's approach to testing for recovery from data loss?
+
+- **Conduct thorough postmortems**:
+  - How does your organization conduct and utilize postmortems after incidents?
+  - Can you share a key learning or a system change that resulted from a recent
+    postmortem?
 
 ## Validation checklist
 

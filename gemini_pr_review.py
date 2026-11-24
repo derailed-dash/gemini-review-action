@@ -32,7 +32,6 @@ def main():
     repository = os.environ.get("GITHUB_REPOSITORY", "")
     event_path = os.environ.get("GITHUB_EVENT_PATH")
 
-    use_vertexai = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI", "False").lower() in ("true", "1")
     project = os.environ.get("GOOGLE_CLOUD_PROJECT")
     location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global")
     model_name = gr.get_default_model()
@@ -129,17 +128,15 @@ def main():
         print("No text-based or visual image files to review. Exiting.", file=sys.stderr)
         sys.exit(0)
 
-    # Initialise Gemini client (HttpOptions.timeout is in milliseconds; enforce a 300s minimum floor for LLM reviews)
-    http_options = types.HttpOptions(timeout=max(timeout, 300) * 1000)
-    if use_vertexai:
-        print(f"Initialising GenAI Client (Model: {model_name}) using Vertex AI authentication...", file=sys.stderr)
-        client = genai.Client(vertexai=True, project=project, location=location, http_options=http_options)
-    else:
-        print(
-            f"Initialising GenAI Client (Model: {model_name}) using Google AI Studio API Key authentication...",
-            file=sys.stderr,
-        )
-        client = genai.Client(api_key=gemini_api_key, http_options=http_options)
+    # Initialise Gemini client (enforce >=300s timeout floor and Developer API v1beta).
+    client, use_vertexai = gr.create_genai_client(
+        model_name=model_name,
+        timeout=timeout,
+        api_key=gemini_api_key,
+        project=project,
+        location=location,
+        client_cls=genai.Client,
+    )
 
     config = gr.load_config()
 
@@ -333,11 +330,12 @@ def main():
                     parsed_tools = None
                     if tools:
                         try:
-                            parse_fn = getattr(client.models, "_parse_config", None)
-                            if callable(parse_fn):
-                                parsed_cfg = parse_fn(types.GenerateContentConfig(tools=tools))
-                                parsed_tools = getattr(parsed_cfg, "tools", None)
-                        except Exception:
+                            parsed_tools = gr.build_cache_tools(tools, use_vertexai=use_vertexai)
+                        except Exception as tool_err:
+                            print(
+                                f"Warning: Failed to serialise tools for context cache ({tool_err}).",
+                                file=sys.stderr,
+                            )
                             parsed_tools = None
 
                     try:

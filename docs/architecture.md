@@ -29,7 +29,7 @@ The code review action is organized into a modular Python package (`gemini_revie
 * **`gemini_review/budget.py`**: Token budget allocation and per-file content truncation (`cap_file_content`) to prevent out-of-budget diffs.
 * **`gemini_review/billing_labels.py`**: Google Cloud billing labels parser and sanitisation for GCP cost attribution.
 * **`gemini_review/personas.py`**: Reviewer persona registry and prompt generation (`straight`, `dazbo`, `palpatine`, `rick`).
-* **`gemini_review/pricing.py`**: Gemini model token pricing and cost estimation engine (supporting Gemini 4 Hydrogen, Gemini 4 Argon, and Gemini 3.6–3.8 Flash).
+* **`gemini_review/pricing.py`**: Gemini model token pricing and cost estimation engine (supporting Gemini 4 Carbon, Neon, Argon, and Hydrogen, Gemini Decision 1, and Gemini 3.6–3.8 Flash).
 * **`gemini_review/skills.py`**: Agent skill metadata parser and instruction loader for workspace and built-in skills.
 * **`gemini_review/developer_knowledge.py`**: MCP/RPC integration to search and fetch official Google developer documentation.
 * **`gemini_pr_review.py`**: Main CLI entrypoint script that re-exports all `gemini_review` package APIs and runs the primary review loop.
@@ -65,6 +65,8 @@ To provide Gemini with project-wide awareness, the script traverses the workspac
 
 To drastically reduce API costs and latency for large codebase contexts, `gemini_pr_review.py` automatically selects between Gemini 4's implicit prefix caching and Gemini 3's explicit `CachedContent` engine:
 
+* **API Version Compatibility (`v1beta` across Developer API clients)**:
+  Under `google-genai >= 3.0.0` (which switched the Gemini Developer API default to `v1`), `create_genai_client()` pins `api_version="v1beta"` in `HttpOptions` for all non-Vertex Developer API clients (covering both `gemini_pr_review.py` and `gemini_issue_triage.py`, across Gemini 4, Gemini 3 explicit `cachedContents`, preview/`-latest` aliases, and the Decisions API), while Vertex AI / Enterprise clients preserve their native `v1beta1` default.
 * **Gemini 4 Automatic Implicit Prefix Caching (`gemini-4-*`, default)**:
   * **Zero Cache-Management Overhead**: When `gr._normalize_model_name(model_name)` starts with `"gemini-4"`, the script skips `client.caches.list()` and `client.caches.create()` (since Gemini 4 does not use explicit `CachedContent` handles).
   * **Prefix-Stable Prompt Ordering**: For uncached/direct requests, `gemini_pr_review.py` places static `codebase_context` (and `codebase_multimodal_parts`) *before* `dynamic_pr_prompt` (and `visual_diff_parts`). Because `system_instruction`, `tools`, and `codebase_context` come first, successive PR pushes and multi-turn tool calls retain an identical prefix and automatically receive Gemini 4's **95% cached-input discount** (`0.05x`) on prompts of 4,096+ tokens with no storage fee.

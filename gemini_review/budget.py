@@ -48,8 +48,10 @@ DEFAULT_MAX_FILE_BYTES = 128 * 1024
 # fails safe (a trimmed review) instead of unsafe (a 400 and no review).
 MODEL_INPUT_TOKEN_LIMITS: dict[str, int] = {
     "gemini-4-carbon": 1_048_576,
+    "gemini-4-neon": 1_048_576,
     "gemini-4-argon": 1_048_576,
     "gemini-4-hydrogen": 1_048_576,
+    "gemini-decision-1": 262_144,
     "gemini-3.8-flash": 1_048_576,
     "gemini-3.7-flash": 1_048_576,
     "gemini-3.6-flash": 1_048_576,

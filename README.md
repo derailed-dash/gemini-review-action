@@ -136,11 +136,11 @@ This action supports **On-Demand Skills Discovery**. Instead of cramming all you
 #### 1. Default (Built-in) Skills Included
 
 The action comes pre-packaged with a comprehensive set of default skills that are automatically available for every run. These cover:
-*   **Google Enterprise & Agent Development**: Best practices for Google ADK (Agent Development Kit), Gemini Agents API, serving endpoint management, prompt orchestration, and model tuning.
-*   **Google Cloud Best Practices**: Official architecture patterns, operational excellence, reliability, performance, security, and GCS/Cloud Run/GKE setup.
-*   **Data Analytics**: BigQuery query optimization, BigFrames, property graphs, and time-series forecasting.
+*   **Gemini API & Agent Development**: Best practices for Gemini API (`google-genai`, Interactions API, Decisions API, Live API, Omni Flash video generation), Gemini Agents API, ADK (Agent Development Kit), and Agent Platform evaluation and troubleshooting.
+*   **Google Cloud Best Practices**: Official Well-Architected Framework pillars (cost optimisation, operational excellence, reliability, performance optimisation, security), auth, Cloud Build, Cloud Logging, Cloud Run, GKE, Cloud Storage, and Firebase.
+*   **Data Analytics**: BigQuery fundamentals, SQL query optimisation, BigFrames, and BigQuery ML/AI functions.
 
-All curated starter skills are tracked declaratively in [skills-manifest.json](starter-examples/skills/skills-manifest.json) and can be updated from their upstream sources using `uv run python scripts/update_skills.py`.
+All curated starter skills are tracked declaratively in [skills-manifest.json](starter-examples/skills/skills-manifest.json) and can be updated from their upstream sources using `uv run python scripts/update_skills.py`. Note that upstream `google-agents-cli-adk-code` references `google-agents-cli-scaffold` and `google-agents-cli-deploy`, which are intentionally omitted from the lean built-in starter set because their lifecycle workflows are consolidated under `google-agents-cli-workflow`.
 
 #### 2. Adding Custom Skills to Your Repository
 
@@ -290,7 +290,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           # Automatically checks out the head ref for PR events,
           # and pulls the PR head branch for comment-based triggers
@@ -317,7 +317,7 @@ After adding the workflow to your repository, it should look something like this
 
 ### Pinning
 
-The examples above use floating tags (`@v1`, `@v6`) because they are easier to read. For anything beyond a personal repo, **pin to a full commit SHA instead**:
+The examples above use floating tags (`@v1`, `@v7`) because they are easier to read. For anything beyond a personal repo, **pin to a full commit SHA instead**:
 
 ```yaml
 - uses: derailed-dash/gemini-review-action@<40-char-sha> # v1.6.0
@@ -425,7 +425,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
 
       - name: Run Gemini Triage Action
         uses: derailed-dash/gemini-review-action@v1
@@ -476,7 +476,7 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 | `persona` | Reviewer persona overlay (`straight`, `dazbo`, `palpatine`, `rick`). | No | `straight` |
 | `custom_instructions` | Custom instructions or guardrails to extend the review prompt. Can be inline text or a file path in the repository (e.g. `.github/review-instruction-additions.md`). | No | `.github/review-instruction-additions.md` |
 | `skip_inline_suggestions` | Whether to skip automated re-reviews when a commit is created by accepting an inline suggestion via GitHub UI. | No | `'true'` |
-| `thinking_level` | Thinking level for reasoning models (`low`, `medium`, `high`, plus `xhigh` on `gemini-4-hydrogen`; or `off`/integer token budget on Gemini 3/2.5). When omitted, the model's native default thinking behaviour applies. See [Reasoning & Thinking Budget Control](#reasoning--thinking-budget-control). | No | `''` |
+| `thinking_level` | Thinking level for reasoning models (`low`, `medium`, `high`, plus `xhigh` on `gemini-4-hydrogen` and `gemini-4-neon`; or `off`/integer token budget on Gemini 3/2.5). When omitted, the model's native default thinking behaviour applies. See [Reasoning & Thinking Budget Control](#reasoning--thinking-budget-control). | No | `''` |
 | `max_candidate_files` | Maximum candidate non-core files to present to Dynamic Context Selection in Sparse Mode (default: 500). | No | `500` |
 | `extra_context_files` | Comma-separated list of repository file paths to attach as additional context, bypassing Dynamic Context Selection. | No | `''` |
 | `context_diff_directories_only` | Whether to restrict candidate context files in Sparse Mode strictly to directories containing modified files from the PR diff. | No | `'false'` |
@@ -489,12 +489,12 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 
 ### Reasoning & Thinking Budget Control
 
-When using reasoning models (such as `gemini-4-hydrogen`, `gemini-4-argon`, `gemini-4-carbon`, or `gemini-3.8-flash`), Gemini uses internal reasoning ("thinking") tokens to analyse code diffs, architectural implications, and complex issue triage before outputting a response.
+When using reasoning models (such as `gemini-4-hydrogen`, `gemini-4-neon`, `gemini-4-argon`, `gemini-4-carbon`, or `gemini-3.8-flash`), Gemini uses internal reasoning ("thinking") tokens to analyse code diffs, architectural implications, and complex issue triage before outputting a response.
 
 * **Default Behaviour (when omitted)**:
   If `thinking_level` is left blank (the default), no thinking configuration override is passed to the Gemini API (`thinking_config=None`), so the model's native default reasoning behaviour applies dynamically.
 * **Categorical Thinking Levels (Gemini 4 & Gemini 3)**:
-  * **`gemini-4-hydrogen` / `gemini-4-*`**: Supports `'low'`, `'medium'`, `'high'`, plus `'xhigh'` (extra-high) on `gemini-4-hydrogen`. Because Gemini 4 enforces `'low'` as its minimum reasoning level (rejecting `'minimal'` and `thinking_budget=0` with `400 INVALID_ARGUMENT`), setting `'off'`, `'false'`, `'disabled'`, `'minimal'`, or `'0'` on any `gemini-4-*` model automatically logs a warning and clamps to `'low'` upfront.
+  * **`gemini-4-hydrogen` / `gemini-4-*`**: Supports `'low'`, `'medium'`, `'high'`, plus `'xhigh'` (extra-high) on `gemini-4-hydrogen` and `gemini-4-neon`. Because Gemini 4 enforces `'low'` as its minimum reasoning level (rejecting `'minimal'` and `thinking_budget=0` with `400 INVALID_ARGUMENT`), setting `'off'`, `'false'`, `'disabled'`, `'minimal'`, or `'0'` on any `gemini-4-*` model automatically logs a warning and clamps to `'low'` upfront.
   * **Gemini 3 / 2.5**: Supports `'minimal'` (Gemini 3), `'low'`, `'medium'`, and `'high'`.
 * **Disabling Thinking or Explicit Token Budgets (Gemini 3 / 2.5 only)**:
   * Set `thinking_level` to `'off'`, `'false'`, `'disabled'`, or `0` to pass `thinking_budget=0` on models that support disabling thinking (such as Gemini 3 / 2.5).
@@ -506,7 +506,7 @@ Thinking token usage and its associated cost are tracked and reported separately
         with:
           # Recommended lightweight thinking level for fast issue triage or quick reviews on Gemini 4
           thinking_level: 'low'
-          # Or choose 'medium', 'high', or 'xhigh' (on gemini-4-hydrogen) for deeper architectural analysis
+          # Or choose 'medium', 'high', or 'xhigh' (on gemini-4-hydrogen / gemini-4-neon) for deeper architectural analysis
           # thinking_level: 'high'
 ```
 
@@ -695,7 +695,7 @@ Token Usage: 265,849 input tokens (94.4% cached), 210 output tokens, 2,048 think
 ### Metrics Explained
 
 * **Total Input (Prompt) Tokens**: The total size (in LLM tokens) of the context sent to Gemini (full repository codebase files, system instructions, PR comment history, and PR diff patch).
-* **Cached Context Tokens (`├── Cached Context Tokens`)**: The portion of input tokens hitting Gemini's context cache. Context caching applies **exclusively to input tokens**, delivering a **95% discount** (`0.05x`) via automatic implicit prefix caching on Gemini 4 models (`gemini-4-hydrogen`, `gemini-4-argon`), and a **90% discount** (`0.1x`) via explicit `CachedContent` handles on Gemini 3 models.
+* **Cached Context Tokens (`├── Cached Context Tokens`)**: The portion of input tokens hitting Gemini's context cache. Context caching applies **exclusively to input tokens**, delivering a **95% discount** (`0.05x`) via automatic implicit prefix caching on Gemini 4 models (`gemini-4-hydrogen`, `gemini-4-neon`, `gemini-4-argon`, `gemini-4-carbon`), and a **90% discount** (`0.1x`) via explicit `CachedContent` handles on Gemini 3 models.
 * **PR Comments History Tokens (`├── PR Comments History Tokens`)**: The exact token count consumed by historical inline review threads and conversation comments fetched via the GitHub API and included in the dynamic review context.
 * **Un-cached Fresh Tokens (`└── Un-cached Fresh Tokens`)**: The newly introduced PR diff lines and dynamic skill instructions, billed at standard input rates.
 * **Thinking / Reasoning Tokens**: The internal reasoning tokens consumed by Gemini reasoning models (e.g. `gemini-4-hydrogen`) while evaluating complex logic and diffs.
@@ -767,7 +767,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', github.event.issue.number) }}
 
@@ -1004,7 +1004,10 @@ Rates for **`gemini-4-hydrogen`** (default), which the action applies automatica
 * **Cached input**: **0.05x** the input rate (**$0.075** per 1,000,000 tokens — automatic **95% discount** via implicit prefix caching)
 
 Other supported models in the built-in rate table:
+* **`gemini-4-carbon`**: **$2.00 / $10.00** per 1M input / output through **2026-11-30** (Google pays the Vertex AI promo as a 50% credit back, excluding Cyber Permissive), then **$4.00 / $20.00**. Cached input is `0.05x` the input rate. Rates are for the global endpoint; regional endpoints are 10% higher.
+* **`gemini-4-neon`**: **$3.00 / $15.00** per 1M input / output. Cached input is `0.05x` the input rate (`$0.15` per 1M tokens). Rates are for the global endpoint; regional endpoints are 10% higher.
 * **`gemini-4-argon`**: **$2.00 / $10.00** per 1M input / output through **2026-11-30** (Google pays this promo as a 50% credit back), then **$4.00 / $20.00**. Cached input is `0.05x` the input rate. Rates are for the global endpoint; regional endpoints are 10% higher.
+* **`gemini-decision-1`**: **$0.10 / $0.00** per 1M input / output (`0` output tokens; context caching not supported).
 * **`gemini-3.8-flash`** / **`gemini-3.7-flash`**: **$0.75 / $3.75** per 1M introductory rate through **2026-12-31**, then **$1.50 / $7.50**. Cached input is `0.1x` the input rate.
 
 **Calculated Cost Per PR Review** (`gemini-4-hydrogen`, uncached baseline):

@@ -59,6 +59,28 @@ class Rate:
 # Keys are matched after normalising the model id (see `_normalise`), so
 # "models/gemini-3.8-flash" and "publishers/google/models/gemini-3.8-flash" both resolve.
 RATES: dict[str, Rate] = {
+    "gemini-4-carbon": Rate(
+        input=4.00,
+        output=20.00,
+        label="Gemini 4 Carbon",
+        # Half price through 2026-11-30. Google pays the Vertex AI promo as a 50% credit back on
+        # net spend (excluding Cyber Permissive), matching Gemini 4 Argon.
+        promo=Promo(input=2.00, output=10.00, ends_after="2026-11-30"),
+        # Cached input is $0.20 against $4.00 (and $0.10 against $2.00 in the promo), i.e. 0.05x.
+        cache_read=0.05,
+        note=(
+            "standard tier, global endpoint; regional endpoints are 10% higher, "
+            "the Vertex AI promo is paid as a credit back, and Cyber Permissive is excluded from it"
+        ),
+    ),
+    "gemini-4-neon": Rate(
+        input=3.00,
+        output=15.00,
+        label="Gemini 4 Neon",
+        # Cached input is $0.15 against $3.00, i.e. 0.05x (95% implicit cache discount).
+        cache_read=0.05,
+        note="standard tier, global endpoint; regional endpoints are 10% higher",
+    ),
     "gemini-4-hydrogen": Rate(
         input=1.50,
         output=7.50,
@@ -82,6 +104,13 @@ RATES: dict[str, Rate] = {
             "standard tier, global endpoint; regional endpoints are 10% higher, "
             "the promo is paid as a credit back, and Cyber Permissive is excluded from it"
         ),
+    ),
+    "gemini-decision-1": Rate(
+        input=0.10,
+        output=0.00,
+        label="Gemini Decision 1",
+        cache_read=1.0,
+        note="standard tier; 0 output tokens, context caching not supported",
     ),
     "gemini-3.8-flash": Rate(
         input=1.50,

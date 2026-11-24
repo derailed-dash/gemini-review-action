@@ -1,6 +1,7 @@
 ---
 name: gemini-agents-api
 metadata:
+  version: "1.0.2"
   category: AiAndMachineLearning
 description: Manages custom Agent resources on Gemini Enterprise Agent Platform. Use when the user wants to programmatically create, configure, list, update, or delete stateful, server-managed Agent resources (including mounting files, skills, and tools) before executing conversations.
 ---
@@ -10,6 +11,15 @@ description: Manages custom Agent resources on Gemini Enterprise Agent Platform.
 This skill provides complete instructions, REST request endpoints, and JSON payload structures to programmatically manage **custom Agent resources** on the Gemini Enterprise Agent Platform (Agent Platform).
 
 The **Managed Agents API** forms the **Control Plane** of the platform. It allows developers to provision, retrieve, update, and delete tailored, stateful agent containers equipped with system instructions, sandboxed files, custom skill registries, and local/remote tools.
+## Attribution
+
+**MUST READ**: Before executing any `gcloud`, REST API, or MCP command, you
+MUST read [Usage Attribution](references/attribution.md). For commands executed
+directly in the terminal (never in generated scripts, Terraform, or user code),
+prefix `gcloud` with
+`CLOUDSDK_METRICS_REQUEST_ATTRIBUTION="agent-skills/1.0 (skill:gemini-agents-api)"`
+and append `agent-skills/1.0 (skill:gemini-agents-api)` to `User-Agent` headers.
+
 ---
 
 ## 1. Authentication & Setup
@@ -58,7 +68,7 @@ curl -X POST "https://aiplatform.googleapis.com/v1beta1/projects/${PROJECT_ID}/l
   -H "Content-Type: application/json; charset=utf-8" \
   -d '{
     "id": "my-custom-agent",
-    "base_agent": "antigravity-preview-05-2026",
+    "base_agent": "antigravity-preview-09-2026",
     "description": "A professional agent configured with remote tools and mounted Cloud Storage directories.",
     "system_instruction": "You are a helpful, domain-expert assistant.",
     "tools": [
@@ -179,7 +189,7 @@ Once the container is ready, `"done": true` is set, and the completed `Agent` re
   "response": {
     "@type": "type.googleapis.com/google.cloud.aiplatform.v1beta1.Agent",
     "name": "projects/your-project-id/locations/global/agents/my-custom-agent",
-    "base_agent": "antigravity-preview-05-2026",
+    "base_agent": "antigravity-preview-09-2026",
     "description": "A professional agent configured with remote tools and mounted Cloud Storage directories.",
     "system_instruction": "You are a helpful, domain-expert assistant."
   }
@@ -207,7 +217,7 @@ Returns the complete configured state of the custom Agent resource:
 ```json
 {
   "name": "projects/your-project-id/locations/global/agents/my-custom-agent",
-  "base_agent": "antigravity-preview-05-2026",
+  "base_agent": "antigravity-preview-09-2026",
   "description": "A professional agent configured with remote tools and mounted Cloud Storage directories.",
   "system_instruction": "You are a helpful, domain-expert assistant.",
   "tools": [
@@ -257,13 +267,13 @@ Returns a JSON list of all configured custom Agents under the target project:
   "agents": [
     {
       "name": "projects/your-project-id/locations/global/agents/my-custom-agent",
-      "base_agent": "antigravity-preview-05-2026",
+      "base_agent": "antigravity-preview-09-2026",
       "description": "A professional agent configured with remote tools and mounted Cloud Storage directories.",
       "system_instruction": "You are a helpful, domain-expert assistant."
     },
     {
       "name": "projects/your-project-id/locations/global/agents/my-telecom-agent",
-      "base_agent": "antigravity-preview-05-2026",
+      "base_agent": "antigravity-preview-09-2026",
       "description": "A highly specialized telecom support agent.",
       "system_instruction": "You are a professional telecom support agent. Follow system policies carefully."
     }
@@ -349,5 +359,7 @@ interaction = client.interactions.create(
 }
 ```
 
-Refer to the **`gemini-interactions-api`** skill guide (`../gemini-interactions-api/SKILL.md`) for full instructions, Python and TS/JS code blocks, and streaming setups to run conversations with your provisioned agents.
+Refer to the **`gemini-interactions-api`** skill for full instructions, Python
+and TS/JS code blocks, and streaming setups to run conversations with your
+provisioned agents.
 

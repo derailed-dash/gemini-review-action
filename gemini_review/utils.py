@@ -8,7 +8,11 @@ multimodal, diff, and repo modules to ensure full backward compatibility.
 import hashlib
 import os
 import sys
-from typing import Any
+from typing import Any, Literal
+
+from google import genai
+from google.genai import errors as genai_errors
+from google.genai import types
 
 # Re-export diff & patch parsing utilities
 from gemini_review.diff import (
@@ -64,6 +68,9 @@ __all__ = [
     "extract_response_text_or_raise",
     "generate_content_with_stream_fallback",
     "resolve_tool_calls_loop",
+    "is_vertexai_enabled",
+    "create_genai_client",
+    "build_cache_tools",
     # Multimodal re-exports
     "DEFAULT_MAX_REMOTE_IMAGE_BYTES",
     "DEFAULT_MAX_TRIAGE_IMAGES",
@@ -332,24 +339,124 @@ def _accumulate_usage(accumulated: dict[str, int], response: Any) -> None:
         accumulated[key] = accumulated.get(key, 0) + val
 
 
+def is_vertexai_enabled() -> bool:
+    """Determine whether Vertex AI / Enterprise mode is active via environment variables.
+
+    Mirrors google-genai SDK precedence where GOOGLE_GENAI_USE_ENTERPRISE takes priority
+    over GOOGLE_GENAI_USE_VERTEXAI.
+    """
+    env_enterprise = os.environ.get("GOOGLE_GENAI_USE_ENTERPRISE")
+    if env_enterprise is not None:
+        return env_enterprise.strip().lower() in ("true", "1")
+    env_vertexai = os.environ.get("GOOGLE_GENAI_USE_VERTEXAI")
+    if env_vertexai is not None:
+        return env_vertexai.strip().lower() in ("true", "1")
+    return False
+
+
+def create_genai_client(
+    *,
+    model_name: str,
+    timeout: int,
+    api_key: str | None = None,
+    project: str | None = None,
+    location: str = "global",
+    use_vertexai: bool | None = None,
+    client_cls: Any = None,
+) -> tuple[Any, bool]:
+    """Initialise a GenAI client with timeout floor and Developer API v1beta pinning.
+
+    google-genai >= 3.0.0 defaults the Gemini Developer API to v1, whereas explicit context
+    caching (cachedContents), preview/-latest aliases, and the Decisions API require v1beta;
+    Vertex AI / Enterprise endpoints keep their native v1beta1 default. Explicit ``vertexai=False``
+    prevents GOOGLE_GENAI_USE_ENTERPRISE from colliding with Developer API v1beta options.
+    """
+    effective_vertexai = is_vertexai_enabled() if use_vertexai is None else use_vertexai
+    timeout_ms = max(timeout, 300) * 1000
+    factory = client_cls or genai.Client
+
+    if effective_vertexai:
+        print(f"Initialising GenAI Client (Model: {model_name}) using Vertex AI authentication...", file=sys.stderr)
+        http_options = types.HttpOptions(timeout=timeout_ms)
+        client = factory(vertexai=True, project=project, location=location, http_options=http_options)
+    else:
+        print(
+            f"Initialising GenAI Client (Model: {model_name}) using Google AI Studio API Key authentication...",
+            file=sys.stderr,
+        )
+        http_options = types.HttpOptions(timeout=timeout_ms, api_version="v1beta")
+        client = factory(vertexai=False, api_key=api_key, http_options=http_options)
+
+    return client, effective_vertexai
+
+
+def build_cache_tools(tools: list[Any] | None, *, use_vertexai: bool = False) -> list[types.Tool] | None:
+    """Convert Python callables and Tool instances into explicit types.Tool declarations for caches.create."""
+    if not tools:
+        return None
+
+    api_option: Literal["ENTERPRISE", "GEMINI_API"] = "ENTERPRISE" if use_vertexai else "GEMINI_API"
+    parsed_tools: list[types.Tool] = []
+    function_declarations: list[types.FunctionDeclaration] = []
+
+    for tool in tools:
+        if isinstance(tool, types.Tool):
+            parsed_tools.append(tool)
+        elif callable(tool):
+            function_declarations.append(
+                types.FunctionDeclaration.from_callable_with_api_option(
+                    callable=tool,
+                    api_option=api_option,
+                    use_json_schema=True,
+                )
+            )
+
+    if function_declarations:
+        parsed_tools.append(types.Tool(function_declarations=function_declarations))
+
+    return parsed_tools or None
+
+
 def _is_connection_or_timeout_error(err: Exception) -> bool:
     """Return True if the exception represents a dropped connection, gateway reset, or read timeout."""
+    if isinstance(err, genai_errors.ClientError):
+        return False
     if isinstance(err, (ConnectionError, TimeoutError)):
         return True
-    err_str = f"{type(err).__name__} {err}".lower()
-    transient_markers = (
+
+    mro_names = " ".join(cls.__name__.lower() for cls in type(err).__mro__)
+    transport_class_markers = (
         "readerror",
-        "timeout",
-        "timed out",
-        "connection reset",
+        "writeerror",
+        "connecterror",
+        "networkerror",
+        "closeerror",
         "remoteprotocolerror",
         "serverdisconnected",
+        "transporterror",
+        "timeoutexception",
+        "readtimeout",
+        "connecttimeout",
+        "writetimeout",
+        "pooltimeout",
+    )
+    if any(marker in mro_names for marker in transport_class_markers):
+        return True
+
+    if isinstance(err, (ValueError, TypeError, KeyError, AttributeError)):
+        return False
+
+    msg = str(err).lower()
+    socket_message_markers = (
+        "timed out",
+        "connection reset",
         "incomplete chunked read",
         "errno 104",
         "connection aborted",
         "broken pipe",
+        "server disconnected",
     )
-    return any(marker in err_str for marker in transient_markers)
+    return any(marker in msg for marker in socket_message_markers)
 
 
 class _AggregatedStreamResponse:
