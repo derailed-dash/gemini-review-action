@@ -178,6 +178,5 @@ and flag them for clean-up.
 ## Input Data
 
 - **GitHub Repository**: !{echo $REPOSITORY}
-- **Pull Request Number**: !{echo $PULL_REQUEST_NUMBER}
 - **Additional User Instructions**: !{echo $ADDITIONAL_CONTEXT}
 """

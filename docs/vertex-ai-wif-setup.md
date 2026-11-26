@@ -7,7 +7,7 @@ This guide walks step-by-step through configuring keyless **Google Cloud Workloa
 ## Why Use Vertex AI with WIF Instead of `GEMINI_API_KEY`?
 
 1. **Keyless OIDC security**: GitHub Actions exchanges a short-lived OIDC token for temporary Google Cloud credentials — no long-lived API keys or JSON service-account keys stored in secrets.
-2. **80%–95% Durable Implicit Caching on Gemini 4 (`eu` / `us`)**: When `GOOGLE_CLOUD_LOCATION` is set to a multi-region endpoint such as **`eu`** or **`us`**, Vertex AI enables Durable Implicit Caching (up to 24h TTL) across successive pushes and concurrent PRs sharing the invariant `base_sha` prefix introduced in `v1.12.0` (billed at `0.05×` cached read rates, with a `10%` regional SKU uplift automatically reflected in PR telemetry).
+2. **~95% Durable Implicit Caching on Gemini 4 (`global` or `eu`/`us`)**: Both **`global`** (recommended — standard pricing with zero `+10%` regional surcharge) and multi-region **`eu` / `us`** (adds `+10%` regional SKU uplift for strict data residency) back Vertex AI Durable Implicit Caching (up to 24h TTL, `0.05×` cached read rate). Combined with `gemini-review-action`'s 3-turn `Content` boundary (`User(base_sha repo + baseline images) -> Model(ack) -> User(PR diff)`) and invariant `system_instruction`, successive commits, `/gemini-review` reruns, and parallel PRs reuse the baseline cache reliably. *(Explicit Gemini 4 Cache Control with configurable TTL is scheduled by Google for 12 January 2027 and planned for action integration.)*
 3. **Cloud Billing cost attribution**: `gemini-review-action` automatically attaches `component=gemini-review-action` and `repo=<owner_repo>` billing labels on Vertex AI calls, so multiple repositories can safely share one automation project while still separating costs in Cloud Billing.
 4. **ADC support for Developer Knowledge search**: When `GEMINI_API_KEY` is omitted, the action's Google Developer Knowledge search tools authenticate automatically via Application Default Credentials (ADC).
 
@@ -172,7 +172,7 @@ gh secret list --repo "${GITHUB_OWNER}/${GITHUB_REPO}"
 Note the critical requirements in both workflows:
 - `permissions` MUST include **`id-token: write`** so GitHub Actions can mint the OIDC JWT.
 - Pin both `actions/checkout` (`3d3c42e5aac5ba805825da76410c181273ba90b1` = `v7.0.1`) and `google-github-actions/auth` (`7c6bc770dae815cd3e89ee6cdf493a5fab2cc093` = `v3.0.0`) to full 40-character commit SHAs because the job holds `id-token: write` and write permissions against PRs/issues.
-- Pass `GOOGLE_GENAI_USE_VERTEXAI: 'True'`, `GOOGLE_CLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}`, and `GOOGLE_CLOUD_LOCATION: 'eu'` (or `'us'`) under `env:` on the `gemini-review-action` step, and omit `gemini_api_key`.
+- Pass `GOOGLE_GENAI_USE_VERTEXAI: 'True'`, `GOOGLE_CLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}`, and `GOOGLE_CLOUD_LOCATION: 'global'` (recommended — same 95% Durable Implicit Caching without the `+10%` regional surcharge; use `'eu'` or `'us'` when regional data residency is required, as single regions like `europe-west4` do not serve `gemini-4-hydrogen`) under `env:` on the `gemini-review-action` step, and omit `gemini_api_key`.
 
 ### PR Code Review (`.github/workflows/gemini-review.yml`)
 
@@ -225,7 +225,7 @@ jobs:
         env:
           GOOGLE_GENAI_USE_VERTEXAI: 'True'
           GOOGLE_CLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
-          GOOGLE_CLOUD_LOCATION: 'eu'
+          GOOGLE_CLOUD_LOCATION: 'global' # Or 'eu' / 'us' for regional data residency (+10% regional surcharge)
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gemini_model: 'gemini-4-hydrogen'
@@ -265,7 +265,7 @@ jobs:
         env:
           GOOGLE_GENAI_USE_VERTEXAI: 'True'
           GOOGLE_CLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
-          GOOGLE_CLOUD_LOCATION: 'eu'
+          GOOGLE_CLOUD_LOCATION: 'global' # Or 'eu' / 'us' for regional data residency (+10% regional surcharge)
         with:
           command: 'triage'
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -284,7 +284,7 @@ Once your WIF pool, OIDC provider, and service account exist in a single Google 
 
 - **Single GCP billing destination**: Every repository configured with that project's WIF secrets sends all Vertex AI token charges (and Developer Knowledge API quota) to that **one shared GCP project**, so you only manage one set of budgets, alerts, and FinOps killswitches.
 - **Per-repository cost breakdown via labels**: `gemini-review-action` automatically attaches `component=gemini-review-action` and `repo=<owner>_<repo>` Cloud Billing labels to every Vertex AI call. You can therefore split costs cleanly per repository in Cloud Billing exports or add custom `billing_labels` (e.g. `team=platform`).
-- **Isolated caches per repo**: Because each repository constructs its own distinct `base_sha` baseline context prefix, sharing one GCP project and WIF pool produces zero context or cache cross-talk — each repo independently benefits from `80%–96%` Vertex AI Durable Implicit Caching on `eu`/`us`.
+- **Isolated caches per repo**: Because each repository constructs its own distinct `base_sha` baseline context prefix, sharing one GCP project and WIF pool produces zero context or cache cross-talk — each repo independently benefits from `~95%` Vertex AI Durable Implicit Caching on `global` (or `eu`/`us`).
 
 ### Onboarding Additional Repositories under Option A (Owner-Wide)
 
@@ -319,9 +319,9 @@ On your first PR using Vertex AI WIF:
    - `Billing labels: {'component': 'gemini-review-action', 'repo': '<owner>_<repo>'}`
    - `Codebase context: running in Invariant Baseline Full Context Mode (...)`
 2. **PR review telemetry (`📊 Token Usage & Cost Efficiency`)**:
-   - Displays `| **Endpoint** | Vertex AI (eu, +10% regional) |`.
+   - Uses standard global pricing when `GOOGLE_CLOUD_LOCATION: 'global'` (or displays `| **Endpoint** | Vertex AI (eu, +10% regional) |` when a regional/multi-region endpoint like `eu` or `us` is selected).
    - On the **first run** for a `base_sha` prefix, `Input Tokens (cached)` seeds the cache (`0` or partial hits).
-   - On **subsequent commits or parallel PRs** against the same `main` `base_sha`, `Input Tokens (cached)` typically hits **80%–95%** (`⚡ XX.X% cached` billed at `0.05×` input price).
+   - On **subsequent commits, `/gemini-review` reruns, or parallel PRs** against the same `main` `base_sha`, `Input Tokens (cached)` typically hits **~95%** (`⚡ XX.X% cached` billed at `0.05×` input price).
 
 ---
 
@@ -333,4 +333,5 @@ On your first PR using Vertex AI WIF:
 | `Unable to generate an OIDC token` / `id-token` error | Missing OIDC permission on the workflow job | Add `id-token: write` to the job's `permissions:` block. |
 | `Error acquiring credentials` / `unauthorized_client` during WIF exchange | OIDC `--attribute-condition` or `roles/iam.workloadIdentityUser` `--member` mismatch | Verify `attribute.repository_owner` / `attribute.repository` matches your repo and wait ~60s for new IAM bindings to propagate. |
 | `PermissionDenied` calling Vertex AI | Missing `roles/aiplatform.user` or `aiplatform.googleapis.com` disabled | Re-run Step 1 and Step 3 (`roles/aiplatform.user`). |
-| `Input Tokens (cached)` stays `0` across commits on Gemini 4 | `GOOGLE_CLOUD_LOCATION` set to `'global'`, or `context_mode` mutated prefix | Set `GOOGLE_CLOUD_LOCATION: 'eu'` (or `'us'`) for Durable Implicit Caching and verify `Invariant Baseline Full Context Mode` appears in runner logs. |
+| `404 NOT_FOUND` on single-region location (e.g. `europe-west4`) | Gemini 4 models like `gemini-4-hydrogen` are only served on `global`, `us`, and `eu` | Set `GOOGLE_CLOUD_LOCATION: 'global'` (recommended) or `'eu'` / `'us'`. |
+| `Input Tokens (cached)` stays very low (`0%–5%`) across commits on Gemini 4 | Running an older action release (`< v1.12.2`) that packed baseline images + diff into a single turn, or `context_mode` mutated the prefix | Upgrade to `v1.12.2+` / `@v1` (uses the 3-turn `Content` boundary + clean `system_instruction`) and verify `Invariant Baseline Full Context Mode` appears in runner logs. |

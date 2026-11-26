@@ -9,8 +9,6 @@ import os
 import sys
 from typing import Any
 
-from google.genai import types
-
 from gemini_review.budget import (
     cap_file_content,
     cap_patch_content,
@@ -24,6 +22,7 @@ from gemini_review.config import (
     get_image_target_bytes,
     get_image_trigger_bytes,
     get_max_multimodal_images,
+    get_visual_diff_media_resolution,
 )
 from gemini_review.context import (
     build_codebase_context,
@@ -35,6 +34,7 @@ from gemini_review.diff import (
 )
 from gemini_review.github import get_file_blob
 from gemini_review.multimodal import (
+    build_media_part,
     get_mime_type,
     is_gemini_supported_mime,
     is_supported_image,
@@ -466,6 +466,7 @@ def build_visual_diff_parts(
     max_images = get_max_multimodal_images(cfg)
     trigger_bytes = get_image_trigger_bytes(cfg)
     target_bytes = get_image_target_bytes(cfg)
+    visual_diff_resolution = get_visual_diff_media_resolution(cfg)
 
     fn_get_git_blob = _get_pr_review_func("get_git_blob", get_git_blob)
     fn_get_file_blob = _get_pr_review_func("get_file_blob", get_file_blob)
@@ -503,50 +504,64 @@ def build_visual_diff_parts(
             if head_bytes is None and repository and headers:
                 head_bytes = fn_get_file_blob(repository, fname, head_sha, headers, timeout=timeout)
 
-        # 2. Retrieve base bytes (for modified or removed)
-        if status in ("modified", "removed"):
+        # 2. Retrieve base bytes (for modified, removed, or renamed)
+        base_fname = (img_info.get("previous_filename") or fname) if status == "renamed" else fname
+        if status in ("modified", "removed", "renamed"):
             if base_sha:
-                base_bytes = fn_get_git_blob(fname, base_sha)
+                base_bytes = fn_get_git_blob(base_fname, base_sha)
                 if base_bytes is None and repository and headers:
-                    base_bytes = fn_get_file_blob(repository, fname, base_sha, headers, timeout=timeout)
+                    base_bytes = fn_get_file_blob(repository, base_fname, base_sha, headers, timeout=timeout)
             if base_bytes is None:
                 for fallback_ref in ("main", "master", "HEAD~1"):
-                    base_bytes = fn_get_git_blob(fname, fallback_ref)
+                    base_bytes = fn_get_git_blob(base_fname, fallback_ref)
                     if base_bytes:
                         break
 
         # 3. Optimize bytes
         head_mime = get_mime_type(fname)
-        base_mime = get_mime_type(fname)
+        base_mime = get_mime_type(base_fname)
         if head_bytes:
             head_bytes, head_mime = optimize_image_bytes(head_bytes, fname, trigger_bytes, target_bytes)
             if not is_gemini_supported_mime(head_mime):
                 head_bytes = None
         if base_bytes:
-            base_bytes, base_mime = optimize_image_bytes(base_bytes, fname, trigger_bytes, target_bytes)
+            base_bytes, base_mime = optimize_image_bytes(base_bytes, base_fname, trigger_bytes, target_bytes)
             if not is_gemini_supported_mime(base_mime):
                 base_bytes = None
 
         # 4. Assemble visual diff parts
-        if status == "modified":
+        if status in ("modified", "renamed"):
+            heading = (
+                f"=== Visual Diff: Renamed Image '{base_fname}' -> '{fname}' ==="
+                if status == "renamed"
+                else f"=== Visual Diff: Modified Image '{fname}' ==="
+            )
+            summary_label = (
+                f"Renamed image: {base_fname} -> {fname}" if status == "renamed" else f"Modified image: {fname}"
+            )
             if base_bytes and head_bytes:
-                parts.append(f"=== Visual Diff: Modified Image '{fname}' ===")
-                parts.append(f"[Visual Diff] Base (prior) version of '{fname}':")
-                parts.append(types.Part.from_bytes(data=base_bytes, mime_type=base_mime))
+                parts.append(heading)
+                parts.append(f"[Visual Diff] Base (prior) version of '{base_fname}':")
+                parts.append(build_media_part(base_bytes, base_mime, media_resolution=visual_diff_resolution))
                 parts.append(f"[Visual Diff] Head (new) version of '{fname}':")
-                parts.append(types.Part.from_bytes(data=head_bytes, mime_type=head_mime))
-                summary_lines.append(f"- Modified image: {fname} (attached base and head visual comparison)")
+                parts.append(build_media_part(head_bytes, head_mime, media_resolution=visual_diff_resolution))
+                summary_lines.append(f"- {summary_label} (attached base and head visual comparison)")
                 processed_count += 1
             elif head_bytes:
-                parts.append(f"=== Visual Diff: Modified Image '{fname}' (base version unavailable) ===")
+                unavailable_heading = (
+                    f"=== Visual Diff: Renamed Image '{base_fname}' -> '{fname}' (base version unavailable) ==="
+                    if status == "renamed"
+                    else f"=== Visual Diff: Modified Image '{fname}' (base version unavailable) ==="
+                )
+                parts.append(unavailable_heading)
                 parts.append(f"[Visual Diff] Head (current) version of '{fname}':")
-                parts.append(types.Part.from_bytes(data=head_bytes, mime_type=head_mime))
-                summary_lines.append(f"- Modified image: {fname} (attached head version, base unavailable)")
+                parts.append(build_media_part(head_bytes, head_mime, media_resolution=visual_diff_resolution))
+                summary_lines.append(f"- {summary_label} (attached head version, base unavailable)")
                 processed_count += 1
         elif status == "added":
             if head_bytes:
                 parts.append(f"=== Visual Diff: Added Image '{fname}' ===\n[Visual Diff] Added new image '{fname}':")
-                parts.append(types.Part.from_bytes(data=head_bytes, mime_type=head_mime))
+                parts.append(build_media_part(head_bytes, head_mime, media_resolution=visual_diff_resolution))
                 summary_lines.append(f"- Newly added image: {fname} (attached new image)")
                 processed_count += 1
         elif status == "removed":
@@ -554,7 +569,7 @@ def build_visual_diff_parts(
                 parts.append(
                     f"=== Visual Diff: Removed Image '{fname}' ===\n[Visual Diff] Removed previous image '{fname}':"
                 )
-                parts.append(types.Part.from_bytes(data=base_bytes, mime_type=base_mime))
+                parts.append(build_media_part(base_bytes, base_mime, media_resolution=visual_diff_resolution))
                 summary_lines.append(f"- Removed image: {fname} (attached prior version)")
                 processed_count += 1
 

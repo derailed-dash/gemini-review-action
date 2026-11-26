@@ -126,6 +126,18 @@ inputs:
     description: 'Target byte size when downscaling large raster images (defaults to 307200 / 300 KB).'
     required: false
     default: '307200'
+  context_media_resolution:
+    description: "Gemini per-part media_resolution for background Markdown images and attached PDFs ('medium' [default, 560 tokens] or 'high' [1,120 tokens]; 'low' is disallowed)."
+    required: false
+    default: 'medium'
+  visual_diff_media_resolution:
+    description: "Gemini per-part media_resolution for active PR visual diff images ('high' [default, 1,120 tokens] or 'medium' [560 tokens]; 'low' is disallowed)."
+    required: false
+    default: 'high'
+  triage_media_resolution:
+    description: "Gemini per-part media_resolution for remote issue triage screenshots ('medium' [default, 560 tokens] or 'high' [1,120 tokens]; 'low' is disallowed)."
+    required: false
+    default: 'medium'
   context_mode:
     description: "Codebase context mode: 'auto' (default, Full under max_context_bytes else Sparse), 'full', 'sparse', or 'diff_only'."
     required: false
@@ -190,6 +202,9 @@ runs:
         GEMINI_MAX_TRIAGE_IMAGES: ${{ inputs.max_triage_images }}
         GEMINI_IMAGE_TRIGGER_BYTES: ${{ inputs.image_trigger_bytes }}
         GEMINI_IMAGE_TARGET_BYTES: ${{ inputs.image_target_bytes }}
+        GEMINI_CONTEXT_MEDIA_RESOLUTION: ${{ inputs.context_media_resolution }}
+        GEMINI_VISUAL_DIFF_MEDIA_RESOLUTION: ${{ inputs.visual_diff_media_resolution }}
+        GEMINI_TRIAGE_MEDIA_RESOLUTION: ${{ inputs.triage_media_resolution }}
         GEMINI_CONTEXT_MODE: ${{ inputs.context_mode }}
         GEMINI_MAX_CONTEXT_BYTES: ${{ inputs.max_context_bytes }}
         GEMINI_MAX_DIFF_FULL_FILE_BYTES: ${{ inputs.max_diff_full_file_bytes }}

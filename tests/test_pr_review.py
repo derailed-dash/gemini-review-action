@@ -987,9 +987,42 @@ def test_gemini_4_skips_explicit_context_caching(mocker, capsys, extra_env):
     assert "Skipping explicit context cache creation" in capsys.readouterr().err
 
 
+def _flatten_content_texts(sent_contents):
+    """Collect all text strings across str, list, or list[types.Content] payloads."""
+    if isinstance(sent_contents, str):
+        return sent_contents
+    texts = []
+    for item in sent_contents:
+        if isinstance(item, str):
+            texts.append(item)
+        elif isinstance(item, types.Content):
+            for part in item.parts or ():
+                if getattr(part, "text", None):
+                    texts.append(part.text)
+        elif getattr(item, "text", None):
+            texts.append(item.text)
+    return "\n".join(texts)
+
+
+def _extract_binary_parts(sent_contents):
+    """Collect all non-text types.Part instances (with inline_data/file_data) from request contents."""
+    parts = []
+    if isinstance(sent_contents, str):
+        return parts
+    for item in sent_contents:
+        if isinstance(item, types.Content):
+            for part in item.parts or ():
+                if getattr(part, "inline_data", None) is not None or getattr(part, "file_data", None) is not None:
+                    parts.append(part)
+        elif isinstance(item, types.Part):
+            if getattr(item, "inline_data", None) is not None or getattr(item, "file_data", None) is not None:
+                parts.append(item)
+    return parts
+
+
 def test_uncached_prompt_places_codebase_context_before_dynamic_diff(mocker):
-    """Uncached prompts place static codebase_context before dynamic PR diff for implicit prefix caching."""
-    from gemini_pr_review import main
+    """Uncached prompts isolate static codebase_context in Turn 0 ahead of dynamic PR diff in Turn 2."""
+    from gemini_pr_review import BASELINE_CONTEXT_ACK, main
 
     mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_MODEL": "gemini-4-hydrogen"}, clear_env=True)
     mocker.patch("gemini_review.build_codebase_context", return_value="STATIC_REPO_CONTEXT_MARKER")
@@ -997,15 +1030,21 @@ def test_uncached_prompt_places_codebase_context_before_dynamic_diff(mocker):
     main()
 
     sent_contents = mock_client.models.generate_content.call_args.kwargs["contents"]
-    assert isinstance(sent_contents, str)
-    assert "STATIC_REPO_CONTEXT_MARKER" in sent_contents
-    assert "large.py" in sent_contents
-    assert sent_contents.index("STATIC_REPO_CONTEXT_MARKER") < sent_contents.index("large.py")
+    assert isinstance(sent_contents, list)
+    assert len(sent_contents) == 3
+    assert sent_contents[0].role == "user"
+    assert sent_contents[1].role == "model"
+    assert sent_contents[1].parts[0].text == BASELINE_CONTEXT_ACK
+    assert sent_contents[2].role == "user"
+    assert "STATIC_REPO_CONTEXT_MARKER" in (sent_contents[0].parts[0].text or "")
+    turn2_text = sent_contents[2].parts[0].text or ""
+    assert "large.py" in turn2_text
+    assert "Pull Request Number" in turn2_text
 
 
 def test_uncached_multimodal_places_static_images_before_dynamic_diff(mocker):
-    """Uncached multimodal requests keep static codebase context and images ahead of the dynamic diff."""
-    from gemini_pr_review import main
+    """Uncached multimodal requests isolate static context + images in Turn 0 and dynamic diff in Turn 2."""
+    from gemini_pr_review import BASELINE_CONTEXT_ACK, main
 
     mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_MODEL": "gemini-4-hydrogen"}, clear_env=True)
     mocker.patch(
@@ -1033,17 +1072,24 @@ def test_uncached_multimodal_places_static_images_before_dynamic_diff(mocker):
 
     sent_contents = mock_client.models.generate_content.call_args.kwargs["contents"]
     assert isinstance(sent_contents, list)
-    assert sent_contents[0] == "STATIC_REPO_CONTEXT_MARKER"
-    static_label_idx = sent_contents.index("Static Image Label")
-    static_part_idx = sent_contents.index(static_part)
-    diff_text_indices = [i for i, item in enumerate(sent_contents) if isinstance(item, str) and "large.py" in item]
-    assert len(diff_text_indices) == 1
-    diff_text_idx = diff_text_indices[0]
-    assert "VISUAL_DIFF_SUMMARY" in sent_contents[diff_text_idx]
-    visual_label_idx = sent_contents.index("Visual Diff Label")
-    diff_part_idx = sent_contents.index(diff_part)
+    assert len(sent_contents) == 3
+    assert [c.role for c in sent_contents] == ["user", "model", "user"]
+    turn0_parts = sent_contents[0].parts
+    turn1_parts = sent_contents[1].parts
+    turn2_parts = sent_contents[2].parts
 
-    assert 0 < static_label_idx < static_part_idx < diff_text_idx < visual_label_idx < diff_part_idx
+    assert turn0_parts[0].text == "STATIC_REPO_CONTEXT_MARKER"
+    assert [p.text for p in turn0_parts if getattr(p, "text", None)] == [
+        "STATIC_REPO_CONTEXT_MARKER",
+        "Static Image Label",
+    ]
+    assert turn0_parts.index(static_part) == 2
+    assert turn1_parts[0].text == BASELINE_CONTEXT_ACK
+
+    assert "large.py" in (turn2_parts[0].text or "")
+    assert "VISUAL_DIFF_SUMMARY" in (turn2_parts[0].text or "")
+    assert turn2_parts[1].text == "Visual Diff Label"
+    assert turn2_parts[2] is diff_part
 
 
 def test_normalize_model_name():
@@ -2415,6 +2461,22 @@ def test_is_thinking_config_error_distinguishes_thinking_from_token_limit():
     )
     assert not is_thinking_config_error(RuntimeError("400 INVALID_ARGUMENT: API key not valid"))
     assert not is_thinking_config_error(RuntimeError("400 INVALID_ARGUMENT: Unable to process input image"))
+    assert not is_thinking_config_error(
+        RuntimeError("400 INVALID_ARGUMENT: Unknown name 'media_resolution' at 'contents[0].parts[1]'")
+    )
+    assert not is_thinking_config_error(RuntimeError("400 INVALID_ARGUMENT: Cannot find field: mediaResolution.level"))
+    assert not is_thinking_config_error(RuntimeError("400 INVALID_ARGUMENT: Unsupported media resolution"))
+
+    from gemini_review import is_media_resolution_error
+
+    assert is_media_resolution_error(RuntimeError("400 INVALID_ARGUMENT: Unknown name 'mediaResolution'"))
+    assert is_media_resolution_error(RuntimeError("400 INVALID_ARGUMENT: Request contains an invalid argument"))
+    assert not is_media_resolution_error(
+        RuntimeError("400 INVALID_ARGUMENT: The input token count exceeds the maximum number of tokens allowed")
+    )
+    assert not is_media_resolution_error(RuntimeError("400 INVALID_ARGUMENT: API key not valid"))
+    assert not is_media_resolution_error(RuntimeError("400 INVALID_ARGUMENT: Unable to process input image"))
+    assert not is_media_resolution_error(RuntimeError("400 INVALID_ARGUMENT: thinking_level is not supported"))
 
 
 def test_pr_review_does_not_retry_thinking_config_on_token_limit_400(mocker):
@@ -2484,6 +2546,220 @@ def test_matches_exclude_patterns_and_filter_excluded_diff_files():
     assert excluded == ["starter-examples/skills/a/SKILL.md", "generated/schema.json"]
 
 
+def test_pr_review_passes_visual_diff_files_to_build_codebase_context(mocker):
+    """main() forwards PR image_files filenames to build_codebase_context via visual_diff_files."""
+    from gemini_pr_review import main
+
+    _setup_dry_run_main(mocker, {"GEMINI_MODEL": "gemini-4-hydrogen", "GEMINI_PERSONA": "straight"}, clear_env=True)
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[
+            {"filename": "README.md", "status": "modified", "patch": "+![Dia](assets/dia.png)"},
+            {"filename": "assets/dia.png", "status": "modified"},
+        ],
+    )
+    mocker.patch("gemini_review.build_visual_diff_parts", return_value=("", []))
+    captured_kwargs: dict = {}
+
+    def _fake_ctx(files, config, client=None, model=None, context_telemetry=None, multimodal_parts=None, **kwargs):
+        captured_kwargs.update(kwargs)
+        return "ctx"
+
+    mocker.patch("gemini_review.build_codebase_context", side_effect=_fake_ctx)
+
+    main()
+
+    assert captured_kwargs.get("visual_diff_files") == ["assets/dia.png"]
+
+
+def test_pr_review_strips_media_resolution_before_text_only_fallback(mocker):
+    """On 400 INVALID_ARGUMENT, main() retries with media_resolution stripped while keeping images attached."""
+    from gemini_pr_review import main
+    from gemini_review.multimodal import build_media_part
+
+    mock_client, mock_response = _setup_dry_run_main(
+        mocker, {"GEMINI_MODEL": "gemini-4-hydrogen", "GEMINI_PERSONA": "straight"}, clear_env=True
+    )
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[
+            {"filename": "app.py", "status": "modified", "patch": "@@ -1 +1 @@\n-a\n+b"},
+            {"filename": "assets/ui.png", "status": "modified"},
+        ],
+    )
+
+    static_part = build_media_part(b"static-png", "image/png", media_resolution="medium")
+    diff_part = build_media_part(b"diff-png", "image/png", media_resolution="high")
+
+    def _fake_ctx(files, config, client=None, model=None, context_telemetry=None, multimodal_parts=None, **kwargs):
+        if multimodal_parts is not None:
+            multimodal_parts.extend(["Static Label", static_part])
+        return "STATIC_CTX"
+
+    mocker.patch("gemini_review.build_codebase_context", side_effect=_fake_ctx)
+    mocker.patch(
+        "gemini_review.build_visual_diff_parts",
+        return_value=("Summary", ["Diff Label", diff_part]),
+    )
+
+    # First call fails with 400 rejecting media_resolution; second call (stripped, images preserved) succeeds.
+    mock_client.models.generate_content.side_effect = [
+        RuntimeError("400 INVALID_ARGUMENT: Unknown name 'mediaResolution'"),
+        mock_response,
+    ]
+
+    main()
+
+    assert mock_client.models.generate_content.call_count == 2
+    retry_contents = mock_client.models.generate_content.call_args_list[1].kwargs["contents"]
+    retry_parts = _extract_binary_parts(retry_contents)
+    assert len(retry_parts) == 2
+    assert all(p.media_resolution is None for p in retry_parts)
+
+    # If the stripped multimodal retry ALSO fails with 400 INVALID_ARGUMENT, Stage 3 drops to text-only.
+    mock_client.models.generate_content.reset_mock()
+    mock_client.models.generate_content.side_effect = [
+        RuntimeError("400 INVALID_ARGUMENT: Unknown name 'mediaResolution'"),
+        RuntimeError("400 INVALID_ARGUMENT: Unable to process input image"),
+        mock_response,
+    ]
+
+    main()
+
+    assert mock_client.models.generate_content.call_count == 3
+    text_only_contents = mock_client.models.generate_content.call_args_list[2].kwargs["contents"]
+    assert _extract_binary_parts(text_only_contents) == []
+
+
+def test_context_caching_strips_media_resolution_before_text_only_cache(mocker):
+    """When caches.create rejects media_resolution with 400, retry cache creation with media_resolution stripped."""
+    from gemini_pr_review import main
+    from gemini_review.multimodal import build_media_part
+
+    mock_client, _ = _setup_dry_run_main(
+        mocker, {"GEMINI_MODEL": "gemini-3.8-flash", "GEMINI_PERSONA": "straight"}, clear_env=True
+    )
+    mock_client.caches.list.return_value = []
+
+    res_part = build_media_part(b"diagram", "image/png", media_resolution="medium")
+
+    def _fake_build_ctx(files, config, client=None, model=None, context_telemetry=None, multimodal_parts=None):
+        if multimodal_parts is not None:
+            multimodal_parts.append(res_part)
+        return "a" * 120000
+
+    mocker.patch("gemini_review.build_codebase_context", side_effect=_fake_build_ctx)
+
+    created_cache = mocker.Mock()
+    created_cache.name = "cachedContents/stripped-multimodal-cache"
+    mock_client.caches.create.side_effect = [
+        RuntimeError("400 INVALID_ARGUMENT: Unknown name 'mediaResolution'"),
+        created_cache,
+    ]
+
+    main()
+
+    assert mock_client.caches.create.call_count == 2
+    second_cache_contents = mock_client.caches.create.call_args_list[1].kwargs["config"].contents
+    assert isinstance(second_cache_contents, list)
+    assert len(second_cache_contents) == 2
+    assert isinstance(second_cache_contents[1], types.Part)
+    assert second_cache_contents[1].media_resolution is None
+    assert (
+        mock_client.models.generate_content.call_args.kwargs["config"].cached_content
+        == "cachedContents/stripped-multimodal-cache"
+    )
+
+
+def test_pr_review_cached_tail_strips_media_resolution_preserving_cache(mocker):
+    """When cached_content is active and tail_visual_parts triggers a media_resolution 400, preserve the cache."""
+    from gemini_pr_review import main
+    from gemini_review.multimodal import build_media_part
+
+    mock_client, mock_response = _setup_dry_run_main(
+        mocker, {"GEMINI_MODEL": "gemini-3.8-flash", "GEMINI_PERSONA": "straight"}, clear_env=True
+    )
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[
+            {"filename": "app.py", "status": "modified", "patch": "@@ -1 +1 @@\n-a\n+b"},
+            {"filename": "assets/ui.png", "status": "modified"},
+        ],
+    )
+    mock_client.caches.list.return_value = []
+    created_cache = mocker.Mock()
+    created_cache.name = "cachedContents/text-cache-keep-me"
+    mock_client.caches.create.return_value = created_cache
+    mocker.patch("gemini_review.build_codebase_context", return_value="a" * 120000)
+
+    diff_part = build_media_part(b"diff-png", "image/png", media_resolution="high")
+    mocker.patch("gemini_review.build_visual_diff_parts", return_value=("Summary", ["Diff Label", diff_part]))
+
+    mock_client.models.generate_content.side_effect = [
+        RuntimeError("400 INVALID_ARGUMENT: Unknown name 'mediaResolution'"),
+        mock_response,
+    ]
+
+    main()
+
+    assert mock_client.models.generate_content.call_count == 2
+    second_call = mock_client.models.generate_content.call_args_list[1].kwargs
+    assert second_call["config"].cached_content == "cachedContents/text-cache-keep-me"
+    retry_parts = [item for item in second_call["contents"] if isinstance(item, types.Part)]
+    assert len(retry_parts) == 1
+    assert retry_parts[0].media_resolution is None
+
+
+def test_pr_review_dual_media_resolution_and_thinking_rejection_and_token_limit_skip(mocker):
+    """Dual mediaResolution + thinking_level 400s keep images; token-limit 400 skips media_resolution stripping."""
+    from gemini_pr_review import main
+    from gemini_review.multimodal import build_media_part
+
+    mock_client, mock_response = _setup_dry_run_main(
+        mocker,
+        {"GEMINI_MODEL": "gemini-4-hydrogen", "GEMINI_THINKING_LEVEL": "low", "GEMINI_PERSONA": "straight"},
+        clear_env=True,
+    )
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[
+            {"filename": "app.py", "status": "modified", "patch": "@@ -1 +1 @@\n-a\n+b"},
+            {"filename": "assets/ui.png", "status": "modified"},
+        ],
+    )
+    mocker.patch("gemini_review.build_codebase_context", return_value="short ctx")
+    diff_part = build_media_part(b"diff-png", "image/png", media_resolution="medium")
+    mocker.patch("gemini_review.build_visual_diff_parts", return_value=("Summary", ["Diff Label", diff_part]))
+
+    # 1. Dual rejection: mediaResolution fails first, then thinking_level fails, 3rd call succeeds WITH image
+    mock_client.models.generate_content.side_effect = [
+        RuntimeError("400 INVALID_ARGUMENT: Unknown name 'mediaResolution'"),
+        RuntimeError("400 INVALID_ARGUMENT: thinking_level is not supported for this model"),
+        mock_response,
+    ]
+
+    main()
+
+    assert mock_client.models.generate_content.call_count == 3
+    third_call = mock_client.models.generate_content.call_args_list[2].kwargs
+    assert third_call["config"].thinking_config is None
+    third_binary_parts = _extract_binary_parts(third_call["contents"])
+    assert len(third_binary_parts) == 1
+    assert third_binary_parts[0].media_resolution is None
+
+    # 2. Token-limit 400 must NOT retry with media_resolution stripped (which would double medium -> high tokens)
+    mock_client.models.generate_content.reset_mock()
+    mock_client.models.generate_content.side_effect = [
+        RuntimeError("400 INVALID_ARGUMENT: The input token count exceeds the maximum number of tokens allowed"),
+        mock_response,
+    ]
+
+    main()
+
+    assert mock_client.models.generate_content.call_count == 2
+    assert _extract_binary_parts(mock_client.models.generate_content.call_args_list[1].kwargs["contents"]) == []
+
+
 def test_diff_exclude_patterns_filters_text_and_visual_diffs_and_exits_when_all_excluded(mocker):
     """Verify diff_exclude_patterns strips text/visual PR diffs before context assembly and exits 0 if empty."""
     from google import genai
@@ -2539,8 +2815,7 @@ def test_diff_exclude_patterns_filters_text_and_visual_diffs_and_exits_when_all_
     mock_visual_diff.assert_called_once()
     passed_visual_files = mock_visual_diff.call_args.args[0]
     assert [f["filename"] for f in passed_visual_files] == ["assets/keep.png"]
-    sent_prompt = mock_client.models.generate_content.call_args.kwargs["contents"]
-    assert isinstance(sent_prompt, str)
+    sent_prompt = _flatten_content_texts(mock_client.models.generate_content.call_args.kwargs["contents"])
     assert "+ | keep_app_line" in sent_prompt
     assert "diff_exclude_patterns (starter-examples/skills/foo/SKILL.md, assets/generated/shot.png)" in sent_prompt
     assert "EXCLUDED_SKILL_DIFF_LINE" not in sent_prompt
@@ -2606,3 +2881,96 @@ def test_build_prompt_forwards_excluded_files(mocker):
     assert "diff_exclude_patterns (starter-examples/skills/a/SKILL.md)" in prompt
     assert "BODY:src/helper.py" in prompt
     assert "EXCLUDED_BODY" not in prompt
+
+
+def test_assemble_direct_contents_uses_three_turn_boundary_for_prefix_caching():
+    """Verify static baseline context and dynamic diff stay isolated in separate Content turns."""
+    from gemini_pr_review import BASELINE_CONTEXT_ACK, _assemble_direct_contents
+
+    # 1. Text-only baseline must still use 3-turn [User(baseline), Model(ack), User(diff)] boundary
+    res_text = _assemble_direct_contents("STATIC_REPO", [], "DYNAMIC_DIFF", [])
+    assert isinstance(res_text, list)
+    assert [c.role for c in res_text] == ["user", "model", "user"]
+    assert [p.text for p in res_text[0].parts] == ["STATIC_REPO"]
+    assert [p.text for p in res_text[1].parts] == [BASELINE_CONTEXT_ACK]
+    assert [p.text for p in res_text[2].parts] == ["DYNAMIC_DIFF"]
+
+    # 2. Multimodal baseline isolates static images in Turn 0 and visual diff parts in Turn 2
+    img_static = types.Part.from_bytes(data=b"static", mime_type="image/png")
+    img_diff = types.Part.from_bytes(data=b"diff", mime_type="image/png")
+    res_mm = _assemble_direct_contents("STATIC_REPO", ["Static Label", img_static], "DYNAMIC_DIFF", [img_diff])
+    assert isinstance(res_mm, list)
+    assert [c.role for c in res_mm] == ["user", "model", "user"]
+    assert res_mm[0].parts[0].text == "STATIC_REPO"
+    assert res_mm[0].parts[1].text == "Static Label"
+    assert res_mm[0].parts[2] is img_static
+    assert res_mm[1].parts[0].text == BASELINE_CONTEXT_ACK
+    assert res_mm[2].parts[0].text == "DYNAMIC_DIFF"
+    assert res_mm[2].parts[1] is img_diff
+
+    # 3. Empty baseline (diff_only / budget fallback) collapses cleanly to string or flat visual list
+    assert _assemble_direct_contents("", [], "DYNAMIC_ONLY", []) == "DYNAMIC_ONLY"
+    flat_mm = _assemble_direct_contents("", [], "DYNAMIC_ONLY", [img_diff])
+    assert flat_mm == ["DYNAMIC_ONLY", img_diff]
+
+
+def test_default_system_instruction_excludes_pr_number_for_cross_pr_caching():
+    """Verify default gemini-review.toml system instruction stays byte-identical across PR numbers."""
+    from gemini_review.config import load_config
+    from gemini_review.prompts import load_system_instruction
+
+    cfg = load_config()
+    sys_86 = load_system_instruction("derailed-dash/gemini-review-action", 86, cfg)
+    sys_87 = load_system_instruction("derailed-dash/gemini-review-action", 87, cfg)
+
+    assert sys_86 == sys_87
+    assert "86" not in sys_86
+    assert "87" not in sys_87
+    assert "Pull Request Number" not in sys_86
+
+
+def test_main_skips_duplicate_workspace_rules_in_system_instruction_when_covered_by_baseline(
+    mocker, tmp_path, monkeypatch
+):
+    """Avoid injecting HEAD AGENTS.md into system_instruction when codebase_context already contains it."""
+    import json
+
+    from gemini_pr_review import main
+
+    (tmp_path / "AGENTS.md").write_text("UNIQUE_WORKSPACE_RULE_MARKER", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    # 1. Baseline includes AGENTS.md -> system_instruction omits duplicate Project Rules section
+    mock_client, _ = _setup_dry_run_main(mocker, {"GEMINI_PERSONA": "straight"}, clear_env=True)
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[{"filename": "src/a.py", "status": "modified", "patch": "+x"}],
+    )
+
+    def _ctx_with_agents(*args, context_telemetry=None, **kwargs):
+        if context_telemetry is not None:
+            context_telemetry["baseline_included_files"] = {"AGENTS.md", "src/a.py"}
+        return "=== Repository Context ===\n--- File: AGENTS.md ---\nUNIQUE_WORKSPACE_RULE_MARKER"
+
+    mocker.patch("gemini_review.build_codebase_context", side_effect=_ctx_with_agents)
+    main()
+
+    sys_covered = mock_client.models.generate_content.call_args.kwargs["config"].system_instruction
+    assert "Project Rules & Best Practices" not in sys_covered
+    assert "UNIQUE_WORKSPACE_RULE_MARKER" not in sys_covered
+
+    # 2. Diff-only mode (codebase_context empty, AGENTS.md not in PR diff) -> system_instruction includes rules fallback
+    mock_client_2, resp_2 = _setup_dry_run_main(
+        mocker, {"GEMINI_PERSONA": "straight", "GEMINI_CONTEXT_MODE": "diff_only"}, clear_env=True
+    )
+    resp_2.text = json.dumps({"summary": "OK", "general_feedback": [], "comments": []})
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[{"filename": "src/a.py", "status": "modified", "patch": "+x"}],
+    )
+    mocker.patch("gemini_review.build_codebase_context", return_value="")
+    main()
+
+    sys_uncovered = mock_client_2.models.generate_content.call_args.kwargs["config"].system_instruction
+    assert "Project Rules & Best Practices" in sys_uncovered
+    assert "UNIQUE_WORKSPACE_RULE_MARKER" in sys_uncovered

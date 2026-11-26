@@ -51,7 +51,7 @@ jobs:
         env:
           GOOGLE_GENAI_USE_VERTEXAI: 'True'
           GOOGLE_CLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
-          GOOGLE_CLOUD_LOCATION: 'eu'
+          GOOGLE_CLOUD_LOCATION: 'global' # 'global' supports Durable Implicit Caching without +10% regional surcharge; use 'eu'/'us' for regional data residency
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gemini_model: 'gemini-4-hydrogen'

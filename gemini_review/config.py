@@ -15,6 +15,10 @@ DEFAULT_MAX_CONTEXT_BYTES = 1500 * 1024
 VALID_CONTEXT_MODES = ("auto", "full", "sparse", "diff_only")
 VALID_ATTACH_MARKDOWN_IMAGES = ("all", "core", "diff", "none")
 VALID_SERVICE_TIERS = ("standard", "flex")
+VALID_MEDIA_RESOLUTIONS = ("medium", "high")
+DEFAULT_CONTEXT_MEDIA_RESOLUTION = "medium"
+DEFAULT_VISUAL_DIFF_MEDIA_RESOLUTION = "high"
+DEFAULT_TRIAGE_MEDIA_RESOLUTION = "medium"
 
 
 def get_default_model(explicit_model: str | None = None) -> str:
@@ -384,3 +388,36 @@ def get_service_tier_fallback(config: dict | None = None) -> bool:
         )
         return True
     return True
+
+
+def get_context_media_resolution(config: dict | None = None) -> str:
+    """Return media_resolution for background Markdown images and PDFs ('medium' or 'high'; default 'medium')."""
+    return _resolve_choice_setting(
+        "GEMINI_CONTEXT_MEDIA_RESOLUTION",
+        config,
+        "context_media_resolution",
+        VALID_MEDIA_RESOLUTIONS,
+        DEFAULT_CONTEXT_MEDIA_RESOLUTION,
+    )
+
+
+def get_visual_diff_media_resolution(config: dict | None = None) -> str:
+    """Return per-part media_resolution for active PR visual diff images ('medium' or 'high'; default 'high')."""
+    return _resolve_choice_setting(
+        "GEMINI_VISUAL_DIFF_MEDIA_RESOLUTION",
+        config,
+        "visual_diff_media_resolution",
+        VALID_MEDIA_RESOLUTIONS,
+        DEFAULT_VISUAL_DIFF_MEDIA_RESOLUTION,
+    )
+
+
+def get_triage_media_resolution(config: dict | None = None) -> str:
+    """Return per-part media_resolution for remote issue triage screenshots ('medium' or 'high'; default 'medium')."""
+    return _resolve_choice_setting(
+        "GEMINI_TRIAGE_MEDIA_RESOLUTION",
+        config,
+        "triage_media_resolution",
+        VALID_MEDIA_RESOLUTIONS,
+        DEFAULT_TRIAGE_MEDIA_RESOLUTION,
+    )

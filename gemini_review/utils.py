@@ -34,6 +34,7 @@ from gemini_review.multimodal import (
     GEMINI_SUPPORTED_PART_MIMES,
     SUPPORTED_IMAGE_EXTENSIONS,
     SUPPORTED_MULTIMODAL_EXTENSIONS,
+    build_media_part,
     build_triage_multimodal_parts,
     extract_markdown_image_references,
     extract_remote_image_urls,
@@ -44,6 +45,8 @@ from gemini_review.multimodal import (
     is_supported_multimodal_file,
     optimize_image_bytes,
     rasterize_svg_bytes,
+    resolve_part_media_resolution,
+    strip_media_resolution,
 )
 
 # Re-export repository and filesystem utilities
@@ -78,6 +81,7 @@ __all__ = [
     "create_genai_client",
     "build_cache_tools",
     "is_thinking_config_error",
+    "is_media_resolution_error",
     # Multimodal re-exports
     "DEFAULT_MAX_REMOTE_IMAGE_BYTES",
     "DEFAULT_MAX_TRIAGE_IMAGES",
@@ -93,6 +97,9 @@ __all__ = [
     "extract_markdown_image_references",
     "extract_remote_image_urls",
     "fetch_remote_image",
+    "resolve_part_media_resolution",
+    "build_media_part",
+    "strip_media_resolution",
     "build_triage_multimodal_parts",
     # Diff re-exports
     "format_file_content_with_line_numbers",
@@ -189,6 +196,46 @@ def load_workspace_rules() -> str:
     return "\n".join(rules_content) if rules_content else ""
 
 
+def _estimate_part_tokens(item: Any) -> int:
+    """Estimate offline tokens for a single prompt item (text, Content, dict, or multimodal Part)."""
+    if isinstance(item, str):
+        return len(item) // 4
+    if isinstance(item, types.Content):
+        return sum(_estimate_part_tokens(p) for p in (item.parts or ()))
+    if isinstance(item, dict):
+        text_dict = item.get("text")
+        if isinstance(text_dict, str) and "inline_data" not in item and "file_data" not in item:
+            return len(text_dict) // 4
+        media_res = item.get("media_resolution")
+    else:
+        text_val = getattr(item, "text", None)
+        if (
+            isinstance(text_val, str)
+            and getattr(item, "inline_data", None) is None
+            and getattr(item, "file_data", None) is None
+        ):
+            return len(text_val) // 4
+        media_res = getattr(item, "media_resolution", None)
+
+    level = (
+        (media_res.get("level") if isinstance(media_res, dict) else getattr(media_res, "level", media_res))
+        if media_res is not None
+        else None
+    )
+    if level is not None:
+        level_str = str(getattr(level, "value", level)).strip().upper()
+        if level_str.endswith("LOW"):
+            return 280
+        if level_str.endswith("MEDIUM"):
+            return 560
+        if level_str.endswith("ULTRA_HIGH"):
+            return 2240
+        if level_str.endswith("HIGH"):
+            return 1120
+    # Unspecified media_resolution defaults to high (1,120 tokens/image on Gemini 4/3)
+    return 1120
+
+
 def count_text_tokens(client, model_name: str, text: str | list | tuple) -> int:
     """Count or estimate the number of tokens in a text string or multimodal contents list."""
     if not text:
@@ -205,14 +252,9 @@ def count_text_tokens(client, model_name: str, text: str | list | tuple) -> int:
                 return total
         except Exception:
             pass
-    # Fallback heuristic (~4 chars per token for text, ~258 tokens per multimodal part)
+    # Fallback heuristic (~4 chars per token for text, resolution-aware 560/1120 tokens per multimodal part)
     if isinstance(text, (list, tuple)):
-        est = 0
-        for item in text:
-            if isinstance(item, str):
-                est += len(item) // 4
-            else:
-                est += 258
+        est = sum(_estimate_part_tokens(item) for item in text)
         return max(1, est)
     return max(1, len(text) // 4)
 
@@ -458,6 +500,9 @@ def is_thinking_config_error(err: Exception) -> bool:
         "resource_exhausted",
         "unsupported mime",
         "unable to process input image",
+        "media_resolution",
+        "mediaresolution",
+        "media resolution",
     )
     if any(marker in err_msg for marker in non_thinking_markers):
         return False
@@ -478,6 +523,30 @@ def is_thinking_config_error(err: Exception) -> bool:
         return any(hint in err_msg for hint in thinking_hints)
 
     return False
+
+
+def is_media_resolution_error(err: Exception) -> bool:
+    """Return True when a 400/INVALID_ARGUMENT error may indicate unsupported per-part media_resolution."""
+    err_msg = str(err).lower()
+    non_resolution_markers = (
+        "exceeds the maximum number of tokens",
+        "token count exceeds",
+        "maximum number of tokens",
+        "context length",
+        "api key",
+        "api_key",
+        "permission denied",
+        "quota",
+        "resource_exhausted",
+        "unsupported mime",
+        "unable to process input image",
+        "min_total_token_count",
+        "too small",
+        "thinking",
+    )
+    if any(marker in err_msg for marker in non_resolution_markers):
+        return False
+    return "400" in err_msg or "invalid_argument" in err_msg
 
 
 def _is_connection_or_timeout_error(err: Exception) -> bool:

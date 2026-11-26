@@ -33,8 +33,10 @@ from gemini_review import (
     get_default_model,
     get_service_tier,
     get_service_tier_fallback,
+    is_media_resolution_error,
     is_thinking_config_error,
     parse_excluded_authors,
+    strip_media_resolution,
 )
 
 DEFAULT_TIMEOUT = 60
@@ -281,6 +283,7 @@ def main():
     )
 
     print("Running issue triage classification...", file=sys.stderr)
+    response = None
     try:
         response = generate_content_with_stream_fallback(
             client,
@@ -290,9 +293,14 @@ def main():
             service_tier_fallback=service_tier_fallback,
         )
     except Exception as gen_err:
-        if triage_config.thinking_config is not None and is_thinking_config_error(gen_err):
+        last_err: Exception = gen_err
+
+        def _retry_without_thinking_config() -> bool:
+            nonlocal response, last_err
+            if response is not None or triage_config.thinking_config is None or not is_thinking_config_error(last_err):
+                return False
             print(
-                f"Warning: thinking_config not supported by model '{model_name}' ({gen_err}). "
+                f"Warning: thinking_config not supported by model '{model_name}' ({last_err}). "
                 "Retrying without thinking_config...",
                 file=sys.stderr,
             )
@@ -305,24 +313,51 @@ def main():
                     config=triage_config,
                     service_tier_fallback=service_tier_fallback,
                 )
-            except Exception as retry_err:
-                if multimodal_parts:
-                    print(
-                        f"Warning: Multimodal triage failed ({retry_err}). Falling back to text-only triage...",
-                        file=sys.stderr,
-                    )
+            except Exception as err_after_thinking:
+                last_err = err_after_thinking
+            return True
+
+        # Stage 1: Retry without thinking_config only when error indicates unsupported thinking config
+        _retry_without_thinking_config()
+
+        # Stage 2: Strip per-part media_resolution and retry with screenshots on 400 / INVALID_ARGUMENT
+        if response is None and multimodal_parts and is_media_resolution_error(last_err):
+            stripped_parts, had_res = strip_media_resolution(multimodal_parts)
+            if had_res:
+                print(
+                    f"Warning: Model rejected per-part media_resolution ({last_err}). "
+                    "Retrying multimodal triage without per-part media_resolution...",
+                    file=sys.stderr,
+                )
+                multimodal_parts = stripped_parts
+                triage_contents = [triage_prompt] + multimodal_parts
+                try:
                     response = generate_content_with_stream_fallback(
                         client,
                         model=model_name,
-                        contents=triage_prompt,
+                        contents=triage_contents,
                         config=triage_config,
                         service_tier_fallback=service_tier_fallback,
                     )
-                else:
-                    raise
-        elif multimodal_parts:
+                except Exception as err_after_strip:
+                    last_err = err_after_strip
+                    _retry_without_thinking_config()
+
+        # Stage 3: Fall back to text-only triage when multimodal parts fail (skip on auth/permission/quota errors)
+        err_msg = str(last_err).lower()
+        auth_or_quota_markers = (
+            "api key",
+            "api_key",
+            "permission denied",
+            "401",
+            "403",
+            "429",
+            "resource_exhausted",
+            "quota",
+        )
+        if response is None and multimodal_parts and not any(m in err_msg for m in auth_or_quota_markers):
             print(
-                f"Warning: Multimodal triage failed ({gen_err}). Falling back to text-only triage...",
+                f"Warning: Multimodal triage failed ({last_err}). Falling back to text-only triage...",
                 file=sys.stderr,
             )
             response = generate_content_with_stream_fallback(
@@ -332,8 +367,9 @@ def main():
                 config=triage_config,
                 service_tier_fallback=service_tier_fallback,
             )
-        else:
-            raise
+
+        if response is None:
+            raise last_err
 
     result_text = extract_response_text_or_raise(response)
     result_data = json.loads(result_text)

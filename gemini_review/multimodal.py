@@ -25,6 +25,7 @@ from gemini_review.config import (
     get_image_target_bytes,
     get_image_trigger_bytes,
     get_max_triage_images,
+    get_triage_media_resolution,
 )
 
 SUPPORTED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"}
@@ -57,6 +58,85 @@ _MIME_TO_EXTENSION = {
 def is_gemini_supported_mime(mime: str | None) -> bool:
     """Return True if the MIME type is directly supported by Gemini Part.from_bytes()."""
     return bool(mime and mime.lower() in GEMINI_SUPPORTED_PART_MIMES)
+
+
+def resolve_part_media_resolution(resolution: Any) -> Any:
+    """Map 'medium'/'high' resolution strings or PartMediaResolution objects to SDK enum values; reject 'low'."""
+    if resolution is None:
+        return None
+    raw = resolution.get("level") if isinstance(resolution, dict) else getattr(resolution, "level", resolution)
+    if raw is None:
+        return None
+    cleaned = str(getattr(raw, "value", raw)).strip().lower()
+    if not cleaned:
+        return None
+
+    level_enum = getattr(types, "PartMediaResolutionLevel", None)
+    if cleaned in ("medium", "media_resolution_medium"):
+        return getattr(level_enum, "MEDIA_RESOLUTION_MEDIUM", "MEDIA_RESOLUTION_MEDIUM")
+    if cleaned in ("high", "media_resolution_high"):
+        return getattr(level_enum, "MEDIA_RESOLUTION_HIGH", "MEDIA_RESOLUTION_HIGH")
+
+    print(
+        f"Warning: Ignoring unsupported media_resolution='{resolution}' (only 'medium' and 'high' are allowed).",
+        file=sys.stderr,
+    )
+    return None
+
+
+def build_media_part(
+    data: bytes,
+    mime_type: str,
+    media_resolution: Any = None,
+) -> types.Part:
+    """Construct a types.Part from bytes with optional per-part media_resolution ('medium' or 'high')."""
+    level = resolve_part_media_resolution(media_resolution)
+    if level is not None:
+        try:
+            return types.Part.from_bytes(data=data, mime_type=mime_type, media_resolution=level)
+        except TypeError:
+            pass
+    return types.Part.from_bytes(data=data, mime_type=mime_type)
+
+
+def strip_media_resolution(contents: Any) -> tuple[Any, bool]:
+    """Return a copy of contents with per-part media_resolution cleared and a flag indicating if any part changed."""
+    if isinstance(contents, types.Part):
+        if getattr(contents, "media_resolution", None) is None:
+            return contents, False
+        if hasattr(contents, "model_copy"):
+            return contents.model_copy(update={"media_resolution": None}), True
+        inline_data = getattr(contents, "inline_data", None)
+        if (
+            inline_data is not None
+            and getattr(inline_data, "data", None) is not None
+            and getattr(inline_data, "mime_type", None)
+        ):
+            return types.Part.from_bytes(data=inline_data.data, mime_type=inline_data.mime_type), True
+        return contents, False
+
+    if isinstance(contents, types.Content):
+        parts = list(getattr(contents, "parts", None) or ())
+        new_parts, changed = strip_media_resolution(parts)
+        if not changed:
+            return contents, False
+        if hasattr(contents, "model_copy"):
+            return contents.model_copy(update={"parts": new_parts}), True
+        return types.Content(role=getattr(contents, "role", None), parts=new_parts), True
+
+    if isinstance(contents, (list, tuple)):
+        new_items: list[Any] = []
+        any_changed = False
+        for item in contents:
+            stripped_item, item_changed = strip_media_resolution(item)
+            new_items.append(stripped_item)
+            if item_changed:
+                any_changed = True
+        if not any_changed:
+            return contents, False
+        return (tuple(new_items) if isinstance(contents, tuple) else new_items), True
+
+    return contents, False
 
 
 def rasterize_svg_bytes(data: bytes, filename: str = "") -> bytes | None:
@@ -554,6 +634,7 @@ def build_triage_multimodal_parts(
 
     trigger_bytes = get_image_trigger_bytes(config)
     target_bytes = get_image_target_bytes(config)
+    triage_resolution = get_triage_media_resolution(config)
     parts: list[Any] = []
 
     for url in urls:
@@ -597,10 +678,11 @@ def build_triage_multimodal_parts(
             )
             continue
 
-        part = types.Part.from_bytes(data=opt_bytes, mime_type=final_mime)
+        part = build_media_part(opt_bytes, final_mime, media_resolution=triage_resolution)
         parts.append(part)
         print(
-            f"Triage multimodal context: attached remote screenshot '{url}' ({len(opt_bytes):,} bytes, {final_mime}).",
+            f"Triage multimodal context: attached remote screenshot '{url}' "
+            f"({len(opt_bytes):,} bytes, {final_mime}, media_resolution={triage_resolution}).",
             file=sys.stderr,
         )
 

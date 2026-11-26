@@ -10,6 +10,7 @@ import inspect
 import json
 import os
 import sys
+from collections.abc import Sequence
 from typing import Any
 
 from google.genai import types
@@ -20,6 +21,7 @@ from gemini_review.config import (
     get_attach_markdown_images,
     get_context_diff_directories_only,
     get_context_exclude_patterns,
+    get_context_media_resolution,
     get_context_mode,
     get_default_model,
     get_extra_context_files,
@@ -30,8 +32,10 @@ from gemini_review.config import (
     get_max_multimodal_images,
 )
 from gemini_review.multimodal import (
+    build_media_part,
     extract_markdown_image_references,
     is_gemini_supported_mime,
+    is_supported_image,
     is_supported_multimodal_file,
     optimize_image_bytes,
 )
@@ -230,6 +234,7 @@ def build_codebase_context(
     excluded_files: list[str] | None = None,
     base_sha: str | None = None,
     dynamic_multimodal_parts: list[Any] | None = None,
+    visual_diff_files: Sequence[str | dict[str, Any]] | None = None,
     service_tier: str = "standard",
     service_tier_fallback: bool = True,
 ) -> str:
@@ -255,7 +260,26 @@ def build_codebase_context(
     max_images = get_max_multimodal_images(config)
     trigger_bytes = get_image_trigger_bytes(config)
     target_bytes = get_image_target_bytes(config)
+    context_media_resolution = get_context_media_resolution(config)
     seen_images: set[str] = set()
+    visual_diff_image_paths: set[str] = set()
+    for f in files:
+        fname = f.get("filename", "") if isinstance(f, dict) else str(f)
+        if fname and is_supported_image(fname):
+            visual_diff_image_paths.add(_normalise_relative_posix(fname))
+        if isinstance(f, dict):
+            prev = f.get("previous_filename", "")
+            if prev and is_supported_image(prev):
+                visual_diff_image_paths.add(_normalise_relative_posix(prev))
+    if visual_diff_files:
+        for vf in visual_diff_files:
+            vname = vf.get("filename", "") if isinstance(vf, dict) else str(vf)
+            if vname:
+                visual_diff_image_paths.add(_normalise_relative_posix(vname))
+            if isinstance(vf, dict):
+                prev = vf.get("previous_filename", "")
+                if prev and is_supported_image(prev):
+                    visual_diff_image_paths.add(_normalise_relative_posix(prev))
 
     def _attach_markdown_images(
         md_content: str,
@@ -271,7 +295,15 @@ def build_codebase_context(
             return
         refs = extract_markdown_image_references(md_content, md_path)
         for img_ref in refs:
-            if img_ref in seen_images or len(seen_images) >= max_images:
+            norm_img_ref = _normalise_relative_posix(img_ref)
+            if norm_img_ref in seen_images or len(seen_images) >= max_images:
+                continue
+            if norm_img_ref in visual_diff_image_paths:
+                print(
+                    f"Multimodal context: skipping image '{img_ref}' referenced in '{md_path}' "
+                    "(already covered by PR visual diff).",
+                    file=sys.stderr,
+                )
                 continue
             raw_bytes: bytes | None = None
             if git_ref:
@@ -298,13 +330,13 @@ def build_codebase_context(
                         file=sys.stderr,
                     )
                     continue
-                part = types.Part.from_bytes(data=opt_bytes, mime_type=mime)
+                part = build_media_part(opt_bytes, mime, media_resolution=context_media_resolution)
                 dest_parts.append(f"Visual Context (referenced in '{md_path}'): {img_ref}")
                 dest_parts.append(part)
-                seen_images.add(img_ref)
+                seen_images.add(norm_img_ref)
                 print(
                     f"Multimodal context: attached image '{img_ref}' referenced in '{md_path}' "
-                    f"({len(opt_bytes):,} bytes).",
+                    f"({len(opt_bytes):,} bytes, media_resolution={context_media_resolution}).",
                     file=sys.stderr,
                 )
             except Exception as e:
@@ -341,10 +373,17 @@ def build_codebase_context(
             if not os.path.exists(ef):
                 continue
             if is_supported_multimodal_file(ef):
+                norm_ef = _normalise_relative_posix(ef)
+                if norm_ef in visual_diff_image_paths:
+                    print(
+                        f"Multimodal context: skipping extra file '{ef}' (already covered by PR visual diff).",
+                        file=sys.stderr,
+                    )
+                    continue
                 prompt_parts.append(
                     f"--- Multimodal File: {ef} (binary content attached directly to Gemini request) ---"
                 )
-                if multimodal_parts is not None and len(seen_images) < max_images and ef not in seen_images:
+                if multimodal_parts is not None and len(seen_images) < max_images and norm_ef not in seen_images:
                     try:
                         with open(ef, "rb") as f_bin:
                             raw_bytes = f_bin.read()
@@ -359,10 +398,10 @@ def build_codebase_context(
                                     file=sys.stderr,
                                 )
                                 continue
-                            part = types.Part.from_bytes(data=opt_bytes, mime_type=mime)
+                            part = build_media_part(opt_bytes, mime, media_resolution=context_media_resolution)
                             multimodal_parts.append(f"Extra Context File: {ef}")
                             multimodal_parts.append(part)
-                            seen_images.add(ef)
+                            seen_images.add(norm_ef)
                     except Exception as e:
                         print(f"Warning: Failed to attach extra multimodal file '{ef}': {e}", file=sys.stderr)
                 continue
