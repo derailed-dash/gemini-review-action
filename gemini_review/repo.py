@@ -198,15 +198,181 @@ def get_local_git_files() -> list:
         return []
 
 
-def get_git_blob(file_path: str, ref: str = "HEAD") -> bytes | None:
+_SAFE_GIT_REF_RE = re.compile(r"^[A-Za-z0-9._/@^{}~-]+$")
+
+
+def _is_safe_git_ref(ref: str) -> bool:
+    """Validate a git ref string to prevent flag injection, whitespace, or traversal tricks."""
+    if not isinstance(ref, str) or not ref or ref.startswith("-") or ".." in ref:
+        return False
+    return bool(_SAFE_GIT_REF_RE.fullmatch(ref))
+
+
+def ensure_git_ref_available(ref: str, *, timeout: int = 30) -> bool:
+    """Verify `<ref>^{tree}` exists locally, performing a single-commit shallow fetch if missing."""
+    if not _is_safe_git_ref(ref):
+        return False
+
+    tree_ref = f"{ref}^{{tree}}"
+    try:
+        res = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", tree_ref],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        if res.returncode == 0:
+            return True
+    except Exception:
+        return False
+
+    try:
+        subprocess.run(
+            ["git", "fetch", "--no-tags", "--depth=1", "origin", ref],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        verify = subprocess.run(
+            ["git", "rev-parse", "--verify", "--quiet", tree_ref],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        return verify.returncode == 0
+    except Exception as exc:
+        print(f"Notice: Could not fetch baseline ref '{ref}' ({exc}).", file=sys.stderr)
+        return False
+
+
+def list_git_tree_files(ref: str, *, timeout: int = 30) -> list[tuple[str, int]]:
+    """List sorted `(posix_path, byte_size)` blob entries recorded at git ref `ref`."""
+    if not _is_safe_git_ref(ref):
+        return []
+    try:
+        res = subprocess.run(
+            ["git", "ls-tree", "-r", "-l", "-z", ref],
+            capture_output=True,
+            check=True,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        print(f"Notice: Failed to list git tree for '{ref}' ({exc}).", file=sys.stderr)
+        return []
+
+    entries: list[tuple[str, int]] = []
+    for record in res.stdout.split(b"\x00"):
+        if not record or b"\t" not in record:
+            continue
+        meta_bytes, path_bytes = record.split(b"\t", 1)
+        meta_parts = meta_bytes.decode("ascii", errors="replace").split()
+        if len(meta_parts) < 4 or meta_parts[1] != "blob":
+            continue
+        try:
+            size_bytes = int(meta_parts[3])
+        except ValueError:
+            continue
+        norm_path = _normalise_relative_posix(path_bytes.decode("utf-8", errors="replace"))
+        if norm_path:
+            entries.append((norm_path, size_bytes))
+
+    entries.sort(key=lambda item: item[0])
+    return entries
+
+
+def read_git_tree_texts(
+    ref: str,
+    paths: list[str],
+    *,
+    max_blob_bytes: int | None = None,
+    timeout: int = 30,
+) -> dict[str, str]:
+    """Batch-read UTF-8 text blobs at `ref` via one `git cat-file --batch` subprocess.
+
+    Reads exact binary byte offsets so multi-byte UTF-8 characters and CRLF sequences stay aligned,
+    and skips missing entries, non-blob objects, NUL-byte binaries, or blobs over `max_blob_bytes`.
+    """
+    if not _is_safe_git_ref(ref) or not paths:
+        return {}
+
+    normalised_paths = [_normalise_relative_posix(p) for p in paths]
+    normalised_paths = [p for p in normalised_paths if p and "\n" not in p and "\r" not in p and "\x00" not in p]
+    if not normalised_paths:
+        return {}
+
+    stdin_bytes = "".join(f"{ref}:{p}\n" for p in normalised_paths).encode("utf-8")
+    try:
+        proc = subprocess.run(
+            ["git", "cat-file", "--batch"],
+            input=stdin_bytes,
+            capture_output=True,
+            check=True,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        print(f"Notice: Failed to batch-read git blobs for '{ref}' ({exc}).", file=sys.stderr)
+        return {}
+
+    stdout = proc.stdout
+    idx = 0
+    total_len = len(stdout)
+    results: dict[str, str] = {}
+
+    for path in normalised_paths:
+        nl_idx = stdout.find(b"\n", idx)
+        if nl_idx == -1:
+            break
+        header = stdout[idx:nl_idx].decode("utf-8", errors="replace").strip()
+        idx = nl_idx + 1
+
+        if header.endswith(" missing") or header.endswith(" ambiguous"):
+            continue
+
+        parts = header.split()
+        if len(parts) < 3:
+            break
+        obj_type = parts[1]
+        try:
+            blob_size = int(parts[2])
+        except ValueError:
+            break
+
+        payload_end = idx + blob_size
+        if payload_end > total_len:
+            break
+        payload = stdout[idx:payload_end]
+        # `git cat-file --batch` emits a single LF after each object's payload.
+        idx = (
+            payload_end + 1
+            if payload_end < total_len and stdout[payload_end : payload_end + 1] == b"\n"
+            else payload_end
+        )
+
+        if obj_type != "blob":
+            continue
+        if max_blob_bytes is not None and blob_size > max_blob_bytes:
+            continue
+        if b"\x00" in payload[:8192]:
+            continue
+        results[path] = payload.decode("utf-8", errors="replace")
+
+    return results
+
+
+def get_git_blob(file_path: str, ref: str = "HEAD", *, timeout: int = 30) -> bytes | None:
     """Retrieve raw file content bytes from git for a given ref (e.g. branch, tag, or SHA)."""
-    norm_path = file_path.replace("\\", "/").removeprefix("./")
+    if not _is_safe_git_ref(ref):
+        return None
+    norm_path = _normalise_relative_posix(file_path)
+    if not norm_path:
+        return None
     try:
         result = subprocess.run(
             ["git", "show", f"{ref}:{norm_path}"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=True,
+            timeout=timeout,
         )
         return result.stdout
     except Exception:

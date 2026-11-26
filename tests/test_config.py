@@ -88,3 +88,59 @@ class TestConfigAndModelResolution:
             "/tmp/abs.md",
             "rel.md",
         ]
+
+    def test_get_attach_markdown_images_defaults_and_validation(self, monkeypatch, capsys):
+        """get_attach_markdown_images defaults to 'all', honours env/config, and validates choices."""
+        from gemini_review.config import get_attach_markdown_images
+
+        monkeypatch.delenv("GEMINI_ATTACH_MARKDOWN_IMAGES", raising=False)
+        assert get_attach_markdown_images() == "all"
+        assert get_attach_markdown_images({"attach_markdown_images": "CORE"}) == "core"
+
+        monkeypatch.setenv("GEMINI_ATTACH_MARKDOWN_IMAGES", "  DiFf ")
+        assert get_attach_markdown_images({"attach_markdown_images": "all"}) == "diff"
+
+        monkeypatch.setenv("GEMINI_ATTACH_MARKDOWN_IMAGES", "none")
+        assert get_attach_markdown_images() == "none"
+
+        monkeypatch.setenv("GEMINI_ATTACH_MARKDOWN_IMAGES", "bogus")
+        assert get_attach_markdown_images() == "all"
+        err = capsys.readouterr().err
+        assert "GEMINI_ATTACH_MARKDOWN_IMAGES" in err or "attach_markdown_images" in err
+
+    def test_get_context_mode_defaults_and_validation(self, monkeypatch, capsys):
+        """get_context_mode defaults to 'auto', honours env/config, and validates choices."""
+        from gemini_review.config import get_context_mode
+
+        monkeypatch.delenv("GEMINI_CONTEXT_MODE", raising=False)
+        assert get_context_mode() == "auto"
+        assert get_context_mode({"context_mode": "Sparse"}) == "sparse"
+
+        monkeypatch.setenv("GEMINI_CONTEXT_MODE", " DIFF_ONLY ")
+        assert get_context_mode({"context_mode": "full"}) == "diff_only"
+
+        monkeypatch.setenv("GEMINI_CONTEXT_MODE", "full")
+        assert get_context_mode() == "full"
+
+        monkeypatch.setenv("GEMINI_CONTEXT_MODE", "invalid_mode")
+        assert get_context_mode() == "auto"
+        err = capsys.readouterr().err
+        assert "invalid_mode" in err
+
+    def test_get_max_context_bytes_defaults_and_overrides(self, monkeypatch):
+        """get_max_context_bytes defaults to 1536000 and safely falls back on non-positive values."""
+        from gemini_review.config import DEFAULT_MAX_CONTEXT_BYTES, get_max_context_bytes
+
+        monkeypatch.delenv("GEMINI_MAX_CONTEXT_BYTES", raising=False)
+        assert DEFAULT_MAX_CONTEXT_BYTES == 1500 * 1024
+        assert get_max_context_bytes() == 1536000
+        assert get_max_context_bytes({"max_context_bytes": "512000"}) == 512000
+
+        monkeypatch.setenv("GEMINI_MAX_CONTEXT_BYTES", "2048000")
+        assert get_max_context_bytes({"max_context_bytes": 100}) == 2048000
+
+        monkeypatch.setenv("GEMINI_MAX_CONTEXT_BYTES", "0")
+        assert get_max_context_bytes() == DEFAULT_MAX_CONTEXT_BYTES
+
+        monkeypatch.setenv("GEMINI_MAX_CONTEXT_BYTES", "not-an-int")
+        assert get_max_context_bytes() == DEFAULT_MAX_CONTEXT_BYTES

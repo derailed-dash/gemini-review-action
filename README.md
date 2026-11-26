@@ -477,6 +477,10 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 | `custom_instructions` | Custom instructions or guardrails to extend the review prompt. Can be inline text or a file path in the repository (e.g. `.github/review-instruction-additions.md`). | No | `.github/review-instruction-additions.md` |
 | `skip_inline_suggestions` | Whether to skip automated re-reviews when a commit is created by accepting an inline suggestion via GitHub UI. | No | `'true'` |
 | `thinking_level` | Thinking level for reasoning models (`low`, `medium`, `high`, plus `xhigh` on `gemini-4-hydrogen` and `gemini-4-neon`; or `off`/integer token budget on Gemini 3/2.5). When omitted, the model's native default thinking behaviour applies. See [Reasoning & Thinking Budget Control](#reasoning--thinking-budget-control). | No | `''` |
+| `context_mode` | Codebase background context strategy: `'auto'` (default: Invariant Baseline / Full under `max_context_bytes`, else Sparse), `'full'` (force Full Context), `'sparse'` (force Sparse Context with file tree, core docs, and dynamic selection), or `'diff_only'` (skip repository background dump). | No | `'auto'` |
+| `max_context_bytes` | Total byte ceiling across repository text files before `'auto'` switches from Full Context Mode to Sparse Context Mode (default: 1.5 MB). | No | `'1536000'` |
+| `max_diff_full_file_bytes` | Aggregate UTF-8 byte ceiling across all `Full Current File Content` blocks attached in the diff prompt using water-fill truncation (diff patches themselves stay intact). Set to `'0'` to omit full-file copies and review diff patches only. | No | `'262144'` |
+| `attach_markdown_images` | Scope of local images extracted from Markdown files: `'all'` (default: all repository Markdown + diff docs), `'core'` (architecture/design/spec docs + `extra_context_files` + PR diff additions), `'diff'` (PR diff additions + `extra_context_files` only), or `'none'` (suppresses Markdown-linked images while keeping direct PR visual diffs). | No | `'all'` |
 | `max_candidate_files` | Maximum candidate non-core files to present to Dynamic Context Selection in Sparse Mode (default: 500). | No | `500` |
 | `extra_context_files` | Comma-separated list of repository file paths to attach as additional context, bypassing Dynamic Context Selection. | No | `''` |
 | `context_diff_directories_only` | Whether to restrict candidate context files in Sparse Mode strictly to directories containing modified files from the PR diff. | No | `'false'` |
@@ -513,20 +517,45 @@ Thinking token usage and its associated cost are tracked and reported separately
 
 ### Codebase Context Configuration
 
-By default, the action uses an intelligent hybrid context engine to feed relevant repository context to the model during review:
-*   **max_context_bytes** (Default: `1500000` / 1.5 MB): The total size of all other text files in the repository. At ~375,000 tokens, 1.5 MB safely fits within Gemini's 1M+ token window while leaving plenty of headroom for the PR diff/patch and structured reviews. If the repository is smaller than this limit, the action runs in *Full Context Mode* and includes all files. If the repository exceeds this limit, it switches to *Sparse Context Mode*.
-*   **max_core_context_bytes** (Default: `500000` / 500 KB): In *Sparse Context Mode*, limits the maximum cumulative size of static core documentation and manifest files attached to the prompt. Any core files beyond this budget are deferred to Dynamic Context Selection.
+By default, the action uses an intelligent hybrid context engine designed to balance full-repository understanding against prompt token cost:
+
+*   **`context_mode`** (Default: `'auto'`):
+    *   `'auto'`: Uses **Invariant Baseline Full Context Mode** when tracked repository text files fit within `max_context_bytes`, and switches to **Sparse Context Mode** otherwise.
+    *   `'full'`: Forces Full Context Mode regardless of `max_context_bytes` (still guarded by the model token-window backstop).
+    *   `'sparse'`: Forces Sparse Context Mode (file tree + core docs/manifests + Dynamic Context Selection) even on small repositories — ideal for cutting uncached input tokens on repeated reviews.
+    *   `'diff_only'`: Skips repository background context altogether and sends only the PR diff, comment history, and any explicit `extra_context_files`.
+*   **Invariant `base_sha` Baseline & Shallow Checkout Support**:
+    *   When running Full Context Mode on a PR with a known `base_sha`, the action automatically fetches `base_sha` on demand (`git fetch --no-tags --depth=1 origin <base_sha>`) if missing from a shallow `actions/checkout@v7` (`fetch-depth: 1`) clone — so consumer workflows do **not** need `fetch-depth: 0`.
+    *   It builds a sorted, deterministic snapshot of all repository text files at `base_sha` (excluding only `context_exclude_patterns`) as an **invariant prefix** shared across commits and concurrent PRs, then automatically omits duplicate `Full Current File Content` blocks in the diff tail for any modified file already included in that baseline snapshot.
+*   **`max_context_bytes`** (Default: `'1536000'` / 1.5 MB): The total size threshold of repository text files before `'auto'` switches from Full Context Mode to Sparse Context Mode. Configurable as a workflow input, `GEMINI_MAX_CONTEXT_BYTES` env var, or `gemini-review.toml`.
+*   **`max_diff_full_file_bytes`** (Default: `'262144'` / 256 KB): When modified files are not already covered by the `base_sha` baseline (e.g. Sparse Mode, `'diff_only'`, or files excluded from repo context), this bounds total `Full Current File Content` bytes across all PR files using water-fill capping so small changed files stay complete while large files shrink gracefully (and `'0'` omits full-file copies altogether). Diff patches themselves remain unaffected.
+*   **`attach_markdown_images`** (Default: `'all'`): Controls whether Markdown-referenced local images are attached across the full repository (`'all'`), restricted to architecture/design/spec docs plus `extra_context_files` and diff additions (`'core'`), scoped to PR diff additions and `extra_context_files` only (`'diff'`), or disabled (`'none'`). PR-added Markdown images are placed in the dynamic tail so they never mutate the static baseline prefix.
+*   **`max_core_context_bytes`** (Default: `500000` / 500 KB): In *Sparse Context Mode*, limits the maximum cumulative size of static core documentation and manifest files attached to the prompt. Any core files beyond this budget are deferred to Dynamic Context Selection.
 *   **Dynamic Context Selection**: In *Sparse Context Mode*, the action evaluates modified files/diffs against candidate non-core repository files to attach up to 8 of the most relevant sister modules, utilities, domain/algorithmic precedents, or tests.
     *   **Candidate Bounding**: To safeguard large monorepos against context selection token bloat or quota exhaustion, candidates are bounded to `max_candidate_files` (default 500) using proximity and import ranking heuristics. You can also restrict candidates strictly to directories touched by the PR diff with `context_diff_directories_only: 'true'`.
     *   **Built-in & Custom Exclusions**: Binary assets, package manager lockfiles (`pnpm-lock.yaml`, `yarn.lock`, `Cargo.lock`, `uv.lock`, `go.sum`, etc.), minified bundles (`.min.js`, `.min.css`), source maps (`.map`), and test snapshots are automatically excluded from codebase context. Both `context_exclude_patterns` (which excludes matching files across Full Context sizing/attachments, Sparse core files, and dynamic candidates) and `diff_exclude_patterns` (which excludes vendored, synced, or generated paths from PR diff and visual diff analysis before context assembly — e.g. `starter-examples/skills/**`) support recursive `**` globs.
     *   **Static Context Override**: If you know exactly which additional files Gemini needs, specify `extra_context_files` to attach them directly and bypass Dynamic Context Selection entirely.
 *   **core_file_patterns**: A list of glob patterns matching project manifests, build definitions, root documentation, templates, and shared utilities (e.g. `README*`, `CONTRIBUTING*`, `ARCHITECTURE*`, `DESIGN*`, `SPEC*`, `DEPLOYMENT*`, `INSTALL*`, `PRODUCT*`, `SDD*`, `TDD*`, `TODO*`, `GEMINI.md`, `*template*`, `*shared*`, `*util*`, `*common*`, `*core*`, `pyproject.toml`, `package.json`) that are prioritised in *Sparse Context Mode*.
 
+### Cost & Caching Optimisation (Gemini 4)
+
+Because the Google AI Studio (`GEMINI_API_KEY`) path requires zero Google Cloud setup and uses Gemini 4's best-effort global implicit caching (while Vertex AI multi-region endpoints such as `eu` and `us` provide 24-hour Durable Implicit Caching via `cacheConfig`), the action combines prompt-volume controls with prefix stability so both paths stay fast and inexpensive:
+
+* **Zero-Config AI Studio (`GEMINI_API_KEY`) Savings**: Out of the box, moving modified files into the unnumbered `base_sha` baseline and eliminating `Full Current File Content` line-number gutter inflation reduces uncached input tokens by **~15%–20%** in `context_mode: 'auto'` without losing any repository context. Opting into `context_mode: 'sparse'` (or `'diff_only'`) alongside `max_diff_full_file_bytes` cuts AI Studio uncached token costs by **~60%–85%** (while keeping patches, core documentation, and dynamically selected dependencies).
+* **Tighter Prompt Modes for High-Traffic Repos**:
+  ```yaml
+  with:
+    context_mode: 'sparse'             # File tree + core docs + dynamic selection only
+    max_diff_full_file_bytes: '65536'  # Or '0' to review patches + context without full modified copies
+    attach_markdown_images: 'core'     # Keep architecture/design diagrams, skip README screenshots
+  ```
+* **Vertex AI Durable Implicit Caching (Optional WIF/ADC)**: If your organisation authenticates via Google Cloud Workload Identity Federation (see [Alternative Authentication](#alternative-authentication)), setting `GOOGLE_CLOUD_LOCATION` to a multi-region endpoint (`eu` or `us`) rather than `global` leverages Vertex AI Durable Implicit Caching against the invariant `base_sha` prefix (typically delivering **80%–95% cached-input token hits** across commits and concurrent PRs at `0.05x` read rates, with a `10%` regional SKU uplift).
+
 You can configure these settings by adding the following keys to your custom `.github/commands/gemini-review.toml` configuration (or via `GEMINI_MAX_CONTEXT_BYTES` and `GEMINI_MAX_CORE_CONTEXT_BYTES`):
 
 ```toml
 # Codebase Context Configuration (Optional)
-max_context_bytes = 1500000  # Threshold in bytes to trigger Sparse Mode (default 1.5 MB)
+max_context_bytes = 1536000  # Threshold in bytes to trigger Sparse Mode (default 1.5 MB)
 max_core_context_bytes = 500000  # Max bytes for static core docs/manifests/utils in Sparse Mode (default 500 KB)
 core_file_patterns = [
   "README*", "CONTRIBUTING*", "ARCHITECTURE*", "DESIGN*", "SPEC*", "DEPLOYMENT*", "INSTALL*", "PRODUCT*", "SDD*", "TDD*", "TODO*", "GEMINI.md",

@@ -16,13 +16,16 @@ from google.genai import types
 from gemini_review.budget import cap_file_content, max_file_bytes, report_capped
 from gemini_review.config import (
     build_thinking_config,
+    get_attach_markdown_images,
     get_context_diff_directories_only,
     get_context_exclude_patterns,
+    get_context_mode,
     get_default_model,
     get_extra_context_files,
     get_image_target_bytes,
     get_image_trigger_bytes,
     get_max_candidate_files,
+    get_max_context_bytes,
     get_max_multimodal_images,
 )
 from gemini_review.multimodal import (
@@ -33,13 +36,17 @@ from gemini_review.multimodal import (
 )
 from gemini_review.repo import (
     _normalise_relative_posix,
+    ensure_git_ref_available,
     generate_file_tree,
     get_all_repo_files,
     get_file_content,
+    get_git_blob,
     is_core_file,
     is_text_file,
+    list_git_tree_files,
     matches_exclude_patterns,
     rank_and_bound_candidates,
+    read_git_tree_texts,
 )
 from gemini_review.schemas import DynamicContextSelection
 from gemini_review.utils import _get_pr_review_func, is_thinking_config_error
@@ -167,6 +174,37 @@ def select_dynamic_context_files(
         return [], "", {}
 
 
+def _extract_patch_added_lines(patch: str) -> str:
+    """Return only added (`+`) lines from a unified diff patch, stripping the leading `+` marker."""
+    if not patch:
+        return ""
+    added: list[str] = []
+    for line in patch.splitlines():
+        if line.startswith("+++") or not line.startswith("+"):
+            continue
+        added.append(line[1:])
+    return "\n".join(added)
+
+
+def _is_core_diagram_doc(md_path: str) -> bool:
+    """Return True if a Markdown path is an architecture, design, or specification document."""
+    norm = _normalise_relative_posix(md_path).lower()
+    base = os.path.basename(norm)
+    for pat in ("architecture*", "design*", "spec*", "docs/architecture*", "docs/design*", "docs/spec*"):
+        if fnmatch.fnmatch(norm, pat) or fnmatch.fnmatch(base, pat):
+            return True
+    return False
+
+
+def _should_attach_background_md_images(attach_mode: str, md_path: str) -> bool:
+    """Decide whether a background repository Markdown document may attach linked images."""
+    if attach_mode == "all":
+        return True
+    if attach_mode == "core":
+        return _is_core_diagram_doc(md_path)
+    return False
+
+
 def build_codebase_context(
     files: list,
     config: dict,
@@ -176,34 +214,64 @@ def build_codebase_context(
     multimodal_parts: list[Any] | None = None,
     *,
     excluded_files: list[str] | None = None,
+    base_sha: str | None = None,
+    dynamic_multimodal_parts: list[Any] | None = None,
 ) -> str:
-    """Build the repository codebase context (Full or Sparse mode) for Gemini code review."""
+    """Build the repository codebase context (Full baseline, Full, Sparse, or Diff-only) for PR review."""
     fn_get_all_repo_files = _get_pr_review_func("get_all_repo_files", get_all_repo_files)
     fn_get_file_content = _get_pr_review_func("get_file_content", get_file_content)
     fn_is_core_file = _get_pr_review_func("is_core_file", is_core_file)
     fn_generate_file_tree = _get_pr_review_func("generate_file_tree", generate_file_tree)
     fn_select_dynamic_context_files = _get_pr_review_func("select_dynamic_context_files", select_dynamic_context_files)
     fn_is_text_file = _get_pr_review_func("is_text_file", is_text_file)
+    fn_ensure_git_ref_available = _get_pr_review_func("ensure_git_ref_available", ensure_git_ref_available)
+    fn_list_git_tree_files = _get_pr_review_func("list_git_tree_files", list_git_tree_files)
+    fn_read_git_tree_texts = _get_pr_review_func("read_git_tree_texts", read_git_tree_texts)
+    fn_get_git_blob = _get_pr_review_func("get_git_blob", get_git_blob)
+
+    attach_mode = get_attach_markdown_images(config)
+    context_mode = get_context_mode(config)
+    max_context_bytes = get_max_context_bytes(config)
+    file_byte_limit = max_file_bytes(config)
+    context_exclude_patterns = get_context_exclude_patterns(config)
+    extra_files = get_extra_context_files(config)
 
     max_images = get_max_multimodal_images(config)
     trigger_bytes = get_image_trigger_bytes(config)
     target_bytes = get_image_target_bytes(config)
     seen_images: set[str] = set()
 
-    def _attach_markdown_images(md_content: str, md_path: str) -> None:
-        if multimodal_parts is None or len(seen_images) >= max_images:
+    def _attach_markdown_images(
+        md_content: str,
+        md_path: str,
+        *,
+        target_parts: list[Any] | None = None,
+        git_ref: str | None = None,
+    ) -> None:
+        if attach_mode == "none":
+            return
+        dest_parts = multimodal_parts if target_parts is None else target_parts
+        if dest_parts is None or len(seen_images) >= max_images:
             return
         refs = extract_markdown_image_references(md_content, md_path)
         for img_ref in refs:
             if img_ref in seen_images or len(seen_images) >= max_images:
                 continue
-            if not os.path.isfile(img_ref):
+            raw_bytes: bytes | None = None
+            if git_ref:
+                raw_bytes = fn_get_git_blob(img_ref, git_ref)
+            else:
+                if not os.path.isfile(img_ref):
+                    continue
+                try:
+                    with open(img_ref, "rb") as f_img:
+                        raw_bytes = f_img.read()
+                except Exception as e:
+                    print(f"Warning: Failed to attach image '{img_ref}' ({e}).", file=sys.stderr)
+                    continue
+            if not raw_bytes:
                 continue
             try:
-                with open(img_ref, "rb") as f_img:
-                    raw_bytes = f_img.read()
-                if not raw_bytes:
-                    continue
                 opt_bytes, mime = optimize_image_bytes(
                     raw_bytes, img_ref, trigger_bytes=trigger_bytes, target_bytes=target_bytes
                 )
@@ -215,8 +283,8 @@ def build_codebase_context(
                     )
                     continue
                 part = types.Part.from_bytes(data=opt_bytes, mime_type=mime)
-                multimodal_parts.append(f"Visual Context (referenced in '{md_path}'): {img_ref}")
-                multimodal_parts.append(part)
+                dest_parts.append(f"Visual Context (referenced in '{md_path}'): {img_ref}")
+                dest_parts.append(part)
                 seen_images.add(img_ref)
                 print(
                     f"Multimodal context: attached image '{img_ref}' referenced in '{md_path}' "
@@ -226,7 +294,25 @@ def build_codebase_context(
             except Exception as e:
                 print(f"Warning: Failed to attach image '{img_ref}' ({e}).", file=sys.stderr)
 
-    prompt_parts = []
+    def _scan_pr_diff_markdown_images() -> None:
+        if attach_mode == "none":
+            return
+        tail_parts = dynamic_multimodal_parts if dynamic_multimodal_parts is not None else multimodal_parts
+        for f in files:
+            fname = f.get("filename", "") if isinstance(f, dict) else str(f)
+            if not fname.lower().endswith((".md", ".markdown")):
+                continue
+            if attach_mode == "all":
+                md_content = fn_get_file_content(fname)
+                if md_content:
+                    _attach_markdown_images(md_content, fname, target_parts=tail_parts)
+            else:
+                patch = f.get("patch", "") if isinstance(f, dict) else ""
+                added_lines = _extract_patch_added_lines(patch)
+                if added_lines:
+                    _attach_markdown_images(added_lines, fname, target_parts=tail_parts)
+
+    prompt_parts: list[str] = []
     pr_filenames = {f["filename"] if isinstance(f, dict) else str(f) for f in files}
     skip_filenames = {_normalise_relative_posix(p) for p in pr_filenames}
     if excluded_files:
@@ -273,26 +359,81 @@ def build_codebase_context(
                 prompt_parts.append(f"--- File: {ef} ---")
                 prompt_parts.append(content)
                 prompt_parts.append("-----------------\n")
-                if ef.lower().endswith((".md", ".markdown")):
+                if attach_mode != "none" and ef.lower().endswith((".md", ".markdown")):
                     _attach_markdown_images(content, ef)
         report_capped(extra_capped, file_byte_limit)
 
-    # Also scan any markdown files in the PR diff for image references
-    for f in files:
-        fname = f.get("filename", "") if isinstance(f, dict) else str(f)
-        if fname.lower().endswith((".md", ".markdown")):
-            md_content = fn_get_file_content(fname)
-            if md_content:
-                _attach_markdown_images(md_content, fname)
+    if context_mode == "diff_only":
+        print("Codebase context: running in Diff-Only Mode (skipping repository background context).", file=sys.stderr)
+        if context_telemetry is not None and isinstance(context_telemetry, dict):
+            context_telemetry["context_mode"] = "diff_only"
+            context_telemetry["baseline_included"] = False
+        _scan_pr_diff_markdown_images()
+        if extra_files:
+            _attach_extra_files()
+        return "\n".join(prompt_parts)
 
-    max_context_bytes = config.get("max_context_bytes", 1500 * 1024)
-    if "GEMINI_MAX_CONTEXT_BYTES" in os.environ:
-        try:
-            max_context_bytes = int(os.environ["GEMINI_MAX_CONTEXT_BYTES"])
-        except ValueError:
-            pass
+    # Attempt invariant base_sha baseline Full Context Mode before working-tree enumeration so
+    # multiple PRs and successive commits share a byte-identical prefix.
+    can_try_baseline = (
+        bool(base_sha)
+        and context_mode in ("auto", "full")
+        and (fn_get_all_repo_files is get_all_repo_files or fn_list_git_tree_files is not list_git_tree_files)
+    )
+    if can_try_baseline and base_sha and fn_ensure_git_ref_available(base_sha):
+        tree_entries = fn_list_git_tree_files(base_sha)
+        baseline_entries = [
+            (path, size)
+            for path, size in tree_entries
+            if fn_is_text_file(path) and not matches_exclude_patterns(path, context_exclude_patterns)
+        ]
+        baseline_total_size = sum(size for _, size in baseline_entries)
+        if baseline_entries and (context_mode == "full" or baseline_total_size <= max_context_bytes):
+            print(
+                f"Codebase context: running in Invariant Baseline Full Context Mode "
+                f"({len(baseline_entries)} files, {baseline_total_size:,} bytes at base ref).",
+                file=sys.stderr,
+            )
+            baseline_texts = fn_read_git_tree_texts(base_sha, [p for p, _ in baseline_entries])
+            prompt_parts.append("=== Repository Context (Full Codebase Baseline) ===")
+            prompt_parts.append(
+                "Below are the tracked repository files at the pre-PR baseline commit for codebase context "
+                "(apply the Pull Request diffs in the section below to see the proposed changes):\n"
+            )
+            baseline_capped: list[str] = []
+            included_baseline_files: set[str] = set()
+            for path, _ in baseline_entries:
+                content = baseline_texts.get(path)
+                if not content:
+                    continue
+                content, was_capped = cap_file_content(content, path, file_byte_limit)
+                if was_capped:
+                    baseline_capped.append(path)
+                prompt_parts.append(f"--- File: {path} ---")
+                prompt_parts.append(content)
+                prompt_parts.append("-----------------\n")
+                included_baseline_files.add(_normalise_relative_posix(path))
+                if path.lower().endswith((".md", ".markdown")) and _should_attach_background_md_images(
+                    attach_mode, path
+                ):
+                    _attach_markdown_images(content, path, target_parts=multimodal_parts, git_ref=base_sha)
+            report_capped(baseline_capped, file_byte_limit)
+            prompt_parts.append("=========================================\n")
 
-    file_byte_limit = max_file_bytes(config)
+            if extra_files:
+                _attach_extra_files()
+            # Scan PR-diff Markdown additions AFTER the invariant prefix into the dynamic tail.
+            _scan_pr_diff_markdown_images()
+
+            if context_telemetry is not None and isinstance(context_telemetry, dict):
+                context_telemetry["context_mode"] = "full_baseline"
+                context_telemetry["baseline_included"] = True
+                context_telemetry["baseline_included_files"] = included_baseline_files
+            return "\n".join(prompt_parts)
+
+    # Working-tree fallback (when base_sha is absent/unavailable, sparse mode is chosen, or
+    # unit tests patch get_all_repo_files directly).
+    _scan_pr_diff_markdown_images()
 
     max_core_context_bytes = config.get("max_core_context_bytes", 500 * 1024)
     if "GEMINI_MAX_CORE_CONTEXT_BYTES" in os.environ:
@@ -351,7 +492,6 @@ def build_codebase_context(
     )
 
     all_files = fn_get_all_repo_files()
-    context_exclude_patterns = get_context_exclude_patterns(config)
     other_files = [
         f
         for f in all_files
@@ -359,7 +499,6 @@ def build_codebase_context(
         and fn_is_text_file(f)
         and not matches_exclude_patterns(f, context_exclude_patterns)
     ]
-    extra_files = get_extra_context_files(config)
 
     if not other_files and not extra_files:
         return ""
@@ -377,7 +516,11 @@ def build_codebase_context(
         file=sys.stderr,
     )
 
-    if total_size <= max_context_bytes:
+    use_full = context_mode == "full" or (context_mode == "auto" and total_size <= max_context_bytes)
+    if use_full:
+        if context_telemetry is not None and isinstance(context_telemetry, dict):
+            context_telemetry["context_mode"] = "full"
+            context_telemetry["baseline_included"] = False
         print("Codebase context: running in Full Context Mode (attaching all repository text files).", file=sys.stderr)
         prompt_parts.append("=== Repository Context (Full Codebase) ===")
         prompt_parts.append("Below are the contents of all other files in this repository for context:\n")
@@ -391,7 +534,7 @@ def build_codebase_context(
                 prompt_parts.append(f"--- File: {f} ---")
                 prompt_parts.append(content)
                 prompt_parts.append("-----------------\n")
-                if f.lower().endswith((".md", ".markdown")):
+                if f.lower().endswith((".md", ".markdown")) and _should_attach_background_md_images(attach_mode, f):
                     _attach_markdown_images(content, f)
         report_capped(full_capped, file_byte_limit)
         prompt_parts.append("=========================================\n")
@@ -400,6 +543,9 @@ def build_codebase_context(
         if extra_files:
             _attach_extra_files()
     else:
+        if context_telemetry is not None and isinstance(context_telemetry, dict):
+            context_telemetry["context_mode"] = "sparse"
+            context_telemetry["baseline_included"] = False
         print(
             "Codebase context: running in Sparse Context Mode (attaching file tree, core manifests,"
             " and dynamic context).",
@@ -462,7 +608,7 @@ def build_codebase_context(
                     prompt_parts.append("-----------------\n")
                     core_files_included.append(f)
                     core_bytes_used += f_size
-                    if f.lower().endswith((".md", ".markdown")):
+                    if f.lower().endswith((".md", ".markdown")) and _should_attach_background_md_images(attach_mode, f):
                         _attach_markdown_images(content, f)
             else:
                 print(
@@ -553,7 +699,9 @@ def build_codebase_context(
                             prompt_parts.append(f"--- File: {sf} ---")
                             prompt_parts.append(content)
                             prompt_parts.append("-----------------\n")
-                            if sf.lower().endswith((".md", ".markdown")):
+                            if sf.lower().endswith((".md", ".markdown")) and _should_attach_background_md_images(
+                                attach_mode, sf
+                            ):
                                 _attach_markdown_images(content, sf)
                     report_capped(dynamic_capped, file_byte_limit)
 

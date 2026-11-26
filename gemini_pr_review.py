@@ -9,6 +9,7 @@ and stdout, which are viewable in the GitHub Actions runner execution logs
 for the workflow run.
 """
 
+import inspect
 import json
 import os
 import sys
@@ -259,10 +260,23 @@ def main():
         return f"{prompt}\n\n{comment_history_str}" if comment_history_str else prompt
 
     excluded_kwargs: dict[str, Any] = {"excluded_files": excluded_diff_files} if excluded_diff_files else {}
-    pr_diff_prompt = gr.build_pr_diff_prompt(text_files, config, **excluded_kwargs)
-    dynamic_pr_prompt = _assemble_dynamic_prompt(pr_diff_prompt)
     context_telemetry: dict[str, Any] = {}
     codebase_multimodal_parts: list[Any] = []
+    dynamic_md_parts: list[Any] = []
+
+    ctx_kwargs: dict[str, Any] = dict(excluded_kwargs)
+    ctx_side_effect = getattr(gr.build_codebase_context, "side_effect", None)
+    ctx_target = ctx_side_effect if callable(ctx_side_effect) else gr.build_codebase_context
+    try:
+        ctx_params = inspect.signature(ctx_target).parameters
+    except (TypeError, ValueError):
+        ctx_params = {}
+    accepts_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in ctx_params.values())
+    if not is_dry_run and base_sha and (accepts_var_kw or "base_sha" in ctx_params):
+        ctx_kwargs["base_sha"] = base_sha
+    if accepts_var_kw or "dynamic_multimodal_parts" in ctx_params:
+        ctx_kwargs["dynamic_multimodal_parts"] = dynamic_md_parts
+
     codebase_context = gr.build_codebase_context(
         text_files,
         config,
@@ -270,13 +284,22 @@ def main():
         model=model_name,
         context_telemetry=context_telemetry,
         multimodal_parts=codebase_multimodal_parts,
-        **excluded_kwargs,
+        **ctx_kwargs,
     )
+
+    baseline_included_files: set[str] | None = context_telemetry.get("baseline_included_files") or None
+    diff_kwargs: dict[str, Any] = dict(excluded_kwargs)
+    if baseline_included_files:
+        diff_kwargs["baseline_included_files"] = baseline_included_files
+
+    pr_diff_prompt = gr.build_pr_diff_prompt(text_files, config, **diff_kwargs)
+    dynamic_pr_prompt = _assemble_dynamic_prompt(pr_diff_prompt)
+    tail_visual_parts = [*visual_diff_parts, *dynamic_md_parts]
 
     # Place static repository context (and its static visual attachments) first so uncached
     # requests keep an invariant prefix for Gemini 4 automatic implicit prefix caching.
     contents_to_send: Any = _assemble_direct_contents(
-        codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, visual_diff_parts
+        codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, tail_visual_parts
     )
 
     # Backstop. Per-file caps stop ONE huge file taking the review down; multi-stage escalation
@@ -291,12 +314,15 @@ def main():
         )
         codebase_context = ""
         codebase_multimodal_parts = []
+        if baseline_included_files:
+            pr_diff_prompt = gr.build_pr_diff_prompt(text_files, config, **excluded_kwargs)
+            dynamic_pr_prompt = _assemble_dynamic_prompt(pr_diff_prompt)
         contents_to_send = _assemble_direct_contents(
-            codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, visual_diff_parts
+            codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, tail_visual_parts
         )
         prompt_tokens = gr.count_text_tokens(client, model_name, contents_to_send)
 
-    if prompt_tokens > budget:
+    if prompt_tokens > budget and "--- Full Current File Content ---" in pr_diff_prompt:
         print(
             f"Context budget: prompt is {prompt_tokens:,} tokens against a budget of {budget:,}. "
             "Dropping Full Current File Content blocks and keeping diff patches only.",
@@ -305,7 +331,7 @@ def main():
         pr_diff_prompt = gr.build_pr_diff_prompt(text_files, config, include_full_content=False, **excluded_kwargs)
         dynamic_pr_prompt = _assemble_dynamic_prompt(pr_diff_prompt)
         contents_to_send = _assemble_direct_contents(
-            codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, visual_diff_parts
+            codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, tail_visual_parts
         )
         prompt_tokens = gr.count_text_tokens(client, model_name, contents_to_send)
 
@@ -333,7 +359,7 @@ def main():
             )
             dynamic_pr_prompt = _assemble_dynamic_prompt(pr_diff_prompt)
             contents_to_send = _assemble_direct_contents(
-                codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, visual_diff_parts
+                codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, tail_visual_parts
             )
             prompt_tokens = gr.count_text_tokens(client, model_name, contents_to_send)
 
@@ -401,7 +427,7 @@ def main():
                 if existing_cache:
                     cached_content_name = existing_cache.name
                     contents_to_send = (
-                        [dynamic_pr_prompt] + visual_diff_parts if visual_diff_parts else dynamic_pr_prompt
+                        [dynamic_pr_prompt] + tail_visual_parts if tail_visual_parts else dynamic_pr_prompt
                     )
                     active_display_name = getattr(existing_cache, "display_name", display_name)
                     print(
@@ -456,7 +482,7 @@ def main():
                             raise
                     cached_content_name = cache_obj.name
                     contents_to_send = (
-                        [dynamic_pr_prompt] + visual_diff_parts if visual_diff_parts else dynamic_pr_prompt
+                        [dynamic_pr_prompt] + tail_visual_parts if tail_visual_parts else dynamic_pr_prompt
                     )
                     print(f"Context cache active: {cached_content_name}", file=sys.stderr)
         except Exception as e:
@@ -466,7 +492,7 @@ def main():
             )
             cached_content_name = None
             contents_to_send = _assemble_direct_contents(
-                codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, visual_diff_parts
+                codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, tail_visual_parts
             )
 
     thinking_level = config.get("thinking_level") or os.environ.get("GEMINI_THINKING_LEVEL")
@@ -530,7 +556,7 @@ def main():
             )
             cached_content_name = None
             contents_to_send = _assemble_direct_contents(
-                codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, visual_diff_parts
+                codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, tail_visual_parts
             )
             gen_config = types.GenerateContentConfig(
                 system_instruction=system_instruction,
@@ -555,7 +581,7 @@ def main():
         err_msg = str(last_err).lower()
         if (
             response is None
-            and (codebase_multimodal_parts or visual_diff_parts)
+            and (codebase_multimodal_parts or tail_visual_parts)
             and ("400" in err_msg or "invalid_argument" in err_msg)
         ):
             print(
@@ -563,9 +589,9 @@ def main():
                 file=sys.stderr,
             )
             codebase_multimodal_parts = []
-            visual_diff_parts = []
+            tail_visual_parts = []
             contents_to_send = _assemble_direct_contents(
-                codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, visual_diff_parts
+                codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, tail_visual_parts
             )
             response = gr.generate_content_with_stream_fallback(
                 client,
@@ -578,7 +604,7 @@ def main():
             raise last_err
 
     direct_contents = _assemble_direct_contents(
-        codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, visual_diff_parts
+        codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, tail_visual_parts
     )
     response = gr.resolve_tool_calls_loop(
         client=client,

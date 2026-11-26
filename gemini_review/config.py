@@ -11,6 +11,9 @@ from google.genai import types
 
 DEFAULT_TIMEOUT = 60
 DEFAULT_MODEL = "gemini-4-hydrogen"
+DEFAULT_MAX_CONTEXT_BYTES = 1500 * 1024
+VALID_CONTEXT_MODES = ("auto", "full", "sparse", "diff_only")
+VALID_ATTACH_MARKDOWN_IMAGES = ("all", "core", "diff", "none")
 
 
 def get_default_model(explicit_model: str | None = None) -> str:
@@ -264,3 +267,80 @@ def get_image_target_bytes(config: dict | None = None) -> int:
             except ValueError:
                 pass
     return default_val
+
+
+def _resolve_choice_setting(
+    env_var: str,
+    config: dict | None,
+    config_key: str,
+    valid_choices: tuple[str, ...],
+    default: str,
+) -> str:
+    """Resolve a normalised string choice from env or config, warning and defaulting on invalid values."""
+    raw = os.environ.get(env_var)
+    source = env_var
+    if raw is None or not raw.strip():
+        cfg_val = config.get(config_key) if config else None
+        raw = str(cfg_val) if cfg_val is not None else ""
+        source = config_key
+
+    cleaned = raw.strip().lower()
+    if not cleaned:
+        return default
+    if cleaned in valid_choices:
+        return cleaned
+
+    print(
+        f"Warning: Invalid {source}='{raw.strip()}' (expected one of {', '.join(valid_choices)}). "
+        f"Defaulting to '{default}'.",
+        file=sys.stderr,
+    )
+    return default
+
+
+def get_attach_markdown_images(config: dict | None = None) -> str:
+    """Return Markdown image attachment scope ('all', 'core', 'diff', or 'none'; default 'all')."""
+    return _resolve_choice_setting(
+        "GEMINI_ATTACH_MARKDOWN_IMAGES",
+        config,
+        "attach_markdown_images",
+        VALID_ATTACH_MARKDOWN_IMAGES,
+        "all",
+    )
+
+
+def get_context_mode(config: dict | None = None) -> str:
+    """Return codebase context mode ('auto', 'full', 'sparse', or 'diff_only'; default 'auto')."""
+    return _resolve_choice_setting(
+        "GEMINI_CONTEXT_MODE",
+        config,
+        "context_mode",
+        VALID_CONTEXT_MODES,
+        "auto",
+    )
+
+
+def get_max_context_bytes(config: dict | None = None) -> int:
+    """Return positive repository context threshold in bytes (default 1536000 / 1.5 MB)."""
+    for source, raw in (
+        ("GEMINI_MAX_CONTEXT_BYTES", os.environ.get("GEMINI_MAX_CONTEXT_BYTES")),
+        ("max_context_bytes", config.get("max_context_bytes") if config else None),
+    ):
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            continue
+        try:
+            parsed = int(raw)
+        except (TypeError, ValueError):
+            print(
+                f"Warning: Invalid {source}='{raw}'. Defaulting to {DEFAULT_MAX_CONTEXT_BYTES}.",
+                file=sys.stderr,
+            )
+            return DEFAULT_MAX_CONTEXT_BYTES
+        if parsed <= 0:
+            print(
+                f"Warning: {source} must be positive (got {parsed}). Defaulting to {DEFAULT_MAX_CONTEXT_BYTES}.",
+                file=sys.stderr,
+            )
+            return DEFAULT_MAX_CONTEXT_BYTES
+        return parsed
+    return DEFAULT_MAX_CONTEXT_BYTES

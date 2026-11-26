@@ -103,6 +103,25 @@ class TestLimits:
         monkeypatch.setenv("GEMINI_MAX_FILE_BYTES", "not-a-number")
         assert max_file_bytes({}) == DEFAULT_MAX_FILE_BYTES
 
+    def test_max_diff_full_file_bytes_defaults_zero_and_fallback(self, monkeypatch, capsys):
+        """max_diff_full_file_bytes supports 0 (disabled), env/config overrides, and negative fallback."""
+        from gemini_review.budget import DEFAULT_MAX_DIFF_FULL_FILE_BYTES, max_diff_full_file_bytes
+
+        monkeypatch.delenv("GEMINI_MAX_DIFF_FULL_FILE_BYTES", raising=False)
+        assert DEFAULT_MAX_DIFF_FULL_FILE_BYTES == 256 * 1024
+        assert max_diff_full_file_bytes() == 262144
+        assert max_diff_full_file_bytes({"max_diff_full_file_bytes": 65536}) == 65536
+
+        monkeypatch.setenv("GEMINI_MAX_DIFF_FULL_FILE_BYTES", "0")
+        assert max_diff_full_file_bytes({"max_diff_full_file_bytes": 65536}) == 0
+
+        monkeypatch.setenv("GEMINI_MAX_DIFF_FULL_FILE_BYTES", "-10")
+        assert max_diff_full_file_bytes() == DEFAULT_MAX_DIFF_FULL_FILE_BYTES
+        assert "GEMINI_MAX_DIFF_FULL_FILE_BYTES" in capsys.readouterr().err
+
+        monkeypatch.setenv("GEMINI_MAX_DIFF_FULL_FILE_BYTES", "abc")
+        assert max_diff_full_file_bytes() == DEFAULT_MAX_DIFF_FULL_FILE_BYTES
+
 
 class TestDiffPromptIsBounded:
     """The regression test. Numbers are from doitbse/draft#538."""
@@ -210,6 +229,80 @@ class TestDiffPromptIsBounded:
         assert "14 changed file(s) were intentionally excluded" in large_prompt
         assert "s9/SKILL.md, and 4 more" in large_prompt
         assert "s10/SKILL.md" not in large_prompt
+
+    def test_baseline_included_files_skips_duplicate_full_content_while_keeping_excluded(self, tmp_path, monkeypatch):
+        """Files already in baseline_included_files omit Full Current File Content (including renames)."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "src").mkdir()
+        (tmp_path / "docs").mkdir()
+        (tmp_path / "src" / "app.py").write_text("APP_FULL_BODY\n", encoding="utf-8")
+        (tmp_path / "src" / "renamed_new.py").write_text("RENAMED_FULL_BODY\n", encoding="utf-8")
+        (tmp_path / "docs" / "excluded.md").write_text("EXCLUDED_FROM_BASELINE_BODY\n", encoding="utf-8")
+
+        files = [
+            {"filename": "src/app.py", "status": "modified", "patch": "@@ -1 +1 @@\n-old\n+new_app"},
+            {
+                "filename": "src/renamed_new.py",
+                "previous_filename": "src/renamed_old.py",
+                "status": "renamed",
+                "patch": "@@ -1 +1 @@\n-old\n+new_ren",
+            },
+            {"filename": "docs/excluded.md", "status": "modified", "patch": "@@ -1 +1 @@\n-old\n+new_doc"},
+        ]
+        prompt = build_pr_diff_prompt(
+            files,
+            baseline_included_files={"src/app.py", "src/renamed_old.py"},
+        )
+        assert "APP_FULL_BODY" not in prompt
+        assert "RENAMED_FULL_BODY" not in prompt
+        assert "EXCLUDED_FROM_BASELINE_BODY" in prompt
+        assert "Pre-PR baseline content is already included in Repository Context above." in prompt
+        assert "+ | new_app" in prompt
+        assert "+ | new_ren" in prompt
+
+    def test_max_diff_full_file_bytes_zero_disables_all_full_file_blocks(self, tmp_path, monkeypatch, capsys):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "app.py").write_text("FULL_SHOULD_NOT_APPEAR\n", encoding="utf-8")
+        files = [{"filename": "app.py", "status": "modified", "patch": "@@ -1 +1 @@\n-old\n+patch_stays"}]
+
+        prompt = build_pr_diff_prompt(files, {"max_diff_full_file_bytes": 0})
+        assert "+ | patch_stays" in prompt
+        assert "FULL_SHOULD_NOT_APPEAR" not in prompt
+        assert "--- Full Current File Content ---" not in prompt
+        assert "disabled" in capsys.readouterr().err.lower()
+
+    def test_max_diff_full_file_bytes_applies_waterfill_across_multiple_files(self, tmp_path, monkeypatch, capsys):
+        """Aggregate budget preserves small modified files intact and waterfill-caps oversized ones."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "small_a.py").write_text(("a\n" * 500), encoding="utf-8")
+        (tmp_path / "small_b.py").write_text(("b\n" * 500), encoding="utf-8")
+        (tmp_path / "huge.py").write_text(("c" * 99 + "\n") * 200, encoding="utf-8")  # ~20 KB
+
+        files = [
+            {"filename": "small_a.py", "status": "modified", "patch": "@@ -1 +1 @@\n+pa"},
+            {"filename": "small_b.py", "status": "modified", "patch": "@@ -1 +1 @@\n+pb"},
+            {"filename": "huge.py", "status": "modified", "patch": "@@ -1 +1 @@\n+ph"},
+        ]
+        prompt = build_pr_diff_prompt(files, {"max_diff_full_file_bytes": 5000})
+        assert "TRUNCATED by gemini-review: 'huge.py'" in prompt
+        assert "TRUNCATED by gemini-review: 'small_a.py'" not in prompt
+        assert "TRUNCATED by gemini-review: 'small_b.py'" not in prompt
+        assert "+ | ph" in prompt
+        assert "Diff full-file budget:" in capsys.readouterr().err
+
+    def test_single_pass_truncation_reports_true_original_size_under_both_limits(self, tmp_path, monkeypatch, capsys):
+        """When a file exceeds both max_file_bytes and max_diff_full_file_bytes, report true original size once."""
+        monkeypatch.chdir(tmp_path)
+        content = ("x" * 99 + "\n") * 100  # 10,000 bytes
+        (tmp_path / "large.py").write_text(content, encoding="utf-8")
+        files = [{"filename": "large.py", "status": "modified", "patch": "@@ -1 +1 @@\n+x"}]
+
+        prompt = build_pr_diff_prompt(files, {"max_file_bytes": 4000, "max_diff_full_file_bytes": 1500})
+        err = capsys.readouterr().err
+        assert "10,000 bytes, showing the first 1,500." in prompt
+        assert "4,000 bytes" not in prompt
+        assert "Context budget: truncated 1 file(s)" not in err
+        assert "Diff full-file budget:" in err
 
 
 class TestCapPatchAndWaterfill:

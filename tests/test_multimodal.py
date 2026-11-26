@@ -540,3 +540,144 @@ def test_build_triage_multimodal_parts_downscaling_and_cap(mocker, monkeypatch):
         assert hasattr(part, "inline_data")
         assert part.inline_data.mime_type == "image/png"
         assert len(part.inline_data.data) < len(large_bytes)
+
+
+def _minimal_png_bytes() -> bytes:
+    img = Image.new("RGB", (24, 24), color="blue")
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def test_attach_markdown_images_modes_and_prefix_tail_separation(tmp_path, monkeypatch):
+    import subprocess
+
+    from gemini_review.context import build_codebase_context
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    assets = repo / "assets"
+    assets.mkdir()
+    docs = repo / "docs"
+    docs.mkdir()
+
+    base_png = _minimal_png_bytes()
+    head_new_png = _minimal_png_bytes()
+    (assets / "banner.png").write_bytes(base_png)
+    (assets / "arch.png").write_bytes(base_png)
+    (assets / "new_pr_shot.png").write_bytes(head_new_png)
+    (repo / "README.md").write_text("# Readme\n![Banner](assets/banner.png)\n", encoding="utf-8")
+    (docs / "architecture.md").write_text("# Arch\n![Arch](../assets/arch.png)\n", encoding="utf-8")
+
+    for cmd in (
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "init", "-b", "main"],
+        ["git", "add", "."],
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "base"],
+    ):
+        subprocess.run(cmd, cwd=repo, check=True, capture_output=True)
+    base_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    # PR edits README.md to add new_pr_shot.png in diff, while existing banner stays untouched in base_sha
+    (repo / "README.md").write_text(
+        "# Readme\n![Banner](assets/banner.png)\n![New](assets/new_pr_shot.png)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(repo)
+    pr_files = [
+        {
+            "filename": "README.md",
+            "status": "modified",
+            "patch": "@@ -1,2 +1,3 @@\n # Readme\n ![Banner](assets/banner.png)\n+![New](assets/new_pr_shot.png)",
+        }
+    ]
+
+    # 1. 'all' (default): baseline docs/images go to static prefix, PR-added image goes to dynamic tail
+    static_all: list = []
+    dynamic_all: list = []
+    build_codebase_context(
+        files=pr_files,
+        config={"attach_markdown_images": "all"},
+        multimodal_parts=static_all,
+        base_sha=base_sha,
+        dynamic_multimodal_parts=dynamic_all,
+    )
+    static_labels_all = [p for p in static_all if isinstance(p, str)]
+    dynamic_labels_all = [p for p in dynamic_all if isinstance(p, str)]
+    assert any("banner.png" in lbl for lbl in static_labels_all)
+    assert any("arch.png" in lbl for lbl in static_labels_all)
+    assert not any("new_pr_shot.png" in lbl for lbl in static_labels_all)
+    assert any("new_pr_shot.png" in lbl for lbl in dynamic_labels_all)
+
+    # 2. 'core': attaches architecture diagram in prefix + PR diff '+' line in tail, skips untouched README banner
+    static_core: list = []
+    dynamic_core: list = []
+    build_codebase_context(
+        files=pr_files,
+        config={"attach_markdown_images": "core"},
+        multimodal_parts=static_core,
+        base_sha=base_sha,
+        dynamic_multimodal_parts=dynamic_core,
+    )
+    static_labels_core = [p for p in static_core if isinstance(p, str)]
+    dynamic_labels_core = [p for p in dynamic_core if isinstance(p, str)]
+    assert any("arch.png" in lbl for lbl in static_labels_core)
+    assert not any("banner.png" in lbl for lbl in static_labels_core)
+    assert any("new_pr_shot.png" in lbl for lbl in dynamic_labels_core)
+
+    # 3. 'diff': skips background/architecture diagrams in prefix, attaches only '+' line image from PR diff
+    static_diff: list = []
+    dynamic_diff: list = []
+    build_codebase_context(
+        files=pr_files,
+        config={"attach_markdown_images": "diff"},
+        multimodal_parts=static_diff,
+        base_sha=base_sha,
+        dynamic_multimodal_parts=dynamic_diff,
+    )
+    assert static_diff == []
+    assert any("new_pr_shot.png" in p for p in dynamic_diff if isinstance(p, str))
+    assert not any("banner.png" in p for p in dynamic_diff if isinstance(p, str))
+
+    # 4. 'none': suppresses all Markdown-linked images
+    static_none: list = []
+    dynamic_none: list = []
+    build_codebase_context(
+        files=pr_files,
+        config={"attach_markdown_images": "none"},
+        multimodal_parts=static_none,
+        base_sha=base_sha,
+        dynamic_multimodal_parts=dynamic_none,
+    )
+    assert static_none == []
+    assert dynamic_none == []
+
+    # 5. Prefix purity: if a baseline Markdown doc references an image that does not exist at base_sha
+    #    (e.g. PR creates it on disk), base_sha prefix scan MUST NOT fall back to reading working-tree disk.
+    (repo / "README.md").write_text("# Readme\n![Future](assets/future.png)\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "dangling ref"],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    dangling_base_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    (assets / "future.png").write_bytes(head_new_png)
+
+    static_pure: list = []
+    dynamic_pure: list = []
+    build_codebase_context(
+        files=[],
+        config={"attach_markdown_images": "all"},
+        multimodal_parts=static_pure,
+        base_sha=dangling_base_sha,
+        dynamic_multimodal_parts=dynamic_pure,
+    )
+    static_pure_labels = [p for p in static_pure if isinstance(p, str)]
+    assert not any("future.png" in lbl for lbl in static_pure_labels)
+    assert any("arch.png" in lbl for lbl in static_pure_labels)
+    assert dynamic_pure == []
