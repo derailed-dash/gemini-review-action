@@ -171,7 +171,7 @@ gh secret list --repo "${GITHUB_OWNER}/${GITHUB_REPO}"
 
 Note the critical requirements in both workflows:
 - `permissions` MUST include **`id-token: write`** so GitHub Actions can mint the OIDC JWT.
-- Pin `google-github-actions/auth` to a full 40-character commit SHA (`7c6bc770dae815cd3e89ee6cdf493a5fab2cc093` = `v3.0.0`) because the job holds write permissions against PRs/issues.
+- Pin both `actions/checkout` (`3d3c42e5aac5ba805825da76410c181273ba90b1` = `v7.0.1`) and `google-github-actions/auth` (`7c6bc770dae815cd3e89ee6cdf493a5fab2cc093` = `v3.0.0`) to full 40-character commit SHAs because the job holds `id-token: write` and write permissions against PRs/issues.
 - Pass `GOOGLE_GENAI_USE_VERTEXAI: 'True'`, `GOOGLE_CLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}`, and `GOOGLE_CLOUD_LOCATION: 'eu'` (or `'us'`) under `env:` on the `gemini-review-action` step, and omit `gemini_api_key`.
 
 ### PR Code Review (`.github/workflows/gemini-review.yml`)
@@ -210,7 +210,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', github.event.issue.number) }}
 
@@ -252,7 +252,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Authenticate to Google Cloud via WIF
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
