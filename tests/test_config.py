@@ -226,3 +226,29 @@ class TestConfigAndModelResolution:
             assert get_triage_media_resolution() == "medium"
             err = capsys.readouterr().err
             assert bad in err
+
+    def test_action_yml_media_resolution_defaults_match_config(self):
+        """Verify action.yml media_resolution input defaults stay aligned with gemini_review.config constants."""
+        import re
+        from pathlib import Path
+
+        from gemini_review.config import (
+            DEFAULT_CONTEXT_MEDIA_RESOLUTION,
+            DEFAULT_TRIAGE_MEDIA_RESOLUTION,
+            DEFAULT_VISUAL_DIFF_MEDIA_RESOLUTION,
+        )
+
+        action_yml = (Path(__file__).resolve().parent.parent / "action.yml").read_text(encoding="utf-8")
+        expected = {
+            "context_media_resolution": DEFAULT_CONTEXT_MEDIA_RESOLUTION,
+            "visual_diff_media_resolution": DEFAULT_VISUAL_DIFF_MEDIA_RESOLUTION,
+            "triage_media_resolution": DEFAULT_TRIAGE_MEDIA_RESOLUTION,
+        }
+        for key, default_val in expected.items():
+            match = re.search(
+                rf"^  {key}:\s*\n(?:    [^\n]+\n)*?    default:\s*['\"]?([^'\"\n]+)['\"]?\s*$",
+                action_yml,
+                re.MULTILINE,
+            )
+            assert match is not None, f"Missing default for {key} in action.yml"
+            assert match.group(1).strip() == default_val
