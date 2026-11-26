@@ -19,8 +19,9 @@ author: 'Dazbo (derailed-dash)'
 
 inputs:
   gemini_api_key:
-    description: 'API key for Gemini'
-    required: true
+    description: 'API key for Gemini (required for Google AI Studio; omit when authenticating via Vertex AI WIF/ADC)'
+    required: false
+    default: ''
   github_token:
     description: 'GitHub token (defaults to secrets.GITHUB_TOKEN)'
     required: true
