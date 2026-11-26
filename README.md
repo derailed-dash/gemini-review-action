@@ -67,8 +67,8 @@ See the supporting blog post about this action [here](https://medium.com/google-
 - **Reviewer Personas**: Customise the personality, tone, and review style of the agent with pre-built persona overlays (`straight`, `dazbo`, `palpatine`, `rick`).
 - **Google Developer Knowledge Integration**: Automatically queries official Google developer documentation (Google Cloud, Firebase, Android, etc.) via MCP to cross-reference your changes against up-to-date best practices.
 - **On-Demand Agent Skills**: Dynamically discovers and loads project-specific formatting guidelines and coding standards from `.agents/skills` on-demand, keeping prompt contexts lightweight and relevant (bundled with defaults for Google Cloud, Gemini APIs and agentic development).
-- **Gemini Context Caching**: Automatic integration with Gemini's caching tiers — **95% cost reduction** via automatic implicit prefix caching on Gemini 4 (`gemini-4-*`, ordering static repository context first with zero cache-management overhead), and stateless explicit `CachedContent` (**90% discount**) on Gemini 3 models for repositories over 32k tokens.
-- **Multi-Turn & Cross-PR Cache Reuse**: Keeps `[system_instruction + tools + codebase_context]` as an invariant prefix for Gemini 4 implicit caching, and reuses active server-side explicit cache handles across multi-turn tool/skill calls and successive PR pushes on Gemini 3 within the TTL window (1h default), eliminating redundant prompt re-billing between commits.
+- **Gemini Context Caching**: Integrates with Gemini's caching tiers — **95% cost reduction** (`0.05x` cached read rate) via Gemini 4 (`gemini-4-*`) **Durable Implicit Caching** (requires **Vertex AI on `eu` or `us` via WIF/ADC**; Google AI Studio `GEMINI_API_KEY` and Vertex `global` offer best-effort ephemeral caching only and rely on prompt-volume controls), plus stateless explicit `CachedContent` (**90% discount**) on Gemini 3 (`gemini-3.*`) models for repositories over 32k tokens on **both** AI Studio and Vertex AI.
+- **Multi-Turn & Cross-PR Cache Reuse**: Keeps `[system_instruction + tools + codebase_context]` as an invariant `base_sha` prefix so Vertex AI (`eu`/`us`) Gemini 4 runs achieve up to 24-hour cross-run cache reuse, while Gemini 3 runs reuse active server-side explicit cache handles across multi-turn tool/skill calls and successive PR pushes within the TTL window (1h default).
 
 ![Leveraing MCP and Skills](/assets/agent_intelligence_diagram.png)
 
@@ -87,8 +87,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
    - **Full Context Mode**: If the codebase is under the configured size threshold (default: 1.5 MB), the full contents of all other text files are included.
    - **Sparse Context Mode**: If the codebase exceeds the threshold, it includes a structured text-based file tree of the entire project, plus the full contents of key configuration and documentation files (like `*.md`, `pyproject.toml`, `package.json`, `go.mod`, etc.).
 3. **Gemini Context Caching & Multi-Turn Reuse**:
-   - **Gemini 4 (`gemini-4-*`, default)**: Skips explicit `CachedContent` provisioning (which Gemini 4 does not use) and places the static `codebase_context` *before* the dynamic PR diff/comment history. This preserves an invariant prefix across PR pushes and multi-turn tool calls, automatically receiving Gemini 4's **95% implicit cache discount** (on prompts ≥ 4,096 tokens) with zero management or storage overhead.
-   - **Gemini 3 (`gemini-3.*`)**: For repository contexts exceeding ~32,768 tokens (100,000+ characters), the action checks for an active server-side explicit cache (`repo-cache-{repo}-{model}-{persona}-{fingerprint}`, where the fingerprint hashes the system instruction and the cached context, so only an identical context is reused) via `client.caches.list()`. Billed input tokens receive a **90% discount**, and subsequent multi-turn tool/skill calls reference the cached handle without re-billing the codebase context.
+   - **Gemini 4 (`gemini-4-*`, default)**: Skips explicit `CachedContent` provisioning (which Gemini 4 does not use) and places the static `codebase_context` *before* the dynamic PR diff/comment history. When authenticating via **Vertex AI on a multi-region endpoint (`eu` or `us`) with WIF/ADC**, this invariant `base_sha` prefix unlocks 24-hour **Durable Implicit Caching** (**95% cached-input discount** on prompts ≥ 4,096 tokens) across PR pushes and multi-turn tool calls. Google AI Studio (`GEMINI_API_KEY`) and Vertex AI `global` only offer best-effort ephemeral caching (typically `0%` cached on sporadic CI runs), relying instead on prompt-volume controls (`base_sha` deduplication, `context_mode`, `max_diff_full_file_bytes`, or opt-in `service_tier: 'flex'`).
+   - **Gemini 3 (`gemini-3.*`)**: Works on **both** Google AI Studio and Vertex AI. For repository contexts exceeding ~32,768 tokens (100,000+ characters), the action checks for an active server-side explicit cache (`repo-cache-{repo}-{model}-{persona}-{fingerprint}`, where the fingerprint hashes the system instruction and the cached context, so only an identical context is reused) via `client.caches.list()`. Billed input tokens receive a **90% discount**, and subsequent multi-turn tool/skill calls reference the cached handle without re-billing the codebase context.
 4. **Structured Review Generation**: The action sends the diff and file contexts to Gemini. It uses Gemini's native **Structured Outputs** (`response_schema`) to force the model to respond in a strict JSON format.
 5. **Interactive suggestions**: Change recommendations are wrapped in native GitHub ` ```suggestion ` blocks, allowing reviewers to apply the changes directly on the PR with one click.
 6. **Resilient Comment Posting**: The review is posted atomically via the GitHub Pull Request Review API. If the API call fails (e.g. if the model hallucinates an invalid line number in the diff), the script catches the error and falls back to posting comments individually, ensuring your CI status check stays green while still delivering all valid feedback.
@@ -119,9 +119,7 @@ Add this variable to your repo:
 > [!NOTE]
 > The `secrets.GITHUB_TOKEN` is automatically created and populated by GitHub for every workflow run. You do not need to add it to your repository secrets manually. You only need to ensure the correct `permissions` are defined in the workflow file, as shown in the examples.
 
-If you prefer to authenticate using a combination of **Google Cloud Workload Identity Federation (WIF)** and **Application Default Credentials (ADC)** with Gemini Enterprise Agent Platform (formerly known as Vertex AI), you can omit `gemini_api_key`. This allows the action to authenticate securely with Google Cloud without storing a long-lived service account key JSON file in your repository.
-
-Alternatively, we can use WIF and ADC to authenticate. In this approach, we do not use persistent Gemini API key. This will be shown later.
+If you prefer keyless authentication using **Google Cloud Workload Identity Federation (WIF)** and **Application Default Credentials (ADC)** on Vertex AI, you can omit `gemini_api_key`. Configuring WIF with `GOOGLE_CLOUD_LOCATION` set to `'eu'` or `'us'` eliminates long-lived API keys or service-account JSON secrets, attaches Cloud Billing `billing_labels`, and unlocks Gemini 4's 24-hour Durable Implicit Caching (`80%–95%` hits across runs) — see the [Vertex AI WIF Setup Guide](docs/vertex-ai-wif-setup.md).
 
 ### Google Developer Knowledge MCP Integration (Optional)
 
@@ -465,7 +463,7 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 
 | Input | Description | Required | Default |
 | :--- | :--- | :--- | :--- |
-| `gemini_api_key` | Your Gemini Developer API Key (from Google AI Studio). | **Yes** (unless using WIF) | N/A |
+| `gemini_api_key` | Your Gemini Developer API Key (from Google AI Studio). Omit when authenticating via Vertex AI WIF/ADC. | No (required unless using WIF) | `''` |
 | `github_token` | Repository `GITHUB_TOKEN` (automatically provided by GitHub; no manual secret creation required). | **Yes** | N/A |
 | `gemini_model` | The Gemini model version to target for code review and dynamic context selection. | No | `gemini-4-hydrogen` |
 | `command` | The mode/command to run: `review` (for PR reviews) or `triage` (for issue triaging). | No | `review` |
@@ -476,7 +474,7 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 | `persona` | Reviewer persona overlay (`straight`, `dazbo`, `palpatine`, `rick`). | No | `straight` |
 | `custom_instructions` | Custom instructions or guardrails to extend the review prompt. Can be inline text or a file path in the repository (e.g. `.github/review-instruction-additions.md`). | No | `.github/review-instruction-additions.md` |
 | `skip_inline_suggestions` | Whether to skip automated re-reviews when a commit is created by accepting an inline suggestion via GitHub UI. | No | `'true'` |
-| `thinking_level` | Thinking level for reasoning models (`low`, `medium`, `high`, plus `xhigh` on `gemini-4-hydrogen` and `gemini-4-neon`; or `off`/integer token budget on Gemini 3/2.5). When omitted, the model's native default thinking behaviour applies. See [Reasoning & Thinking Budget Control](#reasoning--thinking-budget-control). | No | `''` |
+| `thinking_level` | Thinking level for reasoning models (`low`, `medium`, `high`, plus `xhigh` on `gemini-4-hydrogen` and `gemini-4-neon`; or `off`/integer token budget on Gemini 3). When omitted, the model's native default thinking behaviour applies. See [Reasoning & Thinking Budget Control](#reasoning--thinking-budget-control). | No | `''` |
 | `context_mode` | Codebase background context strategy: `'auto'` (default: Invariant Baseline / Full under `max_context_bytes`, else Sparse), `'full'` (force Full Context), `'sparse'` (force Sparse Context with file tree, core docs, and dynamic selection), or `'diff_only'` (skip repository background dump). | No | `'auto'` |
 | `max_context_bytes` | Total byte ceiling across repository text files before `'auto'` switches from Full Context Mode to Sparse Context Mode (default: 1.5 MB). | No | `'1536000'` |
 | `max_diff_full_file_bytes` | Aggregate UTF-8 byte ceiling across all `Full Current File Content` blocks attached in the diff prompt using water-fill truncation (diff patches themselves stay intact). Set to `'0'` to omit full-file copies and review diff patches only. | No | `'262144'` |
@@ -502,9 +500,9 @@ When using reasoning models (such as `gemini-4-hydrogen`, `gemini-4-neon`, `gemi
   If `thinking_level` is left blank (the default), no thinking configuration override is passed to the Gemini API (`thinking_config=None`), so the model's native default reasoning behaviour applies dynamically.
 * **Categorical Thinking Levels (Gemini 4 & Gemini 3)**:
   * **`gemini-4-hydrogen` / `gemini-4-*`**: Supports `'low'`, `'medium'`, `'high'`, plus `'xhigh'` (extra-high) on `gemini-4-hydrogen` and `gemini-4-neon`. Because Gemini 4 enforces `'low'` as its minimum reasoning level (rejecting `'minimal'` and `thinking_budget=0` with `400 INVALID_ARGUMENT`), setting `'off'`, `'false'`, `'disabled'`, `'minimal'`, or `'0'` on any `gemini-4-*` model automatically logs a warning and clamps to `'low'` upfront.
-  * **Gemini 3 / 2.5**: Supports `'minimal'` (Gemini 3), `'low'`, `'medium'`, and `'high'`.
-* **Disabling Thinking or Explicit Token Budgets (Gemini 3 / 2.5 only)**:
-  * Set `thinking_level` to `'off'`, `'false'`, `'disabled'`, or `0` to pass `thinking_budget=0` on models that support disabling thinking (such as Gemini 3 / 2.5).
+  * **Gemini 3**: Supports `'minimal'`, `'low'`, `'medium'`, and `'high'`.
+* **Disabling Thinking or Explicit Token Budgets (Gemini 3 only)**:
+  * Set `thinking_level` to `'off'`, `'false'`, `'disabled'`, or `0` to pass `thinking_budget=0` on models that support disabling thinking (such as Gemini 3).
   * Set a positive integer (e.g. `1024`, `2048`, `4096`) to cap `thinking_budget` on legacy models that accept explicit token budgets.
 
 Thinking token usage and its associated cost are tracked and reported separately in the comment telemetry summary alongside prompt and candidate tokens (priced at the model's standard output rate), allowing you to monitor reasoning overhead and costs accurately.
@@ -541,7 +539,7 @@ By default, the action uses an intelligent hybrid context engine designed to bal
 
 ### Cost & Caching Optimisation (Gemini 4)
 
-Because the Google AI Studio (`GEMINI_API_KEY`) path requires zero Google Cloud setup and uses Gemini 4's best-effort global implicit caching (while Vertex AI multi-region endpoints such as `eu` and `us` provide 24-hour Durable Implicit Caching via `cacheConfig`), the action combines prompt-volume controls with prefix stability so both paths stay fast and inexpensive:
+**Reliable cross-run Gemini 4 Durable Implicit Caching (up to 24h, `0.05×` cached read rate) requires Vertex AI on a multi-region endpoint (`eu` or `us`) via WIF/ADC.** By contrast, Google AI Studio (`GEMINI_API_KEY`) and Vertex AI `global` only provide best-effort ephemeral implicit caching (typically `0%` cached on sporadic CI runs). The action therefore pairs prefix stability with prompt-volume controls so both paths stay fast and inexpensive:
 
 * **Zero-Config AI Studio (`GEMINI_API_KEY`) Savings**: Out of the box, moving modified files into the unnumbered `base_sha` baseline and eliminating `Full Current File Content` line-number gutter inflation reduces uncached input tokens by **~15%–20%** in `context_mode: 'auto'` without losing any repository context. Opting into `context_mode: 'sparse'` (or `'diff_only'`) alongside `max_diff_full_file_bytes` cuts AI Studio uncached token costs by **~60%–85%** (while keeping patches, core documentation, and dynamically selected dependencies).
 * **Tighter Prompt Modes for High-Traffic Repos**:
@@ -557,7 +555,7 @@ Because the Google AI Studio (`GEMINI_API_KEY`) path requires zero Google Cloud 
 
 By default, `service_tier` is **`'standard'`** (fast responses, full priority). For latency-tolerant workflows using Google AI Studio (`GEMINI_API_KEY`), you can **opt in** to `service_tier: 'flex'` — a Preview synchronous inference tier priced at **50% off** all input, cached, thinking, and output tokens:
 
-* **How it works**: Flex sends the exact same synchronous request to the exact same model (supported on Gemini 4 Carbon/Argon/Neon/Hydrogen, Gemini 3.8/3.6/3.5, and Gemini 2.5), but Google schedules it onto **off-peak, sheddable compute capacity** rather than reserving real-time capacity. Because Google never auto-upgrades Flex requests server-side, this action raises the HTTP timeout floor to **600s**, performs bounded client-side retries (`5s`, `15s`) on transient capacity shedding (`503`/`429`/`504`), and falls back to `'standard'` when `service_tier_fallback: 'true'` (default).
+* **How it works**: Flex sends the exact same synchronous request to the exact same model (supported on Gemini 4 Carbon/Argon/Neon/Hydrogen and Gemini 3.8/3.6/3.5), but Google schedules it onto **off-peak, sheddable compute capacity** rather than reserving real-time capacity. Because Google never auto-upgrades Flex requests server-side, this action raises the HTTP timeout floor to **600s**, performs bounded client-side retries (`5s`, `15s`) on transient capacity shedding (`503`/`429`/`504`), and falls back to `'standard'` when `service_tier_fallback: 'true'` (default).
 * **Pros**:
   * **50% cost reduction** on every token with **zero GCP project or WIF setup** (same `GEMINI_API_KEY`).
   * **Identical review quality**: same model weights, thinking level, context, and structured JSON/tool execution as `'standard'`.
@@ -743,8 +741,9 @@ Whenever a review run finishes, the action provides token telemetry in two place
    | **Cost (thinking / reasoning)** | $0.0154 |
    | **Cost (response output)** | $0.0016 |
    | **Estimated Total Cost** | **$0.0581** |
+   | **Endpoint** | Vertex AI (eu, +10% regional) |
 
-   > Gemini 4 Hydrogen: standard tier, global endpoint; regional endpoints are 10% higher.
+   > Gemini 4 Hydrogen: standard tier, Vertex AI eu regional endpoint (+10% regional uplift). Reliable cross-run Gemini 4 implicit caching requires Vertex AI eu/us via WIF/ADC.
    > Cache reads are priced here, but context-cache STORAGE, where the model charges for it separately per token-hour, is not included, so the figure can run slightly low.
 
    </details>
@@ -758,7 +757,7 @@ Token Usage: 265,849 input tokens (94.4% cached), 210 output tokens, 2,048 think
 ### Metrics Explained
 
 * **Total Input (Prompt) Tokens**: The total size (in LLM tokens) of the context sent to Gemini (full repository codebase files, system instructions, PR comment history, and PR diff patch).
-* **Cached Context Tokens (`├── Cached Context Tokens`)**: The portion of input tokens hitting Gemini's context cache. Context caching applies **exclusively to input tokens**, delivering a **95% discount** (`0.05x`) via automatic implicit prefix caching on Gemini 4 models (`gemini-4-hydrogen`, `gemini-4-neon`, `gemini-4-argon`, `gemini-4-carbon`), and a **90% discount** (`0.1x`) via explicit `CachedContent` handles on Gemini 3 models.
+* **Cached Context Tokens (`├── Cached Context Tokens`)**: The portion of input tokens hitting Gemini's context cache. Context caching applies **exclusively to input tokens**, delivering a **95% discount** (`0.05x`) on Gemini 4 (`gemini-4-hydrogen`, `gemini-4-neon`, `gemini-4-argon`, `gemini-4-carbon`) when running with Durable Implicit Caching on **Vertex AI `eu`/`us` via WIF/ADC** (AI Studio `GEMINI_API_KEY` and Vertex `global` offer best-effort ephemeral caching only), and a **90% discount** (`0.1x`) via explicit `CachedContent` handles on Gemini 3 models on both AI Studio and Vertex AI.
 * **PR Comments History Tokens (`├── PR Comments History Tokens`)**: The exact token count consumed by historical inline review threads and conversation comments fetched via the GitHub API and included in the dynamic review context.
 * **Un-cached Fresh Tokens (`└── Un-cached Fresh Tokens`)**: The newly introduced PR diff lines and dynamic skill instructions, billed at standard input rates.
 * **Thinking / Reasoning Tokens**: The internal reasoning tokens consumed by Gemini reasoning models (e.g. `gemini-4-hydrogen`) while evaluating complex logic and diffs.
@@ -806,16 +805,26 @@ You can view these logs by opening the specific workflow run in the **Actions** 
 
 **Using Google Workload Identity Federation (WIF) and Application Default Credentials (ADC)**
 
-For this authentication approach, you must configure the following in your calling workflow:
+Keyless OIDC authentication via Vertex AI eliminates stored API keys, attaches per-repository Cloud Billing labels (`component=gemini-review-action`, `repo=<owner_repo>`), and unlocks **80%–95% Vertex AI Durable Implicit Caching** on multi-region endpoints (`eu` or `us`) against this action's invariant `base_sha` prefix.
 
-1. **OIDC Permissions:** Grant the workflow job `id-token: write` permission so GitHub can request OIDC credentials.
-2. **Authenticate Step:** Run the `google-github-actions/auth` step prior to running this action to exchange GitHub's OIDC token for Google Cloud credentials.
-3. **Environment Variables:** Pass the required Google Cloud environment variables (`GOOGLE_GENAI_USE_VERTEXAI`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION`) to the review action.
+> [!TIP]
+> Follow the complete step-by-step **[Vertex AI Workload Identity Federation Setup Guide](docs/vertex-ai-wif-setup.md)** for validated `gcloud` provisioning, single-repo vs owner-wide IAM scoping, `gh secret set` commands, SHA-pinned workflow templates, and troubleshooting.
 
-To keep your infrastructure details private, you should save the following as GitHub repository secrets:
-* `GCP_SERVICE_ACCOUNT`: The email address of your Google Cloud service account.
-* `WIF_POOL_ID`: The ID of your Workload Identity Pool (e.g. `my-pool`).
-* `WIF_PROVIDER_ID`: The ID of your Workload Identity Provider (e.g. `my-provider`).
+To configure WIF in your calling workflow:
+
+1. **OIDC Permissions:** Grant the workflow job `id-token: write` permission so GitHub can mint an OIDC token.
+2. **Authenticate Step:** Run `google-github-actions/auth` (pinned by commit SHA in production) before running this action.
+3. **Environment Variables:** Set `GOOGLE_GENAI_USE_VERTEXAI: "True"`, `GOOGLE_CLOUD_PROJECT`, and `GOOGLE_CLOUD_LOCATION` (`"eu"` or `"us"` recommended for Gemini 4 Durable Implicit Caching), and omit `gemini_api_key`.
+
+Store your configuration values as GitHub repository secrets:
+* `GCP_PROJECT_ID`: Your Google Cloud project ID.
+* `GCP_PROJECT_NUMBER`: Your numeric Google Cloud project number.
+* `GCP_SERVICE_ACCOUNT`: The service account email (e.g. `gemini-review-bot@<project>.iam.gserviceaccount.com`).
+* `WIF_POOL_ID`: The Workload Identity Pool ID (e.g. `github-actions-pool`).
+* `WIF_PROVIDER_ID`: The Workload Identity Provider ID (e.g. `github-oidc`).
+
+#### Sharing Across Multiple Repositories
+If you bind `roles/iam.workloadIdentityUser` at owner scope (**Option A**: `attribute.repository_owner/<owner>`), adding each extra repository requires **zero additional `gcloud` commands** — simply add the 5 GitHub secrets above and copy the WIF workflow snippet (whereas strict per-repo scoping, **Option B**, requires one IAM binding per repository). All repositories sharing that WIF pool roll their Vertex AI token costs into that **single GCP project**, with automatic `component=gemini-review-action` and `repo=<owner>_<repo>` Cloud Billing labels keeping per-repository spend separated. See [Reusing One WIF Pool Across Multiple GitHub Repositories](docs/vertex-ai-wif-setup.md#reusing-one-wif-pool-across-multiple-github-repositories).
 
 Example workflow job configured to run the review action with WIF authentication:
 
@@ -835,24 +844,24 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', github.event.issue.number) }}
 
       - name: Authenticate to Google Cloud via WIF
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
-          workload_identity_provider: 'projects/123456789012/locations/global/workloadIdentityPools/${{ secrets.WIF_POOL_ID }}/providers/${{ secrets.WIF_PROVIDER_ID }}'
+          workload_identity_provider: 'projects/${{ secrets.GCP_PROJECT_NUMBER }}/locations/global/workloadIdentityPools/${{ secrets.WIF_POOL_ID }}/providers/${{ secrets.WIF_PROVIDER_ID }}'
           service_account: '${{ secrets.GCP_SERVICE_ACCOUNT }}'
 
       - name: Run Gemini Review Action
         uses: derailed-dash/gemini-review-action@v1
         env:
-          GOOGLE_GENAI_USE_VERTEXAI: "True"
-          GOOGLE_CLOUD_PROJECT: "my-project-id"
-          GOOGLE_CLOUD_LOCATION: "eu" # Recommended: 'eu' or 'us' for Gemini 4 Durable Implicit Caching (+10% regional rate); 'global' for standard rate
+          GOOGLE_GENAI_USE_VERTEXAI: 'True'
+          GOOGLE_CLOUD_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          GOOGLE_CLOUD_LOCATION: 'eu' # Recommended: 'eu' or 'us' for Gemini 4 Durable Implicit Caching (+10% regional rate); 'global' for standard rate
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gemini_model: 'gemini-4-hydrogen'
 ```
 
 > [!NOTE]
-> When `GOOGLE_GENAI_USE_VERTEXAI` is set to `"True"`, the underlying `google-genai` SDK uses Application Default Credentials (ADC) to automatically locate and use the short-lived credentials configured on the runner by the `google-github-actions/auth` step.
+> When `GOOGLE_GENAI_USE_VERTEXAI` is set to `"True"`, the underlying `google-genai` SDK uses Application Default Credentials (ADC) provisioned on the runner by `google-github-actions/auth`, and Google Developer Knowledge search also authenticates cleanly via ADC.
 
 ## Development & Releases
 
@@ -1064,7 +1073,7 @@ For a typical repository with **0.5 MB (~500 KB)** of tracked text files running
 Rates for **`gemini-4-hydrogen`** (default), which the action applies automatically and prints in the review:
 * **Input**: **$1.50** per 1,000,000 tokens (uncached)
 * **Output**: **$7.50** per 1,000,000 tokens (includes response candidates and reasoning tokens)
-* **Cached input**: **0.05x** the input rate (**$0.075** per 1,000,000 tokens — automatic **95% discount** via implicit prefix caching)
+* **Cached input**: **0.05x** the input rate (**$0.075** per 1,000,000 tokens — **95% discount** via Gemini 4 Durable Implicit Caching; reliable cross-run hits require **Vertex AI `eu` or `us` via WIF/ADC**, which carries a 10% regional SKU uplift)
 
 Other supported models in the built-in rate table:
 * **`gemini-4-carbon`**: **$2.00 / $10.00** per 1M input / output through **2026-11-30** (Google pays the Vertex AI promo as a 50% credit back, excluding Cyber Permissive), then **$4.00 / $20.00**. Cached input is `0.05x` the input rate. Rates are for the global endpoint; regional endpoints are 10% higher.
@@ -1078,7 +1087,7 @@ Other supported models in the built-in rate table:
 * **Output Cost**: 1,500 x ($7.50 / 1,000,000) = **$0.011**
 * **Total Estimated Cost (uncached)**: **~$0.22 per PR review**
 
-Because Gemini 4 places the static repository context before the PR diff to lock in an invariant prompt prefix, repeated commits and reviews on a PR benefit from **95% cheaper cached reads** (`$0.075` / 1M tokens) — bringing typical cached runs down to **$0.01–$0.05** per review.
+Because Gemini 4 places the static `base_sha` repository context before the PR diff to lock in an invariant prompt prefix, repeated commits and reviews on **Vertex AI multi-region endpoints (`eu`/`us`, +10% regional SKU uplift)** benefit from **95% cheaper cached reads** (`$0.075` / 1M base rate) — bringing typical cached runs down to **$0.01–$0.05** per review. By contrast, Google AI Studio (`GEMINI_API_KEY`) runs typically pay uncached input rates across sporadic CI triggers and save cost via `context_mode: 'sparse'`, `max_diff_full_file_bytes`, or opt-in `service_tier: 'flex'`.
 
 ### Billing labels (Vertex AI only)
 

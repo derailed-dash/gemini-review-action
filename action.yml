@@ -19,8 +19,9 @@ author: 'Dazbo (derailed-dash)'
 
 inputs:
   gemini_api_key:
-    description: 'API key for Gemini'
-    required: true
+    description: 'API key for Gemini (required for Google AI Studio; omit when authenticating via Vertex AI WIF/ADC)'
+    required: false
+    default: ''
   github_token:
     description: 'GitHub token (defaults to secrets.GITHUB_TOKEN)'
     required: true
@@ -86,7 +87,7 @@ inputs:
     required: false
     default: '.github/review-instruction-additions.md'
   thinking_level:
-    description: 'Thinking / reasoning level for Gemini models (e.g. low, medium, high, xhigh, none, or numeric budget on Gemini 3/2.5). Controls reasoning token output.'
+    description: 'Thinking / reasoning level for Gemini models (e.g. low, medium, high, xhigh, none, or numeric budget on Gemini 3). Controls reasoning token output.'
     required: false
     default: ''
   max_candidate_files:

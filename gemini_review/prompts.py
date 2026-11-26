@@ -234,6 +234,7 @@ def build_pr_diff_prompt(
     include_full_content: bool = True,
     max_patch_bytes: int | None = None,
     excluded_files: list[str] | None = None,
+    omitted_non_text_files: list[str] | None = None,
     baseline_included_files: set[str] | None = None,
 ) -> str:
     """Build the dynamic PR diff patch prompt for modified files.
@@ -260,6 +261,8 @@ def build_pr_diff_prompt(
         config is not None and "max_diff_full_file_bytes" in config
     )
     baseline_set = {_normalise_relative_posix(p) for p in baseline_included_files} if baseline_included_files else set()
+    omitted: list[str] = list(omitted_non_text_files) if omitted_non_text_files else []
+    omitted_seen = set(omitted)
     capped: list[str] = []
     capped_patches: list[str] = []
 
@@ -283,10 +286,17 @@ def build_pr_diff_prompt(
 
     for f in files:
         filename = f["filename"]
-        status = f["status"]
+        status = f.get("status", "modified")
         patch = f.get("patch", "")
 
-        if not fn_is_text_file(filename) or not patch:
+        if not fn_is_text_file(filename):
+            if not is_supported_image(filename):
+                entry = f"{filename} ({status})"
+                if entry not in omitted_seen:
+                    omitted_seen.add(entry)
+                    omitted.append(entry)
+            continue
+        if not patch:
             continue
 
         formatted_patch = fn_format_diff_patch(patch)
@@ -354,6 +364,15 @@ def build_pr_diff_prompt(
             f"Diff full-file budget: capped {len(wf_capped)} modified file(s) to {wf_limit:,} bytes each "
             f"(aggregate budget {aggregate_limit:,} bytes): {', '.join(wf_capped)}",
             file=sys.stderr,
+        )
+
+    if omitted:
+        sample = ", ".join(omitted[:10])
+        more = f", and {len(omitted) - 10} more" if len(omitted) > 10 else ""
+        prompt_parts.append(
+            f"Note: {len(omitted)} changed file(s) in this PR were automatically omitted from the text diff "
+            f"(lockfiles, binaries, or generated assets): {sample}{more}. "
+            "They ARE part of this PR — do not report them as missing or un-updated.\n"
         )
 
     for f, formatted_patch, full_content, in_baseline in prepared:

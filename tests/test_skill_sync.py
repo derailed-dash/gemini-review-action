@@ -106,3 +106,36 @@ def test_install_skill_matches_action_default_model() -> None:
         f"SKILL.md Action Input Reference gemini_model default ({skill_default_model!r}) != "
         f"DEFAULT_MODEL ({DEFAULT_MODEL!r}). Please update SKILL.md (and sync to derailed-dash/dazbo-agent-skills)."
     )
+
+
+def test_action_gemini_api_key_is_optional_for_wif() -> None:
+    """gemini_api_key in action.yml must be required: false so Vertex AI WIF workflows can omit it."""
+    action_yml_text = ACTION_YML_PATH.read_text(encoding="utf-8")
+    match = re.search(
+        r"^  gemini_api_key:\s*\n(?:    [^\n]+\n)*?    required:\s*(true|false)\s*$",
+        action_yml_text,
+        re.MULTILINE,
+    )
+    assert match is not None, "Could not find required setting under gemini_api_key in action.yml"
+    assert match.group(1) == "false", "gemini_api_key must have required: false for Vertex AI WIF/ADC support."
+
+
+def test_install_skill_documents_vertex_wif_setup() -> None:
+    """Verify SKILL.md documents Vertex AI WIF workflows, env vars, and guide without hardcoded project IDs."""
+    skill_content = SKILL_MD_PATH.read_text(encoding="utf-8")
+    required_markers = [
+        "id-token: write",
+        "GOOGLE_GENAI_USE_VERTEXAI",
+        "GOOGLE_CLOUD_LOCATION",
+        "google-github-actions/auth@",
+        "vertex-ai-wif-setup.md",
+    ]
+    missing = [marker for marker in required_markers if marker not in skill_content]
+    assert not missing, (
+        f"Missing Vertex AI WIF setup markers in {SKILL_MD_PATH.relative_to(REPO_ROOT)}: {missing}. "
+        "Please update SKILL.md (and sync to derailed-dash/dazbo-agent-skills)."
+    )
+    assert not re.search(r"projects/\d+/", skill_content), (
+        "SKILL.md must use secret placeholders (GCP_PROJECT_NUMBER) rather than a hardcoded GCP project number."
+    )
+    assert "dazbo-github-automation" not in skill_content, "SKILL.md must not contain personal GCP project IDs."
