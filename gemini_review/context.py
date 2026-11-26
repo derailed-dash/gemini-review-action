@@ -6,6 +6,7 @@ It also extracts and attaches local Markdown image references as multimodal part
 """
 
 import fnmatch
+import inspect
 import json
 import os
 import sys
@@ -49,7 +50,11 @@ from gemini_review.repo import (
     read_git_tree_texts,
 )
 from gemini_review.schemas import DynamicContextSelection
-from gemini_review.utils import _get_pr_review_func, is_thinking_config_error
+from gemini_review.utils import (
+    _get_pr_review_func,
+    generate_content_with_stream_fallback,
+    is_thinking_config_error,
+)
 
 
 def select_dynamic_context_files(
@@ -59,6 +64,9 @@ def select_dynamic_context_files(
     candidate_files: list[str],
     max_files: int = 8,
     thinking_level: str | int | None = None,
+    *,
+    service_tier: str = "standard",
+    service_tier_fallback: bool = True,
 ) -> tuple[list[str], str, dict[str, Any]]:
     """Dynamically select the most relevant repository files for PR review context."""
     if not client or not candidate_files:
@@ -109,17 +117,21 @@ def select_dynamic_context_files(
             file=sys.stderr,
         )
 
+        sdk_service_tier = types.ServiceTier.FLEX if (service_tier or "standard").strip().lower() == "flex" else None
         gen_config = types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=DynamicContextSelection,
             thinking_config=thinking_cfg,
+            service_tier=sdk_service_tier,
         )
 
         try:
-            response = client.models.generate_content(
+            response = generate_content_with_stream_fallback(
+                client,
                 model=model,
                 contents=prompt,
                 config=gen_config,
+                service_tier_fallback=service_tier_fallback,
             )
         except Exception as api_err:
             # If the model rejects thinking_config, retry without thinking_config for backward/forward compatibility
@@ -130,10 +142,12 @@ def select_dynamic_context_files(
                     file=sys.stderr,
                 )
                 gen_config.thinking_config = None
-                response = client.models.generate_content(
+                response = generate_content_with_stream_fallback(
+                    client,
                     model=model,
                     contents=prompt,
                     config=gen_config,
+                    service_tier_fallback=service_tier_fallback,
                 )
             else:
                 raise
@@ -216,6 +230,8 @@ def build_codebase_context(
     excluded_files: list[str] | None = None,
     base_sha: str | None = None,
     dynamic_multimodal_parts: list[Any] | None = None,
+    service_tier: str = "standard",
+    service_tier_fallback: bool = True,
 ) -> str:
     """Build the repository codebase context (Full baseline, Full, Sparse, or Diff-only) for PR review."""
     fn_get_all_repo_files = _get_pr_review_func("get_all_repo_files", get_all_repo_files)
@@ -656,11 +672,26 @@ def build_codebase_context(
                     )
 
                 effective_model = get_default_model(model)
+                sel_kwargs: dict[str, Any] = {}
+                if (service_tier or "standard").strip().lower() == "flex":
+                    sel_side_eff = getattr(fn_select_dynamic_context_files, "side_effect", None)
+                    sel_target = sel_side_eff if callable(sel_side_eff) else fn_select_dynamic_context_files
+                    try:
+                        sel_params = inspect.signature(sel_target).parameters
+                    except (TypeError, ValueError):
+                        sel_params = {}
+                    sel_accepts_var = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sel_params.values())
+                    if sel_accepts_var or "service_tier" in sel_params:
+                        sel_kwargs["service_tier"] = service_tier
+                    if sel_accepts_var or "service_tier_fallback" in sel_params:
+                        sel_kwargs["service_tier_fallback"] = service_tier_fallback
+
                 res = fn_select_dynamic_context_files(
                     client=client,
                     model=effective_model,
                     files=files,
                     candidate_files=bounded_candidates,
+                    **sel_kwargs,
                 )
                 if isinstance(res, tuple) and len(res) == 3:
                     selected_files, reasoning, sel_usage = res

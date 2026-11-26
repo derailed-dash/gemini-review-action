@@ -352,6 +352,24 @@ def post_review(
         # Cost, from the same counts. A model with no rate entry renders tokens only —
         # borrowing another model's rate would produce a confident wrong figure.
         cost = estimate_cost(usage_metadata, usage_metadata.get("model"), config)
+        multipliers_applied = bool(cost.rate and cost.rate.label != "configured rate")
+
+        service_tier = str(usage_metadata.get("service_tier") or "standard").strip().lower()
+        flex_fallback = bool(usage_metadata.get("flex_fallback", False))
+        vertex_location = str(usage_metadata.get("vertex_location") or "").strip()
+        if service_tier == "flex":
+            tier_label = "Flex (50% off)" if multipliers_applied else "Flex"
+            table_rows.append(f"| **Service Tier** | {tier_label} |")
+        elif flex_fallback:
+            table_rows.append("| **Service Tier** | Standard (fell back from Flex) |")
+        if vertex_location and vertex_location.lower() != "global":
+            ep_label = (
+                f"Vertex AI (`{vertex_location}`, +10% regional)"
+                if multipliers_applied
+                else f"Vertex AI (`{vertex_location}`)"
+            )
+            table_rows.append(f"| **Endpoint** | {ep_label} |")
+
         cost_rows = []
         if cost.rate:
             cost_rows = [

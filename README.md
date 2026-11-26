@@ -490,7 +490,9 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 | `max_triage_images` | Maximum number of remote screenshots attached during issue triage (default: 5). | No | `5` |
 | `image_trigger_bytes` | File size threshold in bytes above which raster images are downscaled before attachment (default: 614400 / 600 KB). | No | `614400` |
 | `image_target_bytes` | Target size in bytes when downscaling large raster images (default: 307200 / 300 KB). | No | `307200` |
-| `timeout` | Timeout for API requests in seconds (the Gemini review client enforces a 300s minimum HTTP timeout floor and automatically falls back to streaming on connection resets). | No | `60` |
+| `service_tier` | Inference tier for Google AI Studio (`GEMINI_API_KEY`): `'standard'` (default) or `'flex'` (**50% discount** across all input, cached, thinking, and output tokens with 1–15 min target latency; ignored with a warning on Vertex AI). | No | `'standard'` |
+| `service_tier_fallback` | When `service_tier` is `'flex'`, automatically fall back to `'standard'` tier after bounded retries if capacity is shed (`503`/`429`) or timed out. | No | `'true'` |
+| `timeout` | Timeout for API requests in seconds (the Gemini review client enforces a 300s minimum HTTP timeout floor — raised to 600s for `service_tier: 'flex'` — and automatically falls back to streaming on connection resets). | No | `60` |
 
 ### Reasoning & Thinking Budget Control
 
@@ -549,7 +551,38 @@ Because the Google AI Studio (`GEMINI_API_KEY`) path requires zero Google Cloud 
     max_diff_full_file_bytes: '65536'  # Or '0' to review patches + context without full modified copies
     attach_markdown_images: 'core'     # Keep architecture/design diagrams, skip README screenshots
   ```
-* **Vertex AI Durable Implicit Caching (Optional WIF/ADC)**: If your organisation authenticates via Google Cloud Workload Identity Federation (see [Alternative Authentication](#alternative-authentication)), setting `GOOGLE_CLOUD_LOCATION` to a multi-region endpoint (`eu` or `us`) rather than `global` leverages Vertex AI Durable Implicit Caching against the invariant `base_sha` prefix (typically delivering **80%–95% cached-input token hits** across commits and concurrent PRs at `0.05x` read rates, with a `10%` regional SKU uplift).
+* **Vertex AI Durable Implicit Caching (Optional WIF/ADC)**: If your organisation authenticates via Google Cloud Workload Identity Federation (see [Alternative Authentication](#alternative-authentication)), setting `GOOGLE_CLOUD_LOCATION` to a multi-region endpoint (`eu` or `us`) rather than `global` leverages Vertex AI Durable Implicit Caching against the invariant `base_sha` prefix (typically delivering **80%–95% cached-input token hits** across commits and concurrent PRs at `0.05x` read rates; the telemetry table automatically applies the `10%` regional SKU uplift when `GOOGLE_CLOUD_LOCATION` is `eu`/`us` or another non-`global` endpoint).
+
+#### Opt-In AI Studio Flex Inference (`service_tier: 'flex'`, Preview)
+
+By default, `service_tier` is **`'standard'`** (fast responses, full priority). For latency-tolerant workflows using Google AI Studio (`GEMINI_API_KEY`), you can **opt in** to `service_tier: 'flex'` — a Preview synchronous inference tier priced at **50% off** all input, cached, thinking, and output tokens:
+
+* **How it works**: Flex sends the exact same synchronous request to the exact same model (supported on Gemini 4 Carbon/Argon/Neon/Hydrogen, Gemini 3.8/3.6/3.5, and Gemini 2.5), but Google schedules it onto **off-peak, sheddable compute capacity** rather than reserving real-time capacity. Because Google never auto-upgrades Flex requests server-side, this action raises the HTTP timeout floor to **600s**, performs bounded client-side retries (`5s`, `15s`) on transient capacity shedding (`503`/`429`/`504`), and falls back to `'standard'` when `service_tier_fallback: 'true'` (default).
+* **Pros**:
+  * **50% cost reduction** on every token with **zero GCP project or WIF setup** (same `GEMINI_API_KEY`).
+  * **Identical review quality**: same model weights, thinking level, context, and structured JSON/tool execution as `'standard'`.
+  * **Synchronous execution**: integrates directly into single-job CI steps (unlike the 24-hour async Batch API).
+* **Cons & Trade-offs**:
+  * **High & variable latency (1–15 minute target)**: reviewers waiting interactively at a PR screen will notice multi-minute delays compared to `'standard'` (`15–45s`).
+  * **GitHub Actions runner minutes**: the workflow runner stays occupied waiting for the Flex response, which can consume paid/included runner minutes on private repositories (public repos are free).
+  * **Sheddable Preview capacity & standard quotas**: traffic can be evicted during peak load (`503`/`429`), triggering retries or an automatic fallback to full `'standard'` pricing, and Flex shares standard AI Studio rate limits.
+  * **Google AI Studio only**: `GenerateContentConfig.service_tier` is not supported on Vertex AI (if enabled alongside Vertex AI, the action logs a warning and uses `'standard'`).
+
+```yaml
+with:
+  gemini_api_key: ${{ secrets.GEMINI_API_KEY }}
+  github_token: ${{ secrets.GITHUB_TOKEN }}
+  service_tier: 'flex'               # Strictly opt-in (default: 'standard'); 50% off with 1-15 min latency
+  # service_tier_fallback: 'true'    # Set 'false' to fail instead of falling back to 'standard' on 503/429
+```
+
+#### Choosing Your Mode
+
+| Option | Auth Setup | Typical Latency | Relative Token Cost | Best For |
+| :--- | :--- | :---: | :---: | :--- |
+| **AI Studio `'standard'`** *(default)* | `GEMINI_API_KEY` | Fast (`15–45s`) | Baseline (`-15%–20%` in `'auto'`, `-60%–85%` in `'sparse'`/`'diff_only'`) | Fast interactive PR feedback with zero GCP setup |
+| **AI Studio `'flex'`** *(opt-in)* | `GEMINI_API_KEY` | **Slow (`1–15 min`)** | **50% off** whichever context mode you pair it with | Public repos or async batch-style workflows prioritising API savings over speed |
+| **Vertex AI WIF (`eu` / `us`)** | GCP project + WIF | Fast (`15–45s`) | **Lowest (~80%–90%+ cached hits)** on warm pushes (`+10%` regional rate) | Best speed **and** lowest recurring cost when GCP/WIF is available |
 
 You can configure these settings by adding the following keys to your custom `.github/commands/gemini-review.toml` configuration (or via `GEMINI_MAX_CONTEXT_BYTES` and `GEMINI_MAX_CORE_CONTEXT_BYTES`):
 
@@ -812,7 +845,7 @@ jobs:
         env:
           GOOGLE_GENAI_USE_VERTEXAI: "True"
           GOOGLE_CLOUD_PROJECT: "my-project-id"
-          GOOGLE_CLOUD_LOCATION: "global" # Or your preferred model endpoint region
+          GOOGLE_CLOUD_LOCATION: "eu" # Recommended: 'eu' or 'us' for Gemini 4 Durable Implicit Caching (+10% regional rate); 'global' for standard rate
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gemini_model: 'gemini-4-hydrogen'

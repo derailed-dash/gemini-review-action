@@ -31,6 +31,8 @@ from gemini_review import (
     filter_comment_authors,
     generate_content_with_stream_fallback,
     get_default_model,
+    get_service_tier,
+    get_service_tier_fallback,
     is_thinking_config_error,
     parse_excluded_authors,
 )
@@ -241,15 +243,20 @@ def main():
         print("No repository labels found. Exiting.", file=sys.stderr)
         sys.exit(0)
 
-    # Initialise Gemini client (enforce >=300s timeout floor and Developer API v1beta).
-    client, _ = create_genai_client(
+    requested_service_tier = get_service_tier()
+    service_tier_fallback = get_service_tier_fallback()
+
+    # Initialise Gemini client (enforce >=300s / 600s Flex timeout floor and Developer API v1beta).
+    client, use_vertexai = create_genai_client(
         model_name=model_name,
         timeout=timeout,
         api_key=gemini_api_key,
         project=project,
         location=location,
+        service_tier=requested_service_tier,
         client_cls=genai.Client,
     )
+    sdk_service_tier = types.ServiceTier.FLEX if (not use_vertexai and requested_service_tier == "flex") else None
 
     triage_prompt = load_triage_prompt(issue_title, issue_body, available_labels, issue_comments=issue_comments)
 
@@ -270,6 +277,7 @@ def main():
         response_mime_type="application/json",
         response_schema=TriageResult,
         thinking_config=thinking_cfg,
+        service_tier=sdk_service_tier,
     )
 
     print("Running issue triage classification...", file=sys.stderr)
@@ -279,6 +287,7 @@ def main():
             model=model_name,
             contents=triage_contents,
             config=triage_config,
+            service_tier_fallback=service_tier_fallback,
         )
     except Exception as gen_err:
         if triage_config.thinking_config is not None and is_thinking_config_error(gen_err):
@@ -294,6 +303,7 @@ def main():
                     model=model_name,
                     contents=triage_contents,
                     config=triage_config,
+                    service_tier_fallback=service_tier_fallback,
                 )
             except Exception as retry_err:
                 if multimodal_parts:
@@ -306,6 +316,7 @@ def main():
                         model=model_name,
                         contents=triage_prompt,
                         config=triage_config,
+                        service_tier_fallback=service_tier_fallback,
                     )
                 else:
                     raise
@@ -319,6 +330,7 @@ def main():
                 model=model_name,
                 contents=triage_prompt,
                 config=triage_config,
+                service_tier_fallback=service_tier_fallback,
             )
         else:
             raise

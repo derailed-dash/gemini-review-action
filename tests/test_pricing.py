@@ -318,3 +318,73 @@ class TestCacheReadMultiplier:
         assert storage, "expected a storage caveat when cache was used"
         assert "where the model charges for it" in storage[0]
         assert "is billed per token-hour" not in storage[0]
+
+
+class TestServiceTierAndVertexRegionalPricing:
+    """Verify Flex 50% discount, fallback caveats, Vertex regional 1.10x uplift, and override precedence."""
+
+    def test_flex_tier_halves_all_cost_components_on_hydrogen(self):
+        std = estimate_cost(
+            {
+                **usage(fresh=100_000, cached=200_000, output=1_000),
+                "thoughts_tokens": 2_000,
+                "context_selection_prompt_tokens": 50_000,
+                "context_selection_output_tokens": 500,
+            },
+            "gemini-4-hydrogen",
+            today=date(2026, 11, 26),
+        )
+        flex = estimate_cost(
+            {
+                **usage(fresh=100_000, cached=200_000, output=1_000),
+                "thoughts_tokens": 2_000,
+                "context_selection_prompt_tokens": 50_000,
+                "context_selection_output_tokens": 500,
+                "service_tier": "flex",
+            },
+            "gemini-4-hydrogen",
+            today=date(2026, 11, 26),
+        )
+        assert flex.uncached_input == pytest.approx(std.uncached_input * 0.5)
+        assert flex.cached_input == pytest.approx(std.cached_input * 0.5)
+        assert flex.output == pytest.approx(std.output * 0.5)
+        assert flex.thinking == pytest.approx(std.thinking * 0.5)
+        assert flex.candidates_output == pytest.approx(std.candidates_output * 0.5)
+        assert flex.context_selection == pytest.approx(std.context_selection * 0.5)
+        assert flex.total == pytest.approx(std.total * 0.5)
+        assert any("50% discount" in c for c in flex.caveats)
+
+    def test_flex_fallback_reports_standard_pricing_and_caveat(self):
+        cost = estimate_cost(
+            {**usage(fresh=100_000, output=1_000), "service_tier": "standard", "flex_fallback": True},
+            "gemini-4-hydrogen",
+            today=date(2026, 11, 26),
+        )
+        assert cost.uncached_input == pytest.approx(0.15)
+        assert any("fell back to Standard tier" in c for c in cost.caveats)
+
+    def test_vertex_regional_endpoint_applies_10_percent_uplift_while_global_stays_base(self):
+        global_cost = estimate_cost(
+            {**usage(fresh=1_000_000, cached=1_000_000, output=1_000_000), "vertex_location": "global"},
+            "gemini-4-hydrogen",
+            today=date(2026, 11, 26),
+        )
+        eu_cost = estimate_cost(
+            {**usage(fresh=1_000_000, cached=1_000_000, output=1_000_000), "vertex_location": "eu"},
+            "gemini-4-hydrogen",
+            today=date(2026, 11, 26),
+        )
+        assert global_cost.total == pytest.approx(1.50 + 0.075 + 7.50)
+        assert eu_cost.uncached_input == pytest.approx(global_cost.uncached_input * 1.10)
+        assert eu_cost.cached_input == pytest.approx(global_cost.cached_input * 1.10)
+        assert eu_cost.output == pytest.approx(global_cost.output * 1.10)
+        assert eu_cost.total == pytest.approx(global_cost.total * 1.10)
+        assert any("10% regional surcharge" in c and "eu" in c for c in eu_cost.caveats)
+
+    def test_custom_rate_override_is_never_multiplied_by_flex_or_regional(self):
+        cost = estimate_cost(
+            {**usage(fresh=1_000_000), "service_tier": "flex", "vertex_location": "eu"},
+            "gemini-4-hydrogen",
+            config={"rate_input": 10.0, "rate_output": 20.0},
+        )
+        assert cost.total == pytest.approx(10.0)

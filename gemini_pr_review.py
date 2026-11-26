@@ -165,17 +165,26 @@ def main():
         print("No text-based or visual image files to review. Exiting.", file=sys.stderr)
         sys.exit(0)
 
-    # Initialise Gemini client (enforce >=300s timeout floor and Developer API v1beta).
+    config = gr.load_config()
+    requested_service_tier = gr.get_service_tier(config)
+    service_tier_fallback = gr.get_service_tier_fallback(config)
+
+    # Initialise Gemini client (enforce >=300s / 600s Flex timeout floor and Developer API v1beta).
     client, use_vertexai = gr.create_genai_client(
         model_name=model_name,
         timeout=timeout,
         api_key=gemini_api_key,
         project=project,
         location=location,
+        service_tier=requested_service_tier,
         client_cls=genai.Client,
     )
-
-    config = gr.load_config()
+    effective_service_tier = "standard" if use_vertexai else requested_service_tier
+    sdk_service_tier = types.ServiceTier.FLEX if effective_service_tier == "flex" else None
+    tier_state: dict[str, Any] = {
+        "effective_service_tier": effective_service_tier,
+        "flex_fallback": False,
+    }
 
     # Cost attribution. Vertex attaches these to the billed charge so spend can be grouped
     # by repository in the Cloud Billing export; returns None on the API-key path, where the
@@ -276,6 +285,11 @@ def main():
         ctx_kwargs["base_sha"] = base_sha
     if accepts_var_kw or "dynamic_multimodal_parts" in ctx_params:
         ctx_kwargs["dynamic_multimodal_parts"] = dynamic_md_parts
+    if effective_service_tier == "flex":
+        if accepts_var_kw or "service_tier" in ctx_params:
+            ctx_kwargs["service_tier"] = effective_service_tier
+        if accepts_var_kw or "service_tier_fallback" in ctx_params:
+            ctx_kwargs["service_tier_fallback"] = service_tier_fallback
 
     codebase_context = gr.build_codebase_context(
         text_files,
@@ -505,6 +519,7 @@ def main():
             response_schema=gr.ReviewResult,
             labels=billing_labels,
             thinking_config=thinking_cfg,
+            service_tier=sdk_service_tier,
         )
     else:
         gen_config = types.GenerateContentConfig(
@@ -514,6 +529,7 @@ def main():
             response_schema=gr.ReviewResult,
             labels=billing_labels,
             thinking_config=thinking_cfg,
+            service_tier=sdk_service_tier,
         )
 
     print("Generating code review...", file=sys.stderr)
@@ -525,6 +541,8 @@ def main():
             model=model_name,
             contents=contents_to_send,
             config=gen_config,
+            service_tier_fallback=service_tier_fallback,
+            tier_state=tier_state,
         )
     except Exception as gen_err:
         last_err: Exception = gen_err
@@ -543,6 +561,8 @@ def main():
                     model=model_name,
                     contents=contents_to_send,
                     config=gen_config,
+                    service_tier_fallback=service_tier_fallback,
+                    tier_state=tier_state,
                 )
             except Exception as err_after_thinking:
                 last_err = err_after_thinking
@@ -565,6 +585,7 @@ def main():
                 response_schema=gr.ReviewResult,
                 labels=billing_labels,
                 thinking_config=gen_config.thinking_config,
+                service_tier=gen_config.service_tier,
             )
             try:
                 response = gr.generate_content_with_stream_fallback(
@@ -572,6 +593,8 @@ def main():
                     model=model_name,
                     contents=contents_to_send,
                     config=gen_config,
+                    service_tier_fallback=service_tier_fallback,
+                    tier_state=tier_state,
                 )
             except Exception as err_after_cache:
                 last_err = err_after_cache
@@ -598,6 +621,8 @@ def main():
                 model=model_name,
                 contents=contents_to_send,
                 config=gen_config,
+                service_tier_fallback=service_tier_fallback,
+                tier_state=tier_state,
             )
 
         if response is None:
@@ -617,6 +642,8 @@ def main():
         system_instruction=system_instruction,
         billing_labels=billing_labels,
         thinking_cfg=gen_config.thinking_config,
+        service_tier_fallback=service_tier_fallback,
+        tier_state=tier_state,
     )
 
     usage_dict = None
@@ -664,6 +691,9 @@ def main():
             # Recorded so the telemetry can be priced. Without it the table can only
             # show tokens, which is what it did before this was added.
             "model": model_name,
+            "service_tier": tier_state.get("effective_service_tier", effective_service_tier),
+            "flex_fallback": bool(tier_state.get("flex_fallback", False)),
+            "vertex_location": location if use_vertexai else None,
         }
 
         cache_str = f" ({cache_percentage:.1f}% cached)" if cached_tokens > 0 else ""

@@ -14,6 +14,7 @@ DEFAULT_MODEL = "gemini-4-hydrogen"
 DEFAULT_MAX_CONTEXT_BYTES = 1500 * 1024
 VALID_CONTEXT_MODES = ("auto", "full", "sparse", "diff_only")
 VALID_ATTACH_MARKDOWN_IMAGES = ("all", "core", "diff", "none")
+VALID_SERVICE_TIERS = ("standard", "flex")
 
 
 def get_default_model(explicit_model: str | None = None) -> str:
@@ -344,3 +345,42 @@ def get_max_context_bytes(config: dict | None = None) -> int:
             return DEFAULT_MAX_CONTEXT_BYTES
         return parsed
     return DEFAULT_MAX_CONTEXT_BYTES
+
+
+def get_service_tier(config: dict | None = None) -> str:
+    """Return inference service tier ('standard' or 'flex'; default 'standard')."""
+    return _resolve_choice_setting(
+        "GEMINI_SERVICE_TIER",
+        config,
+        "service_tier",
+        VALID_SERVICE_TIERS,
+        "standard",
+    )
+
+
+def get_service_tier_fallback(config: dict | None = None) -> bool:
+    """Whether exhausted/shed Flex requests automatically fall back to Standard tier (default True)."""
+    candidates: list[tuple[str, object]] = []
+    if "GEMINI_SERVICE_TIER_FALLBACK" in os.environ:
+        env_raw = os.environ.get("GEMINI_SERVICE_TIER_FALLBACK", "")
+        if env_raw.strip():
+            candidates.append(("GEMINI_SERVICE_TIER_FALLBACK", env_raw))
+    if config and config.get("service_tier_fallback") is not None:
+        candidates.append(("service_tier_fallback", config.get("service_tier_fallback")))
+
+    for source, val in candidates:
+        if isinstance(val, bool):
+            return val
+        cleaned = str(val).strip().lower()
+        if not cleaned:
+            continue
+        if cleaned in ("true", "1", "yes"):
+            return True
+        if cleaned in ("false", "0", "no"):
+            return False
+        print(
+            f"Warning: Invalid {source}='{str(val).strip()}'. Defaulting to True.",
+            file=sys.stderr,
+        )
+        return True
+    return True
