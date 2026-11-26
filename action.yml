@@ -125,6 +125,22 @@ inputs:
     description: 'Target byte size when downscaling large raster images (defaults to 307200 / 300 KB).'
     required: false
     default: '307200'
+  context_mode:
+    description: "Codebase context mode: 'auto' (default, Full under max_context_bytes else Sparse), 'full', 'sparse', or 'diff_only'."
+    required: false
+    default: 'auto'
+  max_context_bytes:
+    description: 'Maximum total size in bytes of repository text files before auto context_mode switches from Full to Sparse (defaults to 1536000 / 1.5 MB).'
+    required: false
+    default: '1536000'
+  max_diff_full_file_bytes:
+    description: 'Aggregate UTF-8 byte ceiling across all Full Current File Content blocks in the diff prompt (defaults to 262144 / 256 KB; set to 0 to omit full-file copies and review patches only).'
+    required: false
+    default: '262144'
+  attach_markdown_images:
+    description: "Scope of Markdown-linked image attachments: 'all' (default, full repo + docs + diff), 'core' (architecture/design/spec docs + extra_context_files + diff additions), 'diff' (diff additions + extra_context_files only), or 'none'."
+    required: false
+    default: 'all'
 
 runs:
   using: 'composite'
@@ -165,6 +181,10 @@ runs:
         GEMINI_MAX_TRIAGE_IMAGES: ${{ inputs.max_triage_images }}
         GEMINI_IMAGE_TRIGGER_BYTES: ${{ inputs.image_trigger_bytes }}
         GEMINI_IMAGE_TARGET_BYTES: ${{ inputs.image_target_bytes }}
+        GEMINI_CONTEXT_MODE: ${{ inputs.context_mode }}
+        GEMINI_MAX_CONTEXT_BYTES: ${{ inputs.max_context_bytes }}
+        GEMINI_MAX_DIFF_FULL_FILE_BYTES: ${{ inputs.max_diff_full_file_bytes }}
+        GEMINI_ATTACH_MARKDOWN_IMAGES: ${{ inputs.attach_markdown_images }}
         GITHUB_REPOSITORY: ${{ github.repository }}
 
         GITHUB_EVENT_PATH: ${{ github.event_path }}

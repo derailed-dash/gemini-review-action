@@ -43,6 +43,11 @@ import sys
 # generated artifacts, which is the intent.
 DEFAULT_MAX_FILE_BYTES = 128 * 1024
 
+# Aggregate ceiling across all Full Current File Content blocks in the diff prompt (patches
+# themselves are never dropped by this). 256 KB caps multi-file redundant full-file copies while
+# letting small files pass untouched via water-fill capping. 0 disables full-file attachments.
+DEFAULT_MAX_DIFF_FULL_FILE_BYTES = 256 * 1024
+
 # Published input windows. Used only to pick a preflight budget; an unknown model falls
 # back to the smallest known value rather than assuming the largest, so a new model id
 # fails safe (a trimmed review) instead of unsafe (a 400 and no review).
@@ -112,6 +117,24 @@ def _int_setting(env_var: str, config: dict, config_key: str, default: int) -> i
 def max_file_bytes(config: dict | None = None) -> int:
     """Per-file ceiling on attached full content. 0 or negative disables the cap."""
     return _int_setting("GEMINI_MAX_FILE_BYTES", config or {}, "max_file_bytes", DEFAULT_MAX_FILE_BYTES)
+
+
+def max_diff_full_file_bytes(config: dict | None = None) -> int:
+    """Aggregate ceiling on Full Current File Content blocks in diff prompts. 0 disables them."""
+    val = _int_setting(
+        "GEMINI_MAX_DIFF_FULL_FILE_BYTES",
+        config or {},
+        "max_diff_full_file_bytes",
+        DEFAULT_MAX_DIFF_FULL_FILE_BYTES,
+    )
+    if val < 0:
+        print(
+            f"Warning: GEMINI_MAX_DIFF_FULL_FILE_BYTES/max_diff_full_file_bytes cannot be negative (got {val}). "
+            f"Using {DEFAULT_MAX_DIFF_FULL_FILE_BYTES}.",
+            file=sys.stderr,
+        )
+        return DEFAULT_MAX_DIFF_FULL_FILE_BYTES
+    return val
 
 
 def _cap_utf8_content(

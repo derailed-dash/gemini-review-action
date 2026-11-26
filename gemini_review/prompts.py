@@ -14,6 +14,8 @@ from google.genai import types
 from gemini_review.budget import (
     cap_file_content,
     cap_patch_content,
+    compute_waterfill_cap,
+    max_diff_full_file_bytes,
     max_file_bytes,
     report_capped,
     report_capped_patches,
@@ -40,6 +42,7 @@ from gemini_review.multimodal import (
 )
 from gemini_review.personas import get_persona_prompt, resolve_persona_name
 from gemini_review.repo import (
+    _normalise_relative_posix,
     generate_file_tree,
     get_all_repo_files,
     get_file_content,
@@ -231,14 +234,16 @@ def build_pr_diff_prompt(
     include_full_content: bool = True,
     max_patch_bytes: int | None = None,
     excluded_files: list[str] | None = None,
+    baseline_included_files: set[str] | None = None,
 ) -> str:
     """Build the dynamic PR diff patch prompt for modified files.
 
     Newly added and removed files omit the duplicate ``Full Current File Content`` block because
-    their entire content already appears inside the unified diff patch (or no longer exists). Full
-    current file contents for modified files are capped per file, and when ``include_full_content`` is
-    False or ``max_patch_bytes`` is set under budget pressure, full contents are dropped or oversized
-    patches are loudly truncated to keep the request inside the model context window.
+    their entire content already appears inside the unified diff patch (or no longer exists). Files
+    already present in ``baseline_included_files`` (invariant ``base_sha`` context prefix) likewise
+    omit duplicate full-file copies. Remaining full-file blocks respect both per-file limits and the
+    aggregate ``max_diff_full_file_bytes`` water-fill budget, while diffs themselves remain intact
+    unless ``max_patch_bytes`` is triggered by an out-of-window budget fallback.
     """
     fn_is_text_file = _get_pr_review_func("is_text_file", is_text_file)
     fn_get_file_content = _get_pr_review_func("get_file_content", get_file_content)
@@ -250,6 +255,11 @@ def build_pr_diff_prompt(
     )
 
     limit = max_file_bytes(config)
+    aggregate_limit = max_diff_full_file_bytes(config)
+    aggregate_explicit = "GEMINI_MAX_DIFF_FULL_FILE_BYTES" in os.environ or (
+        config is not None and "max_diff_full_file_bytes" in config
+    )
+    baseline_set = {_normalise_relative_posix(p) for p in baseline_included_files} if baseline_included_files else set()
     capped: list[str] = []
     capped_patches: list[str] = []
 
@@ -262,6 +272,14 @@ def build_pr_diff_prompt(
             f"Note: {len(excluded_files)} changed file(s) were intentionally excluded from this diff by "
             f"diff_exclude_patterns ({sample}{more}). Do not assume they are missing from the repository.\n"
         )
+
+    # Pre-load eligible raw contents so both per-file and aggregate water-fill limits resolve in
+    # a single truncation pass (keeping original byte counts accurate in markers and avoiding
+    # duplicate stderr warnings).
+    prepared: list[tuple[dict, str, str | None, bool]] = []
+    effective_sizes: list[int] = []
+    full_indices: list[int] = []
+    disabled_by_zero = False
 
     for f in files:
         filename = f["filename"]
@@ -277,19 +295,77 @@ def build_pr_diff_prompt(
             if was_patch_capped:
                 capped_patches.append(filename)
 
-        full_content = None
-        if include_full_content and status not in ("added", "removed"):
-            full_content = fn_get_file_content(filename)
-            if full_content:
-                full_content, was_capped = cap_file_content(full_content, filename, limit)
-                if was_capped:
-                    capped.append(filename)
+        norm_name = _normalise_relative_posix(filename)
+        prev_name = f.get("previous_filename", "")
+        norm_prev = _normalise_relative_posix(prev_name) if prev_name else ""
+        in_baseline = bool(baseline_set and (norm_name in baseline_set or (norm_prev and norm_prev in baseline_set)))
 
+        raw_content: str | None = None
+        if include_full_content and status not in ("added", "removed") and not in_baseline:
+            if aggregate_limit == 0:
+                disabled_by_zero = True
+            else:
+                loaded = fn_get_file_content(filename)
+                if loaded:
+                    raw_content = loaded
+                    raw_bytes_len = len(loaded.encode("utf-8", errors="replace"))
+                    eff_len = min(raw_bytes_len, limit) if limit > 0 else raw_bytes_len
+                    full_indices.append(len(prepared))
+                    effective_sizes.append(eff_len)
+
+        prepared.append((f, formatted_patch, raw_content, in_baseline))
+
+    if disabled_by_zero:
+        print(
+            "Diff full-file budget: max_diff_full_file_bytes=0 (disabled); omitting Full Current File Content blocks.",
+            file=sys.stderr,
+        )
+
+    wf_cap: int | None = None
+    if (
+        aggregate_limit > 0
+        and (aggregate_explicit or limit > 0)
+        and effective_sizes
+        and sum(effective_sizes) > aggregate_limit
+    ):
+        wf_cap = compute_waterfill_cap(effective_sizes, aggregate_limit)
+
+    wf_capped: list[str] = []
+    for idx in full_indices:
+        entry_file, entry_patch, entry_raw, entry_in_baseline = prepared[idx]
+        if not entry_raw:
+            continue
+        fname = entry_file["filename"]
+        if wf_cap is not None and wf_cap > 0:
+            target_cap = min(limit, wf_cap) if limit > 0 else wf_cap
+        else:
+            target_cap = limit
+        capped_text, was_capped = cap_file_content(entry_raw, fname, target_cap)
+        if was_capped:
+            if wf_cap is not None and (limit <= 0 or wf_cap < limit):
+                wf_capped.append(fname)
+            else:
+                capped.append(fname)
+        prepared[idx] = (entry_file, entry_patch, capped_text, entry_in_baseline)
+
+    if wf_capped and wf_cap is not None:
+        wf_limit = min(limit, wf_cap) if limit > 0 else wf_cap
+        print(
+            f"Diff full-file budget: capped {len(wf_capped)} modified file(s) to {wf_limit:,} bytes each "
+            f"(aggregate budget {aggregate_limit:,} bytes): {', '.join(wf_capped)}",
+            file=sys.stderr,
+        )
+
+    for f, formatted_patch, full_content, in_baseline in prepared:
+        filename = f["filename"]
+        status = f["status"]
         prompt_parts.append(f"=== File: {filename} ===")
         prompt_parts.append(f"Status: {status}")
         prompt_parts.append("--- Diff (Patch) ---")
         prompt_parts.append(formatted_patch)
-        if full_content:
+        if in_baseline and include_full_content and status not in ("added", "removed"):
+            prompt_parts.append("Note: Pre-PR baseline content is already included in Repository Context above.")
+        elif full_content:
             prompt_parts.append("--- Full Current File Content ---")
             prompt_parts.append(fn_format_file_content(full_content))
         prompt_parts.append("=========================\n")

@@ -17,16 +17,16 @@ The action runs as a native GitHub Composite Action (`action.yml`) that boots a 
 The code review action is organized into a modular Python package (`gemini_review/`) separating domain responsibilities, with `gemini_pr_review.py` serving as the top-level execution entrypoint and backward-compatible API facade:
 
 * **`gemini_review/schemas.py`**: Pydantic schemas defining structured outputs (`InlineComment`, `ReviewResult`, `DynamicContextSelection`).
-* **`gemini_review/config.py`**: Configuration loader for `gemini-review.toml`, timeout/model defaults, exclusion pattern parsers (`get_diff_exclude_patterns`, `get_context_exclude_patterns`), and multimodal budget controls (`max_multimodal_images`, `max_triage_images`, `image_trigger_bytes`, `image_target_bytes`).
+* **`gemini_review/config.py`**: Configuration loader for `gemini-review.toml`, timeout/model defaults, context and image scope resolvers (`get_context_mode`, `get_max_context_bytes`, `get_attach_markdown_images`), exclusion pattern parsers (`get_diff_exclude_patterns`, `get_context_exclude_patterns`), and multimodal budget controls (`max_multimodal_images`, `max_triage_images`, `image_trigger_bytes`, `image_target_bytes`).
 * **`gemini_review/multimodal.py`**: Multimodal MIME type detection and allowlist validation (`is_gemini_supported_mime`), in-memory SVG-to-PNG rasterisation via `resvg_py` (`rasterize_svg_bytes`), deterministic Pillow downscaling (`optimize_image_bytes`), local Markdown/HTML image reference extraction (`extract_markdown_image_references`), and remote issue screenshot extraction/authenticated fetching (`extract_remote_image_urls`, `fetch_remote_image`, `build_triage_multimodal_parts`).
 * **`gemini_review/diff.py`**: Unified diff patch parsing, line numbering annotations (`format_diff_patch_with_line_numbers`), suggestion indentation alignment, line-range auto-correction, and inline comment filtering (`filter_review_comments`).
-* **`gemini_review/repo.py`**: File discovery (`get_all_repo_files`), file tree formatting (`generate_file_tree`), core manifest pattern matching (`is_core_file`), PR diff glob filtering (`matches_exclude_patterns`, `filter_excluded_diff_files`), import extraction, and candidate pool ranking & bounding (`rank_and_bound_candidates`).
-* **`gemini_review/context.py`**: Hybrid codebase context engine (Full vs Sparse mode), core documentation attachment, static extra context overrides, multimodal context binding, and Gemini dynamic context selection (`select_dynamic_context_files`).
-* **`gemini_review/prompts.py`**: Custom instruction loaders (`load_custom_instructions`), system prompt builder (`load_system_instruction`), PR diff prompt formatting (`build_pr_diff_prompt`, omitting redundant full-file copies on added/removed files and supporting patch-only / capped fallback under budget pressure), visual PR diff assembly (`build_visual_diff_parts`), and prompt assembly (`build_prompt`).
+* **`gemini_review/repo.py`**: Safe baseline Git tree inspection (`ensure_git_ref_available`, `list_git_tree_files`, `read_git_tree_texts`), file discovery (`get_all_repo_files`), file tree formatting (`generate_file_tree`), core manifest pattern matching (`is_core_file`), PR diff glob filtering (`matches_exclude_patterns`, `filter_excluded_diff_files`), import extraction, and candidate pool ranking & bounding (`rank_and_bound_candidates`).
+* **`gemini_review/context.py`**: Hybrid codebase context engine (Invariant `base_sha` Baseline Full mode, Working-Tree Full mode, Sparse mode, and `diff_only` mode), core documentation attachment, static extra context overrides, scoped Markdown multimodal context binding (`all | core | diff | none`) with prefix/tail separation, and Gemini dynamic context selection (`select_dynamic_context_files`).
+* **`gemini_review/prompts.py`**: Custom instruction loaders (`load_custom_instructions`), system prompt builder (`load_system_instruction`), PR diff prompt formatting (`build_pr_diff_prompt`, omitting duplicate full-file copies for baseline-included, added, or removed files and enforcing `max_diff_full_file_bytes` water-fill caps), visual PR diff assembly (`build_visual_diff_parts`), and prompt assembly (`build_prompt`).
 * **`gemini_review/utils.py`**: Core primitives (token estimation, response extraction, streaming connection-reset fallback `generate_content_with_stream_fallback`, `is_thinking_config_error` filtering, `create_genai_client`, `build_cache_tools`, multi-turn tool resolution `resolve_tool_calls_loop`, workspace rules discovery) and facade re-exports for backward compatibility.
 * **`gemini_review/github.py`**: GitHub REST API client functions for PR files, comment threads, author filtering, review postings, and raw file blob retrieval (`get_file_blob`).
 * **`gemini_review/threads.py`**: Pull request review thread retrieval and automated resolution of addressed threads (`resolve_addressed_threads`).
-* **`gemini_review/budget.py`**: Token budget allocation (`prompt_token_budget`), water-fill ceiling calculation (`compute_waterfill_cap`), and line-boundary content/patch truncation (`cap_file_content`, `cap_patch_content`) to prevent out-of-budget diffs.
+* **`gemini_review/budget.py`**: Token budget allocation (`prompt_token_budget`), aggregate full-file ceiling (`max_diff_full_file_bytes`), water-fill ceiling calculation (`compute_waterfill_cap`), and line-boundary content/patch truncation (`cap_file_content`, `cap_patch_content`) to prevent out-of-budget diffs.
 * **`gemini_review/billing_labels.py`**: Google Cloud billing labels parser and sanitisation for GCP cost attribution.
 * **`gemini_review/personas.py`**: Reviewer persona registry and prompt generation (`straight`, `dazbo`, `palpatine`, `rick`).
 * **`gemini_review/pricing.py`**: Gemini model token pricing and cost estimation engine (supporting Gemini 4 Carbon, Neon, Argon, and Hydrogen, Gemini Decision 1, and Gemini 3.6–3.8 Flash).
@@ -47,13 +47,18 @@ The PR review workflow is designed to retrieve PR details, collect local codebas
 
 ### 2. Hybrid Codebase Context Engine
 
-To provide Gemini with project-wide awareness, the script traverses the workspace to find all tracked files via `get_all_repo_files()`. It filters out files matching `is_text_file()`, `excluded_files` (from `diff_exclude_patterns`), and `context_exclude_patterns` (supporting recursive `**` globs via `matches_exclude_patterns()`), then sums remaining sizes to choose the context mode:
+To provide Gemini with project-wide awareness without duplicating payload or breaking prefix caches, `gemini_pr_review.py` builds repository context first (`build_codebase_context()`, passing `base_sha` and separating `codebase_multimodal_parts` from `dynamic_multimodal_parts`) and forwards `baseline_included_files` into `build_pr_diff_prompt()`:
 
-* **Per-File Content Truncation & Multi-Stage Prompt Budget Escalation (`cap_file_content`, `cap_patch_content`, `compute_waterfill_cap`)**: Individual modified file contents are capped at 128 KB with a loud truncation marker, while newly added and removed files omit duplicate `Full Current File Content` sections (since new files already appear in full inside the diff patch). Before sending a request, `gemini_pr_review.py` checks estimated prompt tokens against `prompt_token_budget()` and escalates cleanly through dropping `codebase_context` -> dropping remaining `Full Current File Content` sections (patches only) -> applying a water-fill patch byte cap so small changes stay intact while oversized diffs shrink within the model input window.
-* **Full Context Mode (≤ 1.5 MB):**
-  If the rest of the text files in the repository fit within the size limit, the script reads their full contents using `get_file_content()` and appends them to the prompt under the section `=== Repository Context (Full Codebase) ===`.
-* **Sparse Context Mode (> 1.5 MB):**
-  If the repository exceeds the threshold, the action activates Sparse Context Mode:
+* **`context_mode` Routing (`auto | full | sparse | diff_only`)**:
+  - `'auto'` (default): Uses Invariant Baseline Full Context Mode when baseline text files fit within `max_context_bytes` (default 1.5 MB), falling back to Working-Tree Full Context Mode if `base_sha` is unavailable, or Sparse Context Mode above `max_context_bytes`.
+  - `'full'` / `'sparse'` / `'diff_only'`: Explicitly forces Full Context, Sparse Context, or Diff-Only (skipping repository file enumeration while still preserving optional `extra_context_files` and PR-diff Markdown images).
+* **Per-File Content Truncation, Aggregate Water-Fill Cap (`max_diff_full_file_bytes`), and Prompt Budget Escalation**: Individual modified file contents are capped at 128 KB (`max_file_bytes`) with a loud truncation marker. Newly added/removed files and modified files already covered by `baseline_included_files` omit duplicate `Full Current File Content` blocks. Remaining modified full-file attachments respect the aggregate `max_diff_full_file_bytes` ceiling (default 256 KB, `0` disables) via `compute_waterfill_cap()`, while diff patches remain untouched unless the multi-stage window backstop triggers.
+* **Invariant Baseline Full Context Mode (≤ 1.5 MB at `base_sha`)**:
+  Ensures `base_sha^{tree}` is locally available via `ensure_git_ref_available()`, lists tracked blobs with `list_git_tree_files()` (excluding only `context_exclude_patterns`, intentionally retaining PR-changed files at their `base_sha` state), and reads all text payloads in a single binary `git cat-file --batch` call (`read_git_tree_texts()`). Static baseline Markdown images are read from `base_sha` (`get_git_blob()`) into the prefix, while newly added PR-diff Markdown images go into the dynamic tail.
+* **Working-Tree Full Context Mode Fallback (≤ 1.5 MB without `base_sha`)**:
+  If `base_sha` is absent (e.g. dry-run) or unreachable, reads working-tree text files via `get_all_repo_files()` and `get_file_content()` under `=== Repository Context (Full Codebase) ===`.
+* **Sparse Context Mode (> 1.5 MB)**:
+  If the repository exceeds the threshold (or `context_mode: 'sparse'` is set), the action activates Sparse Context Mode:
   1. **Visual Directory File Tree:** Generates a structured representation of the codebase using `generate_file_tree()`.
   2. **Core Manifests & Documentation:** Reads full contents of key configuration and root documentation files matching `core_file_patterns` (e.g. `README*`, `CONTRIBUTING*`, `ARCHITECTURE*`, `GEMINI.md`, `package.json`, `go.mod`, `pyproject.toml`) via `is_core_file()`, up to a configurable `max_core_context_bytes` budget (default 500 KB).
   3. **Candidate Bounding & Heuristics:** In large repositories or monorepos, candidate non-core files (already filtered against built-in exclusions and `context_exclude_patterns`) are ranked and bounded via `rank_and_bound_candidates()` using directory proximity, regex import references, and sister test/source naming, capping the candidate pool at `max_candidate_files` (default: 500) or strictly scoping to modified directories via `context_diff_directories_only`.
@@ -177,8 +182,8 @@ The issue triage script automatically categorises and labels new or reopened iss
 
 The action maintains a strict separation of concerns between operational parameters and prompt templates:
 
-* **Operational Action Inputs (`action.yml` / Workflow YAML)**: All operational configuration parameters (such as `gemini_model`, `custom_instructions`, `exclude_comment_authors`, `resolve_addressed_threads`, `skip_inline_suggestions`, `include_comment_history`, `language`, `persona`, and `timeout`) are configured via action inputs in your workflow `.yml` file and mapped to environment variables (`GEMINI_*`).
-* **Prompt Overrides (`gemini-review.toml`)**: `gemini-review.toml` is strictly reserved for custom system prompt overrides and codebase context tuning thresholds:
+* **Operational Action Inputs (`action.yml` / Workflow YAML)**: All operational configuration parameters (such as `gemini_model`, `context_mode`, `max_context_bytes`, `max_diff_full_file_bytes`, `attach_markdown_images`, `custom_instructions`, `exclude_comment_authors`, `resolve_addressed_threads`, `skip_inline_suggestions`, `include_comment_history`, `language`, `persona`, and `timeout`) are configured via action inputs in your workflow `.yml` file and mapped to environment variables (`GEMINI_*`).
+* **Prompt Overrides (`gemini-review.toml`)**: `gemini-review.toml` is strictly reserved for custom system prompt overrides and legacy TOML context tuning thresholds:
 
 ```toml
 # Default configuration
@@ -186,7 +191,7 @@ description = "Reviews a pull request using Google Gemini"
 prompt = "..."
 
 # Codebase Context Configuration (Optional)
-max_context_bytes = 1500000  # Size threshold in bytes to trigger Sparse Mode (default: 1.5 MB)
+max_context_bytes = 1536000  # Size threshold in bytes to trigger Sparse Mode (default: 1.5 MB)
 max_core_context_bytes = 500000  # Max bytes for static core docs/manifests in Sparse Mode (default: 500 KB)
 core_file_patterns = [
     "*.md",
@@ -243,4 +248,28 @@ I selected the **Direct Gemini API + Context Caching** model based on the follow
 * [Google Managed Agents Overview](https://ai.google.dev/gemini-api/docs/agents)
 * [Antigravity Agent Documentation](https://ai.google.dev/gemini-api/docs/antigravity-agent)
 * [Agent Environment Overview](https://ai.google.dev/gemini-api/docs/agent-environment)
+
+---
+
+## 🧭 Design Decisions: Prompt Volume Reduction & Invariant `base_sha` Prefix Caching
+
+### Context & Problem
+
+Empirical probing across Gemini 4 models highlighted two structural drivers of uncached input token cost:
+
+1. **Full-file payload volume, line-number gutter inflation & background attachments**: Historically, `build_pr_diff_prompt()` attached line-numbered `Full Current File Content` (`   123 | ` prefixes costing ~3.5 tokens/line) for every modified file alongside uncapped multi-file payloads and full-repo background files in Full Context Mode. Moving modified files cleanly into the unnumbered `base_sha` baseline prefix and providing `context_mode` (`'sparse'`, `'diff_only'`) plus `max_diff_full_file_bytes` cuts both uncached AI Studio prompt size and line-number overhead while keeping every diff patch intact.
+2. **Prefix mutation per PR**: Working-tree Full Context Mode filtered out `pr_filenames` (`skip_filenames`), punching different holes in the alphabetical prefix for every PR and every commit, while working-tree reads reflected PR edits inside the prefix. Because Gemini 4 only supports **implicit prefix caching** (explicit `CachedContent` is unsupported on Gemini 4; Vertex AI `eu`/`us` multi-region endpoints back Durable Implicit Caching, whereas AI Studio best-effort global implicit caching does not guarantee cross-run persistence), any prefix variation completely prevented cache reuse.
+
+### Decisions & Rationale
+
+1. **Keep `GEMINI_API_KEY` (AI Studio) First-Class — Never Require Vertex AI**:
+   Most action adopters want a zero-setup GitHub secret rather than provisioning a GCP project and Workload Identity Federation. All volume-reduction features (`baseline_included_files` deduplication, `max_diff_full_file_bytes`, `context_mode`, `attach_markdown_images`) immediately cut uncached AI Studio costs without GCP setup, while Vertex AI users gain automatic cache reuse on the same invariant prefix.
+2. **Invariant `base_sha` Baseline Snapshot Instead of Excluding `pr_filenames`**:
+   In Full Context Mode, enumerating and reading **all** tracked text blobs at `base_sha` (excluding only `context_exclude_patterns`) means two different PRs or successive force-pushes targeting `main` share a byte-identical prefix (`=== Repository Context (Full Codebase Baseline) ===`). Meanwhile, `build_codebase_context()` runs *before* `build_pr_diff_prompt()` so modified files already covered by `baseline_included_files` omit their redundant `Full Current File Content` block (retaining full copies only for files omitted from baseline context, such as files excluded by `context_exclude_patterns` or Sparse Mode).
+3. **On-Demand Shallow Fetch (`git fetch --no-tags --depth=1`) & Binary `git cat-file --batch`**:
+   Most GitHub Workflows run `actions/checkout@v7` with its default `fetch-depth: 1`, meaning `base_sha` is absent from local `.git`. Rather than requiring every consumer workflow to switch to slow `fetch-depth: 0` clones, `ensure_git_ref_available()` validates the ref format (rejecting leading dashes, `..`, and whitespace), fetches solely the single `base_sha` tree when missing, lists sizes once via `git ls-tree -r -l -z`, and streams all blobs through a single binary `git cat-file --batch` subprocess using exact byte offsets so multi-byte UTF-8 and CRLF blobs never misalign. Offline or mocked environments fall back cleanly to Working-Tree Full Context Mode.
+4. **Preserve `attach_markdown_images: 'all'` as Default with Prefix/Tail Separation**:
+   Dropping background Markdown diagrams by default saves relatively little (~1,120 tokens/image on Gemini 4) at the risk of hiding architecture diagrams from the reviewer. The action therefore keeps `'all'` as the default (offering `'core'`, `'diff'`, and `'none'` as opt-in levers), reads baseline Markdown images from `base_sha` via `get_git_blob()` into the invariant prefix, and routes newly introduced PR-diff Markdown images into `dynamic_multimodal_parts` in the prompt tail alongside `visual_diff_parts`.
+5. **Aggregate `max_diff_full_file_bytes` Water-Fill Bounding (Default 256 KB)**:
+   When files are not in `baseline_included_files`, water-fill capping preserves small modified files in full while truncating giant modified files loudly on line boundaries — never trimming the unified diff patches themselves unless the model window budget backstop triggers.
 
