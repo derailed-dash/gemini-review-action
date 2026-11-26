@@ -304,6 +304,41 @@ class TestDiffPromptIsBounded:
         assert "Context budget: truncated 1 file(s)" not in err
         assert "Diff full-file budget:" in err
 
+    def test_omitted_non_text_files_note_in_diff_prompt(self, tmp_path, monkeypatch):
+        """build_pr_diff_prompt emits an explicit manifest note for omitted lockfiles/binaries and caps sample at 10."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "pyproject.toml").write_text("version = '1.12.1'\n", encoding="utf-8")
+        files = [{"filename": "pyproject.toml", "status": "modified", "patch": "@@ -1 +1 @@\n-1\n+2"}]
+
+        small_prompt = build_pr_diff_prompt(files, omitted_non_text_files=["uv.lock (modified)"])
+        assert "1 changed file(s) in this PR were automatically omitted from the text diff" in small_prompt
+        assert "uv.lock (modified)" in small_prompt
+        assert "do not report them as missing or un-updated" in small_prompt
+
+        many_omitted = [f"vendor/lock_{i}.lock (modified)" for i in range(12)]
+        large_prompt = build_pr_diff_prompt(files, omitted_non_text_files=many_omitted)
+        assert "12 changed file(s) in this PR were automatically omitted from the text diff" in large_prompt
+        assert "vendor/lock_9.lock (modified), and 2 more" in large_prompt
+        assert "vendor/lock_10.lock (modified)" not in large_prompt
+
+    def test_unfiltered_non_text_files_auto_listed_in_diff_prompt(self, tmp_path, monkeypatch):
+        """Unfiltered files passed to build_pr_diff_prompt auto-record lockfiles/binaries while skipping images."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "pyproject.toml").write_text("version = '1.12.1'\n", encoding="utf-8")
+        unfiltered_files = [
+            {"filename": "pyproject.toml", "status": "modified", "patch": "@@ -1 +1 @@\n-1\n+2"},
+            {"filename": "uv.lock", "status": "modified", "patch": "@@ -1 +1 @@\n-a\n+b"},
+            {"filename": "docs/diagram.png", "status": "modified", "patch": ""},
+        ]
+
+        prompt = build_pr_diff_prompt(unfiltered_files)
+        assert "1 changed file(s) in this PR were automatically omitted from the text diff" in prompt
+        assert "uv.lock (modified)" in prompt
+        assert "diagram.png" not in prompt
+
+        text_only_prompt = build_pr_diff_prompt([unfiltered_files[0]])
+        assert "automatically omitted from the text diff" not in text_only_prompt
+
 
 class TestCapPatchAndWaterfill:
     def test_cap_patch_content_truncates_on_line_boundary_with_loud_marker(self):

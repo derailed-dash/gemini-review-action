@@ -161,6 +161,11 @@ def main():
     # Filter text and image files
     text_files = [f for f in files if gr.is_text_file(f["filename"])]
     image_files = [f for f in files if gr.is_supported_image(f["filename"])]
+    omitted_non_text_files = [
+        f"{f['filename']} ({f.get('status', 'modified')})"
+        for f in files
+        if not gr.is_text_file(f["filename"]) and not gr.is_supported_image(f["filename"])
+    ]
     if not text_files and not image_files:
         print("No text-based or visual image files to review. Exiting.", file=sys.stderr)
         sys.exit(0)
@@ -302,7 +307,10 @@ def main():
     )
 
     baseline_included_files: set[str] | None = context_telemetry.get("baseline_included_files") or None
-    diff_kwargs: dict[str, Any] = dict(excluded_kwargs)
+    diff_base_kwargs: dict[str, Any] = dict(excluded_kwargs)
+    if omitted_non_text_files:
+        diff_base_kwargs["omitted_non_text_files"] = omitted_non_text_files
+    diff_kwargs: dict[str, Any] = dict(diff_base_kwargs)
     if baseline_included_files:
         diff_kwargs["baseline_included_files"] = baseline_included_files
 
@@ -329,7 +337,7 @@ def main():
         codebase_context = ""
         codebase_multimodal_parts = []
         if baseline_included_files:
-            pr_diff_prompt = gr.build_pr_diff_prompt(text_files, config, **excluded_kwargs)
+            pr_diff_prompt = gr.build_pr_diff_prompt(text_files, config, **diff_base_kwargs)
             dynamic_pr_prompt = _assemble_dynamic_prompt(pr_diff_prompt)
         contents_to_send = _assemble_direct_contents(
             codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, tail_visual_parts
@@ -342,7 +350,7 @@ def main():
             "Dropping Full Current File Content blocks and keeping diff patches only.",
             file=sys.stderr,
         )
-        pr_diff_prompt = gr.build_pr_diff_prompt(text_files, config, include_full_content=False, **excluded_kwargs)
+        pr_diff_prompt = gr.build_pr_diff_prompt(text_files, config, include_full_content=False, **diff_base_kwargs)
         dynamic_pr_prompt = _assemble_dynamic_prompt(pr_diff_prompt)
         contents_to_send = _assemble_direct_contents(
             codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, tail_visual_parts
@@ -369,7 +377,7 @@ def main():
                 config,
                 include_full_content=False,
                 max_patch_bytes=patch_cap,
-                **excluded_kwargs,
+                **diff_base_kwargs,
             )
             dynamic_pr_prompt = _assemble_dynamic_prompt(pr_diff_prompt)
             contents_to_send = _assemble_direct_contents(
