@@ -328,13 +328,28 @@ class TestInvariantBaselineContextAndModes:
 
         main()
 
+        from gemini_pr_review import BASELINE_CONTEXT_ACK
+
         sent = mock_client.models.generate_content.call_args.kwargs["contents"]
-        assert isinstance(sent, str)
-        assert "Full Codebase Baseline" in sent
-        assert "--- Full Current File Content ---" not in sent
-        assert "Pre-PR baseline content is already included in Repository Context above." in sent
-        assert "+ | HEAD_CHANGED_LINE_2" in sent
-        assert "HELPER_BODY" in sent
+        assert isinstance(sent, list)
+        assert len(sent) == 3
+        assert sent[0].role == "user"
+        assert sent[1].role == "model"
+        assert sent[1].parts[0].text == BASELINE_CONTEXT_ACK
+        assert sent[2].role == "user"
+
+        turn0_text = "\n".join(p.text for p in sent[0].parts if getattr(p, "text", None))
+        turn2_text = "\n".join(p.text for p in sent[2].parts if getattr(p, "text", None))
+        assert "Full Codebase Baseline" in turn0_text
+        assert "HELPER_BODY" in turn0_text
+        assert "--- Full Current File Content ---" not in turn2_text
+        assert "Pre-PR baseline content is already included in Repository Context above." in turn2_text
+        assert "+ | HEAD_CHANGED_LINE_2" in turn2_text
+        assert "Pull Request Number" in turn2_text
+        assert "#7" in turn2_text
+
+        gen_cfg = mock_client.models.generate_content.call_args.kwargs["config"]
+        assert "Pull Request Number" not in gen_cfg.system_instruction
 
     def test_get_git_blob_rejects_empty_path(self, mocker):
         from gemini_review.repo import get_git_blob
