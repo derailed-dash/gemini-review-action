@@ -30,9 +30,12 @@ See the supporting blog post about this action [here](https://medium.com/google-
   - [Issues Triage Action Definition](#issues-triage-action-definition)
 - [Configuration](#configuration)
   - [Action Inputs](#action-inputs)
+  - [Reasoning & Thinking Budget Control](#reasoning--thinking-budget-control)
   - [Codebase Context Configuration](#codebase-context-configuration)
+  - [Cost & Caching Optimisation (Gemini 4)](#cost--caching-optimisation-gemini-4)
   - [Multimodal Context & Visual PR Diffing](#multimodal-context--visual-pr-diffing)
-  - [Custom Prompts / Instructions](#custom-prompts--instructions)
+  - [Reviewer Personas](#reviewer-personas)
+  - [Custom Prompts & Instructions: Extending vs Replacing](#custom-prompts--instructions-extending-vs-replacing)
   - [Prompt Placeholders](#prompt-placeholders)
 - [Understanding the Token Usage & Cost Efficiency Report](#understanding-the-token-usage--cost-efficiency-report)
   - [Metrics Explained](#metrics-explained)
@@ -54,7 +57,7 @@ See the supporting blog post about this action [here](https://medium.com/google-
 - **Tokenomics & Cost Telemetry Report**: Appends a collapsible token usage and **estimated dollar cost** summary to each review, with the rate that was applied stated alongside it.
 - **Drop-in Migration**: Fully compatible as a direct, drop-in replacement for the deprecated `run-gemini-cli` action.
 - **Structured Outputs**: Error-free JSON response formatting using Pydantic schema validation.
-- **Multimodal Context, Visual PR Diffing & Triage Screenshots**: Inspects repository visual assets, issue screenshots, and documents (PNG, JPEG, WebP, GIF, SVG, PDF). Local images referenced in Markdown docs and remote screenshots embedded in issues (`github.com/user-attachments/assets/...`, `githubusercontent.com/...`) are automatically extracted and attached as multimodal parts. When PRs modify images, Gemini performs side-by-side visual diffing between baseline and updated versions to catch visual regressions and layout issues. Includes in-memory SVG-to-PNG rasterisation (`resvg-py`) and intelligent deterministic downscaling (Pillow) to minimise token consumption and latency.
+- **Multimodal Context, Visual PR Diffing & Triage Screenshots**: Inspects repository visual assets, issue screenshots, and documents (PNG, JPEG, WebP, GIF, SVG, PDF). Local images referenced in Markdown docs and remote screenshots embedded in issues (`github.com/user-attachments/assets/...`, `githubusercontent.com/...`) are automatically extracted and attached with tiered per-part `media_resolution` (`medium` for context/PDFs/triage to cut vision tokens by 50%; `high` for active visual diffs). When PRs modify or rename images, Gemini performs side-by-side visual diffing between baseline and updated versions to catch visual regressions and layout issues. Includes in-memory SVG-to-PNG rasterisation (`resvg-py`) and intelligent deterministic downscaling (Pillow) to minimise token consumption and latency.
 - **Hybrid Codebase Context**: Automatically includes codebase context based on the overall size of the codebase. If the codebase isn't huge, the entire repo is loaded into context; but if it is huge, the agent reads the overall directory tree and judiciously includes a subset of the repo. (Note that it always reads markdown files, dependency files, packaging files, etc.)
 - **Interactive Suggestions**: Formats code recommendations inside native GitHub ` ```suggestion ` blocks for one-click merge applications.
 - **Triggers**: The action triggers automatically in response to PR events. It can also be triggered by posting a comment in the PR starting with `/gemini-review`.
@@ -70,7 +73,7 @@ See the supporting blog post about this action [here](https://medium.com/google-
 - **Gemini Context Caching**: Integrates with Gemini's caching tiers — **95% cost reduction** (`0.05x` cached read rate) via Gemini 4 (`gemini-4-*`) **Durable Implicit Caching** (requires **Vertex AI on `eu` or `us` via WIF/ADC**; Google AI Studio `GEMINI_API_KEY` and Vertex `global` offer best-effort ephemeral caching only and rely on prompt-volume controls), plus stateless explicit `CachedContent` (**90% discount**) on Gemini 3 (`gemini-3.*`) models for repositories over 32k tokens on **both** AI Studio and Vertex AI.
 - **Multi-Turn & Cross-PR Cache Reuse**: Keeps `[system_instruction + tools + codebase_context]` as an invariant `base_sha` prefix so Vertex AI (`eu`/`us`) Gemini 4 runs achieve up to 24-hour cross-run cache reuse, while Gemini 3 runs reuse active server-side explicit cache handles across multi-turn tool/skill calls and successive PR pushes within the TTL window (1h default).
 
-![Leveraing MCP and Skills](/assets/agent_intelligence_diagram.png)
+![Leveraging MCP and Skills](assets/agent_intelligence_diagram.png)
 
 ## Author
 
@@ -82,7 +85,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## How It Works
 
-1. **Change Discovery**: The action scans the Pull Request diff. It uses a robust extension and path exclusion list to automatically filter out binary, encrypted, or locked files (like `.png`, `.enc`, `uv.lock`, `.env`, etc.).
+1. **Change Discovery**: The action scans the Pull Request diff. It uses a robust extension and path exclusion list to automatically filter out non-text binaries, encrypted files, and lockfiles (`uv.lock`, `.env`, etc.) from text diffs while routing supported image changes (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.svg`) to visual diffing.
 2. **Hybrid Context Enrichment**: In addition to surrounding modified file content, the action gathers context from the rest of the repository. It measures the total size of all other tracked text files:
    - **Full Context Mode**: If the codebase is under the configured size threshold (default: 1.5 MB), the full contents of all other text files are included.
    - **Sparse Context Mode**: If the codebase exceeds the threshold, it includes a structured text-based file tree of the entire project, plus the full contents of key configuration and documentation files (like `*.md`, `pyproject.toml`, `package.json`, `go.mod`, etc.).
@@ -488,6 +491,9 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 | `max_triage_images` | Maximum number of remote screenshots attached during issue triage (default: 5). | No | `5` |
 | `image_trigger_bytes` | File size threshold in bytes above which raster images are downscaled before attachment (default: 614400 / 600 KB). | No | `614400` |
 | `image_target_bytes` | Target size in bytes when downscaling large raster images (default: 307200 / 300 KB). | No | `307200` |
+| `context_media_resolution` | Gemini per-part `media_resolution` for background Markdown images and attached PDFs (`'medium'` [default, 560 tokens] or `'high'` [1,120 tokens]; `'low'` is disallowed). | No | `'medium'` |
+| `visual_diff_media_resolution` | Gemini per-part `media_resolution` for active PR visual diff images (`'high'` [default, 1,120 tokens] or `'medium'` [560 tokens]; `'low'` is disallowed). | No | `'high'` |
+| `triage_media_resolution` | Gemini per-part `media_resolution` for remote issue triage screenshots (`'medium'` [default, 560 tokens] or `'high'` [1,120 tokens]; `'low'` is disallowed). | No | `'medium'` |
 | `service_tier` | Inference tier for Google AI Studio (`GEMINI_API_KEY`): `'standard'` (default) or `'flex'` (**50% discount** across all input, cached, thinking, and output tokens with 1–15 min target latency; ignored with a warning on Vertex AI). | No | `'standard'` |
 | `service_tier_fallback` | When `service_tier` is `'flex'`, automatically fall back to `'standard'` tier after bounded retries if capacity is shed (`503`/`429`) or timed out. | No | `'true'` |
 | `timeout` | Timeout for API requests in seconds (the Gemini review client enforces a 300s minimum HTTP timeout floor — raised to 600s for `service_tier: 'flex'` — and automatically falls back to streaming on connection resets). | No | `60` |
@@ -600,7 +606,13 @@ core_file_patterns = [
 Gemini Review Action supports multimodal context inspection, side-by-side visual PR diffing, and remote screenshot extraction for issue triage:
 
 * **Automatic Markdown Image Reference Resolution**:
-  Whenever Markdown documentation (such as `README.md`, `DESIGN.md`, `ARCHITECTURE.md`, or newly added diff documentation) is included in the review context, any local repository images referenced via standard Markdown (`![alt](path/to/img.png)`) or HTML (`<img src="path/to/img.png">`) are automatically extracted, validated against path traversal, and attached as multimodal parts. This gives Gemini the complete visual context behind architecture diagrams, wireframes, and screenshots referenced in documentation.
+  Whenever Markdown documentation (such as `README.md`, `DESIGN.md`, `ARCHITECTURE.md`, or newly added diff documentation) is included in the review context, any local repository images referenced via standard Markdown (`![alt](path/to/img.png)`) or HTML (`<img src="path/to/img.png">`) are automatically extracted, validated against path traversal, and attached as multimodal parts. Images already covered by an active PR visual diff are automatically skipped here so they are not attached twice. This gives Gemini the complete visual context behind architecture diagrams, wireframes, and screenshots referenced in documentation.
+* **Tiered Per-Part `media_resolution` Optimisation**:
+  On Gemini 4 and Gemini 3 models, vision token billing is governed by `media_resolution` (`medium` = 560 tokens/image or page; `high` = 1,120 tokens/image or page; omitting it defaults to `high`). The action applies per-part `media_resolution` selectively by role — cutting vision token costs by **50%** on contextual images and triage screenshots while keeping full fidelity on visual PR diffs:
+  - **Background Markdown images & attached PDFs (`context_media_resolution`)**: `'medium'` (default, 560 tokens) — preserves diagram labels and PDF OCR accuracy at half the token cost.
+  - **Remote issue triage screenshots (`triage_media_resolution`)**: `'medium'` (default, 560 tokens) — preserves readability of error dialogs and stack traces.
+  - **Active PR visual diffs (`visual_diff_media_resolution`)**: `'high'` (default, 1,120 tokens) — preserves pixel, alignment, and fine label fidelity across before/after comparisons.
+  - **`'low'` is intentionally disallowed**: Invalid values (including `'low'`) log a warning and fall back to the role's safe default. If a custom/older model rejects per-part `media_resolution` with `400 INVALID_ARGUMENT`, the action automatically strips `media_resolution` and retries with the images still attached before ever falling back to text-only.
 * **Side-by-Side Visual PR Diffing**:
   When a Pull Request adds, deletes, or modifies visual assets (`.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.svg`), the action constructs structured visual diff parts for Gemini:
   - For modified images, both the baseline version (`base_sha`) and the updated version (`head_sha`) are retrieved directly and presented side-by-side with clear labels.
@@ -608,7 +620,7 @@ Gemini Review Action supports multimodal context inspection, side-by-side visual
 * **Remote Screenshot Extraction for Issue Triage**:
   During issue triage (`command: 'triage'`), the action parses the issue body and discussion comments for remote HTTPS image URLs (`![alt](https://...)` and `<img src="https://...">`), including extensionless GitHub user-uploaded assets (`github.com/user-attachments/assets/...` and `githubusercontent.com/...`):
   - For GitHub-hosted URLs, requests automatically include `Authorization: Bearer <GITHUB_TOKEN>` so screenshots in private or internal repositories are fetched seamlessly (credentials are never sent to third-party domains).
-  - Screenshots are streamed with a 20 MB download safety limit, downscaled via `optimize_image_bytes()`, and attached as `types.Part.from_bytes` up to `max_triage_images` (default: `5`). If any remote screenshot fails or times out, triage gracefully continues with text-only classification.
+  - Screenshots are streamed with a 20 MB download safety limit, downscaled via `optimize_image_bytes()`, and attached via `build_media_part()` at `triage_media_resolution` (default: `'medium'`, 560 tokens) up to `max_triage_images` (default: `5`). If a model rejects per-part `media_resolution`, triage strips it and retries with screenshots intact before degrading to text-only classification if downloads or vision parsing fail.
 * **SVG-to-PNG Rasterisation & Deterministic Pillow Downscaling**:
   To ensure full compatibility with the Gemini Vision API and protect token budgets:
   - Scalable Vector Graphics (`.svg` / `image/svg+xml`) are rasterised in memory to `image/png` via `resvg-py` (as the Gemini Vision API strictly rejects `image/svg+xml`).
@@ -767,7 +779,7 @@ Token Usage: 265,849 input tokens (94.4% cached), 210 output tokens, 2,048 think
 * **Estimated Total Cost**: The token counts above priced at the model's published rate. **A model with no entry in the rate table reports tokens and no cost** rather than borrowing another model's rate, because a missing number is obvious and a wrong one is not. Where a model has a time-boxed introductory rate, the end date is part of the table, so the figure stays correct on both sides of it and a note says which rate was applied.
 * **Cost caveats**: Rendered as quoted lines under the table rather than left to documentation — any introductory-rate or regional-tier note, plus the fact that context-cache **storage** (where a model charges for explicit storage per token-hour) is not counted, so estimates can run slightly low on infrequently reviewed explicit-cache runs.
 
-## How It Works
+## Pipeline Architecture & Execution
 
 ![Gemini PR Review & Triage Pipeline Flowchart](assets/gemini_review_flow.png)
 
@@ -919,11 +931,13 @@ This project uses `uv` for python environment and dependency management. To conf
    uv sync
    ```
 
-2. **Linting & Code Formatting:**
-   We enforce strict syntax, formatting, and spelling checks using `ruff` and `codespell`. Run these from the project root:
+2. **Linting, Formatting & Type Checking:**
+   We enforce strict syntax, formatting, spelling, and static type checks using `codespell`, `ruff`, and `pyright`. Run these from the project root:
    ```bash
    uvx codespell@latest -s
-   uvx ruff@latest check --fix .
+   uvx ruff@latest format --check .
+   uvx ruff@latest check .
+   uvx pyright@latest
    ```
 
 3. **Running the Unit Tests:**

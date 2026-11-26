@@ -181,3 +181,48 @@ class TestConfigAndModelResolution:
         monkeypatch.delenv("GEMINI_SERVICE_TIER_FALLBACK", raising=False)
         assert get_service_tier_fallback({"service_tier_fallback": None}) is True
         assert get_service_tier_fallback({"service_tier_fallback": "maybe"}) is True
+
+    def test_get_media_resolution_defaults_env_and_validation(self, monkeypatch, capsys):
+        """Media resolution resolvers default safely ('medium'/'high'), honour env > config, and forbid 'low'."""
+        from gemini_review.config import (
+            VALID_MEDIA_RESOLUTIONS,
+            get_context_media_resolution,
+            get_triage_media_resolution,
+            get_visual_diff_media_resolution,
+        )
+
+        assert VALID_MEDIA_RESOLUTIONS == ("medium", "high")
+        for var in (
+            "GEMINI_CONTEXT_MEDIA_RESOLUTION",
+            "GEMINI_VISUAL_DIFF_MEDIA_RESOLUTION",
+            "GEMINI_TRIAGE_MEDIA_RESOLUTION",
+        ):
+            monkeypatch.delenv(var, raising=False)
+
+        assert get_context_media_resolution() == "medium"
+        assert get_visual_diff_media_resolution() == "high"
+        assert get_triage_media_resolution() == "medium"
+
+        assert get_context_media_resolution({"context_media_resolution": "HIGH"}) == "high"
+        assert get_visual_diff_media_resolution({"visual_diff_media_resolution": "Medium"}) == "medium"
+        assert get_triage_media_resolution({"triage_media_resolution": "HIGH"}) == "high"
+
+        monkeypatch.setenv("GEMINI_CONTEXT_MEDIA_RESOLUTION", "  HiGh ")
+        assert get_context_media_resolution({"context_media_resolution": "medium"}) == "high"
+
+        monkeypatch.setenv("GEMINI_VISUAL_DIFF_MEDIA_RESOLUTION", " medium ")
+        assert get_visual_diff_media_resolution({"visual_diff_media_resolution": "high"}) == "medium"
+
+        monkeypatch.setenv("GEMINI_TRIAGE_MEDIA_RESOLUTION", " HIGH ")
+        assert get_triage_media_resolution({"triage_media_resolution": "medium"}) == "high"
+
+        # 'low', 'ultra_high', and unknown strings must warn and fall back to safe defaults (never 'low')
+        for bad in ("low", "ultra_high", "bogus"):
+            monkeypatch.setenv("GEMINI_CONTEXT_MEDIA_RESOLUTION", bad)
+            monkeypatch.setenv("GEMINI_VISUAL_DIFF_MEDIA_RESOLUTION", bad)
+            monkeypatch.setenv("GEMINI_TRIAGE_MEDIA_RESOLUTION", bad)
+            assert get_context_media_resolution() == "medium"
+            assert get_visual_diff_media_resolution() == "high"
+            assert get_triage_media_resolution() == "medium"
+            err = capsys.readouterr().err
+            assert bad in err

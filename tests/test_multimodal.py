@@ -229,16 +229,34 @@ def test_build_codebase_context_rasterizes_svg_and_skips_corrupt_svg(tmp_path, m
 def test_count_text_tokens_multimodal():
     from google.genai import types
 
-    from gemini_review import count_text_tokens
+    from gemini_review import build_media_part, count_text_tokens
 
     # Text only (100 chars -> 25 tokens)
     text_sample = "a" * 100
     assert count_text_tokens(None, "gemini-3.8-flash", text_sample) == 25
 
-    # Heterogeneous list with a text string and a Part (~25 tokens + 258 tokens = 283)
-    part = types.Part.from_bytes(data=b"fake_image_bytes", mime_type="image/png")
-    contents = [text_sample, part]
-    assert count_text_tokens(None, "gemini-3.8-flash", contents) == 283
+    # Unspecified Part defaults to high (1120 tokens -> 25 + 1120 = 1145)
+    part_default = types.Part.from_bytes(data=b"fake_image_bytes", mime_type="image/png")
+    assert count_text_tokens(None, "gemini-4-hydrogen", [text_sample, part_default]) == 1145
+
+    # Explicit per-part resolution tiers
+    part_medium = build_media_part(b"fake_image_bytes", "image/png", media_resolution="medium")
+    part_high = build_media_part(b"fake_image_bytes", "image/png", media_resolution="high")
+    part_ultra = types.Part.from_bytes(
+        data=b"fake_image_bytes",
+        mime_type="image/png",
+        media_resolution=types.PartMediaResolutionLevel.MEDIA_RESOLUTION_ULTRA_HIGH,
+    )
+    part_low = types.Part.from_bytes(
+        data=b"fake_image_bytes",
+        mime_type="image/png",
+        media_resolution=types.PartMediaResolutionLevel.MEDIA_RESOLUTION_LOW,
+    )
+
+    assert count_text_tokens(None, "gemini-4-hydrogen", [text_sample, part_medium]) == 585
+    assert count_text_tokens(None, "gemini-4-hydrogen", [text_sample, part_high]) == 1145
+    assert count_text_tokens(None, "gemini-4-hydrogen", [text_sample, part_ultra]) == 2265
+    assert count_text_tokens(None, "gemini-4-hydrogen", [text_sample, part_low]) == 305
 
 
 def test_build_codebase_context_with_markdown_image(tmp_path, monkeypatch):
@@ -681,3 +699,258 @@ def test_attach_markdown_images_modes_and_prefix_tail_separation(tmp_path, monke
     assert not any("future.png" in lbl for lbl in static_pure_labels)
     assert any("arch.png" in lbl for lbl in static_pure_labels)
     assert dynamic_pure == []
+
+
+def test_build_media_part_and_strip_media_resolution(recwarn):
+    from google.genai import types
+
+    from gemini_review import build_media_part, strip_media_resolution
+
+    part_med = build_media_part(b"img", "image/png", media_resolution="medium")
+    part_high = build_media_part(b"img", "image/png", media_resolution="high")
+    # CaseInSensitiveEnum must not emit any UserWarning when using resolved enum levels
+    assert not [w for w in recwarn if issubclass(w.category, UserWarning)]
+    assert part_med.media_resolution is not None
+    assert part_med.media_resolution.level == types.PartMediaResolutionLevel.MEDIA_RESOLUTION_MEDIUM
+    assert part_high.media_resolution is not None
+    assert part_high.media_resolution.level == types.PartMediaResolutionLevel.MEDIA_RESOLUTION_HIGH
+
+    # 'low' is disallowed and omits media_resolution rather than setting MEDIA_RESOLUTION_LOW
+    part_invalid = build_media_part(b"img", "image/png", media_resolution="low")
+    assert part_invalid.media_resolution is None
+
+    # strip_media_resolution does not mutate originals and returns changed=True/False accurately
+    stripped_list, changed = strip_media_resolution(["label", part_med])
+    assert changed is True
+    assert stripped_list[0] == "label"
+    assert stripped_list[1].media_resolution is None
+    assert stripped_list[1].inline_data.data == b"img"
+    assert part_med.media_resolution is not None  # original untouched
+
+    content = types.Content(role="user", parts=[types.Part.from_text(text="hi"), part_high])
+    stripped_content, content_changed = strip_media_resolution(content)
+    assert content_changed is True
+    assert stripped_content.parts[1].media_resolution is None
+    assert part_high.media_resolution is not None
+
+    unchanged, not_changed = strip_media_resolution(["only text", part_invalid])
+    assert not_changed is False
+    assert unchanged == ["only text", part_invalid]
+
+
+def test_tiered_media_resolution_applied_across_roles(tmp_path, mocker, monkeypatch):
+    from google.genai import types
+
+    from gemini_review import build_codebase_context, build_triage_multimodal_parts, build_visual_diff_parts
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("GEMINI_CONTEXT_MEDIA_RESOLUTION", raising=False)
+    monkeypatch.delenv("GEMINI_VISUAL_DIFF_MEDIA_RESOLUTION", raising=False)
+    monkeypatch.delenv("GEMINI_TRIAGE_MEDIA_RESOLUTION", raising=False)
+
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    img_bytes = _minimal_png_bytes()
+    (docs / "diagram.png").write_bytes(img_bytes)
+    (tmp_path / "spec.pdf").write_bytes(b"%PDF-1.4 fake")
+    (tmp_path / "README.md").write_text("# Doc\n![Diagram](docs/diagram.png)\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "gemini_review.prompts.get_all_repo_files", lambda: ["README.md", "docs/diagram.png", "spec.pdf"]
+    )
+    monkeypatch.setattr(
+        "gemini_review.prompts.get_file_content",
+        lambda f: "# Doc\n![Diagram](docs/diagram.png)\n" if f == "README.md" else "",
+    )
+
+    # 1. Context images + extra PDFs default to MEDIUM
+    ctx_parts: list = []
+    build_codebase_context(
+        files=[{"filename": "app.py", "status": "modified"}],
+        config={"max_context_bytes": 10000, "extra_context_files": "spec.pdf"},
+        multimodal_parts=ctx_parts,
+    )
+    ctx_media = [p for p in ctx_parts if isinstance(p, types.Part)]
+    assert len(ctx_media) == 2
+    assert all(p.media_resolution.level == types.PartMediaResolutionLevel.MEDIA_RESOLUTION_MEDIUM for p in ctx_media)
+
+    # Override via env to HIGH
+    monkeypatch.setenv("GEMINI_CONTEXT_MEDIA_RESOLUTION", "high")
+    ctx_parts_high: list = []
+    build_codebase_context(
+        files=[{"filename": "app.py", "status": "modified"}],
+        config={"max_context_bytes": 10000},
+        multimodal_parts=ctx_parts_high,
+    )
+    assert ctx_parts_high[1].media_resolution.level == types.PartMediaResolutionLevel.MEDIA_RESOLUTION_HIGH
+
+    # 2. Visual PR diffs default to HIGH across modified (base+head), added, and removed
+    (tmp_path / "ui.png").write_bytes(img_bytes)
+    (tmp_path / "added.png").write_bytes(img_bytes)
+    monkeypatch.setattr("gemini_review.get_git_blob", lambda path, ref: img_bytes)
+    _, diff_parts = build_visual_diff_parts(
+        [
+            {"filename": "ui.png", "status": "modified"},
+            {"filename": "added.png", "status": "added"},
+            {"filename": "removed.png", "status": "removed"},
+        ],
+        base_sha="main",
+    )
+    diff_media = [p for p in diff_parts if isinstance(p, types.Part)]
+    assert len(diff_media) == 4
+    assert all(p.media_resolution.level == types.PartMediaResolutionLevel.MEDIA_RESOLUTION_HIGH for p in diff_media)
+
+    monkeypatch.setenv("GEMINI_VISUAL_DIFF_MEDIA_RESOLUTION", "medium")
+    _, diff_parts_med = build_visual_diff_parts([{"filename": "added.png", "status": "added"}], base_sha="main")
+    assert diff_parts_med[1].media_resolution.level == types.PartMediaResolutionLevel.MEDIA_RESOLUTION_MEDIUM
+
+    # 3. Issue triage screenshots default to MEDIUM and honour override
+    mock_resp = mocker.Mock(
+        status_code=200,
+        headers={"Content-Type": "image/png"},
+    )
+    mock_resp.iter_content.return_value = [img_bytes]
+    mocker.patch("gemini_review.multimodal.requests.get", return_value=mock_resp)
+
+    triage_parts = build_triage_multimodal_parts("![Shot](https://github.com/user-attachments/assets/abc)")
+    assert len(triage_parts) == 1
+    assert triage_parts[0].media_resolution.level == types.PartMediaResolutionLevel.MEDIA_RESOLUTION_MEDIUM
+
+    monkeypatch.setenv("GEMINI_TRIAGE_MEDIA_RESOLUTION", "high")
+    triage_parts_high = build_triage_multimodal_parts("![Shot](https://github.com/user-attachments/assets/abc)")
+    assert triage_parts_high[0].media_resolution.level == types.PartMediaResolutionLevel.MEDIA_RESOLUTION_HIGH
+
+
+def test_markdown_visual_diff_deduplication_skips_changed_images(tmp_path, monkeypatch):
+    import subprocess
+
+    from gemini_review.context import build_codebase_context
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    assets = repo / "assets"
+    assets.mkdir()
+    png = _minimal_png_bytes()
+    (assets / "changed.png").write_bytes(png)
+    (assets / "untouched.png").write_bytes(png)
+    (repo / "README.md").write_text(
+        "# Readme\n![Changed](assets/changed.png)\n![Untouched](assets/untouched.png)\n",
+        encoding="utf-8",
+    )
+
+    for cmd in (
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "init", "-b", "main"],
+        ["git", "add", "."],
+        ["git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "base"],
+    ):
+        subprocess.run(cmd, cwd=repo, check=True, capture_output=True)
+    base_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+    monkeypatch.chdir(repo)
+    pr_files = [
+        {
+            "filename": "README.md",
+            "status": "modified",
+            "patch": "@@ -1,3 +1,4 @@\n # Readme\n+![ChangedAgain](assets/changed.png)",
+        }
+    ]
+
+    static_parts: list = []
+    dynamic_parts: list = []
+    build_codebase_context(
+        files=pr_files,
+        config={"attach_markdown_images": "all"},
+        multimodal_parts=static_parts,
+        base_sha=base_sha,
+        dynamic_multimodal_parts=dynamic_parts,
+        visual_diff_files=["assets/changed.png"],
+    )
+
+    all_labels = [p for p in static_parts + dynamic_parts if isinstance(p, str)]
+    assert any("untouched.png" in lbl for lbl in all_labels)
+    assert not any("changed.png" in lbl for lbl in all_labels)
+
+
+def test_resolve_part_media_resolution_and_token_estimator_accept_dict_and_object():
+    from google.genai import types
+
+    from gemini_review import count_text_tokens, resolve_part_media_resolution
+
+    assert (
+        resolve_part_media_resolution(
+            types.PartMediaResolution(level=types.PartMediaResolutionLevel.MEDIA_RESOLUTION_MEDIUM)
+        )
+        == types.PartMediaResolutionLevel.MEDIA_RESOLUTION_MEDIUM
+    )
+    assert resolve_part_media_resolution({"level": "high"}) == types.PartMediaResolutionLevel.MEDIA_RESOLUTION_HIGH
+    assert resolve_part_media_resolution({"level": "low"}) is None
+
+    dict_text = {"text": "a" * 40}
+    dict_med = {"inline_data": b"x", "media_resolution": {"level": "MEDIA_RESOLUTION_MEDIUM"}}
+    assert count_text_tokens(None, "gemini-4-hydrogen", [dict_text, dict_med]) == 570
+
+
+def test_build_visual_diff_parts_handles_renamed_images(tmp_path, monkeypatch):
+    from google.genai import types
+
+    from gemini_review import build_visual_diff_parts
+
+    monkeypatch.chdir(tmp_path)
+    base_bytes = _minimal_png_bytes()
+    head_bytes = _minimal_png_bytes() + b"\x00"
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets" / "new_name.png").write_bytes(head_bytes)
+
+    monkeypatch.setattr(
+        "gemini_review.get_git_blob",
+        lambda path, ref: base_bytes if ref == "main" and path == "assets/old_name.png" else None,
+    )
+
+    summary, parts = build_visual_diff_parts(
+        [{"filename": "assets/new_name.png", "previous_filename": "assets/old_name.png", "status": "renamed"}],
+        base_sha="main",
+    )
+
+    assert "Renamed image: assets/old_name.png -> assets/new_name.png" in summary
+    media_parts = [p for p in parts if isinstance(p, types.Part)]
+    assert len(media_parts) == 2
+    assert all(p.media_resolution.level == types.PartMediaResolutionLevel.MEDIA_RESOLUTION_HIGH for p in media_parts)
+    assert media_parts[0].inline_data.data == base_bytes
+    assert media_parts[1].inline_data.data == head_bytes
+
+
+def test_extra_context_files_and_renamed_images_deduplicated_against_visual_diffs(tmp_path, monkeypatch):
+    from gemini_review.context import build_codebase_context
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "assets").mkdir()
+    png = _minimal_png_bytes()
+    (tmp_path / "assets" / "old.png").write_bytes(png)
+    (tmp_path / "assets" / "new.png").write_bytes(png)
+    (tmp_path / "assets" / "keep.png").write_bytes(png)
+    (tmp_path / "README.md").write_text("# Doc\n![Old](assets/old.png)\n![Keep](assets/keep.png)\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "gemini_review.prompts.get_all_repo_files",
+        lambda: ["README.md", "assets/old.png", "assets/new.png", "assets/keep.png"],
+    )
+    monkeypatch.setattr(
+        "gemini_review.prompts.get_file_content",
+        lambda f: "# Doc\n![Old](assets/old.png)\n![Keep](assets/keep.png)\n" if f == "README.md" else "",
+    )
+
+    parts: list = []
+    build_codebase_context(
+        files=[
+            {"filename": "README.md", "status": "modified", "patch": ""},
+            {"filename": "assets/new.png", "previous_filename": "assets/old.png", "status": "renamed"},
+        ],
+        config={"attach_markdown_images": "all", "extra_context_files": "./assets/new.png"},
+        multimodal_parts=parts,
+    )
+    labels = [p for p in parts if isinstance(p, str)]
+    assert any("keep.png" in lbl for lbl in labels)
+    assert not any("old.png" in lbl for lbl in labels)
+    assert not any("new.png" in lbl for lbl in labels)

@@ -34,10 +34,12 @@ We enforce strict formatting, spelling, and test coverage. Before submitting any
    uvx codespell@latest -s
    ```
 
-2. **Lint and Auto-Fix Style Issues:**
-   We use `ruff` to perform static code checks and verify formatting:
+2. **Lint, Format, and Type-Check:**
+   We use `ruff` and `pyright` to perform static code checks, formatting, and type verification:
    ```bash
+   uvx ruff@latest format --check .
    uvx ruff@latest check --fix .
+   uvx pyright@latest
    ```
 
 3. **Run Unit Tests:**
@@ -60,7 +62,7 @@ Format:
 * `fix`: A bug fix (e.g. `fix(review): handle empty diff edge-case`)
 * `docs`: Documentation updates only (e.g. `docs: update setup examples`)
 * `style`: Code style changes (white-space, formatting, etc.)
-* `refactor`: Restructuring code without changing behavior
+* `refactor`: Restructuring code without changing behaviour
 * `test`: Adding or correcting tests
 * `chore`: Auxiliary tool changes, build settings, or dependencies
 

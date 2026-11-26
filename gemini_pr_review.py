@@ -290,6 +290,19 @@ def main():
         ctx_kwargs["base_sha"] = base_sha
     if accepts_var_kw or "dynamic_multimodal_parts" in ctx_params:
         ctx_kwargs["dynamic_multimodal_parts"] = dynamic_md_parts
+    if image_files and (accepts_var_kw or "visual_diff_files" in ctx_params):
+        max_visual_images = gr.get_max_multimodal_images(config)
+        visual_candidates = image_files[:max_visual_images] if max_visual_images > 0 else []
+        if visual_candidates:
+            ctx_kwargs["visual_diff_files"] = [
+                entry
+                for f in visual_candidates
+                for entry in (
+                    [f["filename"], f["previous_filename"]]
+                    if f.get("status") == "renamed" and f.get("previous_filename")
+                    else [f["filename"]]
+                )
+            ]
     if effective_service_tier == "flex":
         if accepts_var_kw or "service_tier" in ctx_params:
             ctx_kwargs["service_tier"] = effective_service_tier
@@ -482,24 +495,54 @@ def main():
                         )
                     except Exception as cache_err:
                         if codebase_multimodal_parts:
-                            print(
-                                f"Warning: Context cache creation with multimodal attachments failed ({cache_err}). "
-                                "Retrying cache creation with text-only codebase context...",
-                                file=sys.stderr,
-                            )
-                            codebase_multimodal_parts = []
-                            fingerprint = gr.context_cache_fingerprint(system_instruction, codebase_context)
-                            display_name = f"repo-cache-{clean_repo}-{clean_model}-{clean_persona}-{fingerprint}"
-                            cache_obj = _find_matching_cache(display_name) or client.caches.create(
-                                model=model_name,
-                                config=types.CreateCachedContentConfig(
-                                    contents=codebase_context,
-                                    display_name=display_name,
-                                    system_instruction=system_instruction,
-                                    tools=parsed_tools,
-                                    ttl=cache_ttl,
-                                ),
-                            )
+
+                            def _create_text_only_cache(err_obj: Exception) -> Any:
+                                nonlocal codebase_multimodal_parts, fingerprint, display_name
+                                print(
+                                    f"Warning: Context cache creation with multimodal attachments failed ({err_obj}). "
+                                    "Retrying cache creation with text-only codebase context...",
+                                    file=sys.stderr,
+                                )
+                                codebase_multimodal_parts = []
+                                fingerprint = gr.context_cache_fingerprint(system_instruction, codebase_context)
+                                display_name = f"repo-cache-{clean_repo}-{clean_model}-{clean_persona}-{fingerprint}"
+                                return _find_matching_cache(display_name) or client.caches.create(
+                                    model=model_name,
+                                    config=types.CreateCachedContentConfig(
+                                        contents=codebase_context,
+                                        display_name=display_name,
+                                        system_instruction=system_instruction,
+                                        tools=parsed_tools,
+                                        ttl=cache_ttl,
+                                    ),
+                                )
+
+                            stripped_cache_parts, had_res = gr.strip_media_resolution(codebase_multimodal_parts)
+                            if had_res and gr.is_media_resolution_error(cache_err):
+                                print(
+                                    f"Warning: Context cache creation rejected per-part media_resolution "
+                                    f"({cache_err}). Retrying cache creation without per-part media_resolution...",
+                                    file=sys.stderr,
+                                )
+                                codebase_multimodal_parts = stripped_cache_parts
+                                cache_contents = [codebase_context] + codebase_multimodal_parts
+                                fingerprint = gr.context_cache_fingerprint(system_instruction, cache_contents)
+                                display_name = f"repo-cache-{clean_repo}-{clean_model}-{clean_persona}-{fingerprint}"
+                                try:
+                                    cache_obj = _find_matching_cache(display_name) or client.caches.create(
+                                        model=model_name,
+                                        config=types.CreateCachedContentConfig(
+                                            contents=cache_contents,
+                                            display_name=display_name,
+                                            system_instruction=system_instruction,
+                                            tools=parsed_tools,
+                                            ttl=cache_ttl,
+                                        ),
+                                    )
+                                except Exception as stripped_cache_err:
+                                    cache_obj = _create_text_only_cache(stripped_cache_err)
+                            else:
+                                cache_obj = _create_text_only_cache(cache_err)
                         else:
                             raise
                     cached_content_name = cache_obj.name
@@ -555,8 +598,10 @@ def main():
     except Exception as gen_err:
         last_err: Exception = gen_err
 
-        # Stage 1: Only retry without thinking_config when the API error is actually about thinking config
-        if gen_config.thinking_config is not None and gr.is_thinking_config_error(last_err):
+        def _retry_without_thinking_config() -> bool:
+            nonlocal response, last_err
+            if response is not None or gen_config.thinking_config is None or not gr.is_thinking_config_error(last_err):
+                return False
             print(
                 f"Warning: thinking_config not supported by model '{model_name}' ({last_err}). "
                 "Retrying without thinking_config...",
@@ -574,6 +619,56 @@ def main():
                 )
             except Exception as err_after_thinking:
                 last_err = err_after_thinking
+            return True
+
+        def _retry_without_media_resolution(*, keep_cache: bool) -> bool:
+            nonlocal response, last_err, codebase_multimodal_parts, tail_visual_parts, contents_to_send
+            if (
+                response is not None
+                or not (codebase_multimodal_parts or tail_visual_parts)
+                or not gr.is_media_resolution_error(last_err)
+            ):
+                return False
+            stripped_cb, had_cb_res = gr.strip_media_resolution(codebase_multimodal_parts)
+            stripped_tail, had_tail_res = gr.strip_media_resolution(tail_visual_parts)
+            if keep_cache and not had_tail_res:
+                return False
+            if not had_cb_res and not had_tail_res:
+                return False
+            print(
+                f"Warning: Model rejected per-part media_resolution ({last_err}). "
+                "Retrying multimodal review without per-part media_resolution...",
+                file=sys.stderr,
+            )
+            codebase_multimodal_parts = stripped_cb
+            tail_visual_parts = stripped_tail
+            contents_to_send = (
+                [dynamic_pr_prompt] + tail_visual_parts
+                if (keep_cache and cached_content_name)
+                else _assemble_direct_contents(
+                    codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, tail_visual_parts
+                )
+            )
+            try:
+                response = gr.generate_content_with_stream_fallback(
+                    client,
+                    model=model_name,
+                    contents=contents_to_send,
+                    config=gen_config,
+                    service_tier_fallback=service_tier_fallback,
+                    tier_state=tier_state,
+                )
+            except Exception as err_after_strip:
+                last_err = err_after_strip
+            return True
+
+        # Stage 1: Only retry without thinking_config when the API error is actually about thinking config
+        _retry_without_thinking_config()
+
+        # Stage 1.5 (cached): Strip media_resolution from tail parts first while keeping cached_content active
+        if response is None and cached_content_name:
+            if _retry_without_media_resolution(keep_cache=True):
+                _retry_without_thinking_config()
 
         # Stage 2: If cached_content was used and request still failed, fall back to direct context
         if response is None and cached_content_name:
@@ -607,13 +702,19 @@ def main():
             except Exception as err_after_cache:
                 last_err = err_after_cache
 
+        # Stage 2.5 (direct): Strip remaining per-part media_resolution before dropping images
+        if response is None and not cached_content_name:
+            if _retry_without_media_resolution(keep_cache=False):
+                _retry_without_thinking_config()
+
         # Stage 3: If multimodal parts were attached and request still failed with 400 / invalid_argument,
-        # fall back to text-only
+        # fall back to text-only (unless the 400 is an auth/permission error)
         err_msg = str(last_err).lower()
         if (
             response is None
             and (codebase_multimodal_parts or tail_visual_parts)
             and ("400" in err_msg or "invalid_argument" in err_msg)
+            and not any(m in err_msg for m in ("api key", "api_key", "permission denied"))
         ):
             print(
                 f"Warning: Multimodal review request failed ({last_err}). Falling back to text-only review...",

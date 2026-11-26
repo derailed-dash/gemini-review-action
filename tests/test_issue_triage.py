@@ -429,3 +429,138 @@ def test_triage_does_not_retry_thinking_config_on_token_limit_400(mocker, monkey
         gemini_issue_triage.main()
 
     assert mock_client.models.generate_content.call_count == 1
+
+
+def test_triage_strips_media_resolution_before_text_only_fallback(mocker, monkeypatch, tmp_path):
+    """On 400 INVALID_ARGUMENT, triage strips media_resolution and retries with screenshots before text-only."""
+    import json
+
+    from google.genai import types
+
+    import gemini_issue_triage
+    from gemini_review.multimodal import build_media_part
+
+    event_file = tmp_path / "event.json"
+    event_file.write_text(
+        json.dumps(
+            {
+                "issue": {
+                    "number": 74,
+                    "title": "UI screenshot issue",
+                    "body": "![Bug](https://github.com/user-attachments/assets/123)",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token")
+    monkeypatch.setenv("GEMINI_API_KEY", "ai_test_key")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "derailed-dash/gemini-review-action")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.delenv("GEMINI_THINKING_LEVEL", raising=False)
+
+    mocker.patch("gemini_issue_triage.get_available_labels", return_value=["bug", "ui"])
+    mocker.patch("gemini_issue_triage.get_issue_comments", return_value=[])
+    part_med = build_media_part(b"png-bytes", "image/png", media_resolution="medium")
+    mocker.patch("gemini_issue_triage.build_triage_multimodal_parts", return_value=[part_med])
+
+    mock_client_cls = mocker.patch("gemini_issue_triage.genai.Client")
+    mock_client = mock_client_cls.return_value
+    ok_resp = mocker.Mock(text=json.dumps({"selected_labels": ["bug"], "reasoning": "Visual bug."}))
+    mock_client.models.generate_content.side_effect = [
+        RuntimeError("400 INVALID_ARGUMENT: Unknown name 'mediaResolution'"),
+        ok_resp,
+    ]
+    mock_apply = mocker.patch("gemini_issue_triage.apply_labels")
+
+    gemini_issue_triage.main()
+
+    assert mock_client.models.generate_content.call_count == 2
+    retry_contents = mock_client.models.generate_content.call_args_list[1].kwargs["contents"]
+    assert isinstance(retry_contents, list)
+    assert len(retry_contents) == 2
+    assert isinstance(retry_contents[1], types.Part)
+    assert retry_contents[1].media_resolution is None
+    mock_apply.assert_called_once()
+
+    # If the stripped retry still fails with 400, triage falls back to text-only (3rd call)
+    mock_client.models.generate_content.reset_mock()
+    mock_apply.reset_mock()
+    mock_client.models.generate_content.side_effect = [
+        RuntimeError("400 INVALID_ARGUMENT: Unknown name 'mediaResolution'"),
+        RuntimeError("400 INVALID_ARGUMENT: Unable to process input image"),
+        ok_resp,
+    ]
+
+    gemini_issue_triage.main()
+
+    assert mock_client.models.generate_content.call_count == 3
+    assert isinstance(mock_client.models.generate_content.call_args_list[2].kwargs["contents"], str)
+    mock_apply.assert_called_once()
+
+
+def test_triage_dual_rejection_token_limit_and_auth_guards(mocker, monkeypatch, tmp_path):
+    """Verify dual media_resolution + thinking_config fallback, token-limit skip, and auth error pass-through."""
+    import json
+
+    import pytest
+    from google.genai import types
+
+    import gemini_issue_triage
+    from gemini_review.multimodal import build_media_part
+
+    event_file = tmp_path / "event.json"
+    event_file.write_text(
+        json.dumps({"issue": {"number": 75, "title": "UI bug", "body": "See screenshot"}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token")
+    monkeypatch.setenv("GEMINI_API_KEY", "ai_test_key")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "derailed-dash/gemini-review-action")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.setenv("GEMINI_THINKING_LEVEL", "low")
+
+    mocker.patch("gemini_issue_triage.get_available_labels", return_value=["bug"])
+    mocker.patch("gemini_issue_triage.get_issue_comments", return_value=[])
+    part_med = build_media_part(b"png-bytes", "image/png", media_resolution="medium")
+    mocker.patch("gemini_issue_triage.build_triage_multimodal_parts", return_value=[part_med])
+
+    mock_client_cls = mocker.patch("gemini_issue_triage.genai.Client")
+    mock_client = mock_client_cls.return_value
+    ok_resp = mocker.Mock(text=json.dumps({"selected_labels": ["bug"], "reasoning": "Visual bug."}))
+    mock_apply = mocker.patch("gemini_issue_triage.apply_labels")
+
+    # 1. Dual mediaResolution + thinking_level 400 preserves stripped screenshot on 3rd attempt
+    mock_client.models.generate_content.side_effect = [
+        RuntimeError("400 INVALID_ARGUMENT: Unknown name 'mediaResolution'"),
+        RuntimeError("400 INVALID_ARGUMENT: thinking_level is not supported"),
+        ok_resp,
+    ]
+    gemini_issue_triage.main()
+    assert mock_client.models.generate_content.call_count == 3
+    third_call = mock_client.models.generate_content.call_args_list[2].kwargs
+    assert third_call["config"].thinking_config is None
+    assert isinstance(third_call["contents"], list) and isinstance(third_call["contents"][1], types.Part)
+    mock_apply.assert_called_once()
+
+    # 2. Token-limit 400 skips strip_media_resolution and goes straight to text-only (2 calls)
+    mock_client.models.generate_content.reset_mock()
+    mock_apply.reset_mock()
+    mock_client.models.generate_content.side_effect = [
+        RuntimeError("400 INVALID_ARGUMENT: The input token count exceeds the maximum number of tokens allowed"),
+        ok_resp,
+    ]
+    gemini_issue_triage.main()
+    assert mock_client.models.generate_content.call_count == 2
+    assert isinstance(mock_client.models.generate_content.call_args_list[1].kwargs["contents"], str)
+
+    # 3. 401/403 API key errors raise immediately without wasting a text-only retry
+    mock_client.models.generate_content.reset_mock()
+    mock_client.models.generate_content.side_effect = RuntimeError("400 INVALID_ARGUMENT: API key not valid")
+    with pytest.raises(RuntimeError, match="API key not valid"):
+        gemini_issue_triage.main()
+    assert mock_client.models.generate_content.call_count == 1

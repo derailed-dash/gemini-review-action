@@ -2415,6 +2415,22 @@ def test_is_thinking_config_error_distinguishes_thinking_from_token_limit():
     )
     assert not is_thinking_config_error(RuntimeError("400 INVALID_ARGUMENT: API key not valid"))
     assert not is_thinking_config_error(RuntimeError("400 INVALID_ARGUMENT: Unable to process input image"))
+    assert not is_thinking_config_error(
+        RuntimeError("400 INVALID_ARGUMENT: Unknown name 'media_resolution' at 'contents[0].parts[1]'")
+    )
+    assert not is_thinking_config_error(RuntimeError("400 INVALID_ARGUMENT: Cannot find field: mediaResolution.level"))
+    assert not is_thinking_config_error(RuntimeError("400 INVALID_ARGUMENT: Unsupported media resolution"))
+
+    from gemini_review import is_media_resolution_error
+
+    assert is_media_resolution_error(RuntimeError("400 INVALID_ARGUMENT: Unknown name 'mediaResolution'"))
+    assert is_media_resolution_error(RuntimeError("400 INVALID_ARGUMENT: Request contains an invalid argument"))
+    assert not is_media_resolution_error(
+        RuntimeError("400 INVALID_ARGUMENT: The input token count exceeds the maximum number of tokens allowed")
+    )
+    assert not is_media_resolution_error(RuntimeError("400 INVALID_ARGUMENT: API key not valid"))
+    assert not is_media_resolution_error(RuntimeError("400 INVALID_ARGUMENT: Unable to process input image"))
+    assert not is_media_resolution_error(RuntimeError("400 INVALID_ARGUMENT: thinking_level is not supported"))
 
 
 def test_pr_review_does_not_retry_thinking_config_on_token_limit_400(mocker):
@@ -2482,6 +2498,218 @@ def test_matches_exclude_patterns_and_filter_excluded_diff_files():
     kept, excluded = filter_excluded_diff_files(pr_files, patterns)
     assert [f["filename"] for f in kept] == ["src/app.py", "tests/test_app.py"]
     assert excluded == ["starter-examples/skills/a/SKILL.md", "generated/schema.json"]
+
+
+def test_pr_review_passes_visual_diff_files_to_build_codebase_context(mocker):
+    """main() forwards PR image_files filenames to build_codebase_context via visual_diff_files."""
+    from gemini_pr_review import main
+
+    _setup_dry_run_main(mocker, {"GEMINI_MODEL": "gemini-4-hydrogen", "GEMINI_PERSONA": "straight"}, clear_env=True)
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[
+            {"filename": "README.md", "status": "modified", "patch": "+![Dia](assets/dia.png)"},
+            {"filename": "assets/dia.png", "status": "modified"},
+        ],
+    )
+    mocker.patch("gemini_review.build_visual_diff_parts", return_value=("", []))
+    captured_kwargs: dict = {}
+
+    def _fake_ctx(files, config, client=None, model=None, context_telemetry=None, multimodal_parts=None, **kwargs):
+        captured_kwargs.update(kwargs)
+        return "ctx"
+
+    mocker.patch("gemini_review.build_codebase_context", side_effect=_fake_ctx)
+
+    main()
+
+    assert captured_kwargs.get("visual_diff_files") == ["assets/dia.png"]
+
+
+def test_pr_review_strips_media_resolution_before_text_only_fallback(mocker):
+    """On 400 INVALID_ARGUMENT, main() retries with media_resolution stripped while keeping images attached."""
+    from gemini_pr_review import main
+    from gemini_review.multimodal import build_media_part
+
+    mock_client, mock_response = _setup_dry_run_main(
+        mocker, {"GEMINI_MODEL": "gemini-4-hydrogen", "GEMINI_PERSONA": "straight"}, clear_env=True
+    )
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[
+            {"filename": "app.py", "status": "modified", "patch": "@@ -1 +1 @@\n-a\n+b"},
+            {"filename": "assets/ui.png", "status": "modified"},
+        ],
+    )
+
+    static_part = build_media_part(b"static-png", "image/png", media_resolution="medium")
+    diff_part = build_media_part(b"diff-png", "image/png", media_resolution="high")
+
+    def _fake_ctx(files, config, client=None, model=None, context_telemetry=None, multimodal_parts=None, **kwargs):
+        if multimodal_parts is not None:
+            multimodal_parts.extend(["Static Label", static_part])
+        return "STATIC_CTX"
+
+    mocker.patch("gemini_review.build_codebase_context", side_effect=_fake_ctx)
+    mocker.patch(
+        "gemini_review.build_visual_diff_parts",
+        return_value=("Summary", ["Diff Label", diff_part]),
+    )
+
+    # First call fails with 400 rejecting media_resolution; second call (stripped, images preserved) succeeds.
+    mock_client.models.generate_content.side_effect = [
+        RuntimeError("400 INVALID_ARGUMENT: Unknown name 'mediaResolution'"),
+        mock_response,
+    ]
+
+    main()
+
+    assert mock_client.models.generate_content.call_count == 2
+    retry_contents = mock_client.models.generate_content.call_args_list[1].kwargs["contents"]
+    retry_parts = [item for item in retry_contents if isinstance(item, types.Part)]
+    assert len(retry_parts) == 2
+    assert all(p.media_resolution is None for p in retry_parts)
+
+    # If the stripped multimodal retry ALSO fails with 400 INVALID_ARGUMENT, Stage 3 drops to text-only.
+    mock_client.models.generate_content.reset_mock()
+    mock_client.models.generate_content.side_effect = [
+        RuntimeError("400 INVALID_ARGUMENT: Unknown name 'mediaResolution'"),
+        RuntimeError("400 INVALID_ARGUMENT: Unable to process input image"),
+        mock_response,
+    ]
+
+    main()
+
+    assert mock_client.models.generate_content.call_count == 3
+    text_only_contents = mock_client.models.generate_content.call_args_list[2].kwargs["contents"]
+    assert isinstance(text_only_contents, str)
+
+
+def test_context_caching_strips_media_resolution_before_text_only_cache(mocker):
+    """When caches.create rejects media_resolution with 400, retry cache creation with media_resolution stripped."""
+    from gemini_pr_review import main
+    from gemini_review.multimodal import build_media_part
+
+    mock_client, _ = _setup_dry_run_main(
+        mocker, {"GEMINI_MODEL": "gemini-3.8-flash", "GEMINI_PERSONA": "straight"}, clear_env=True
+    )
+    mock_client.caches.list.return_value = []
+
+    res_part = build_media_part(b"diagram", "image/png", media_resolution="medium")
+
+    def _fake_build_ctx(files, config, client=None, model=None, context_telemetry=None, multimodal_parts=None):
+        if multimodal_parts is not None:
+            multimodal_parts.append(res_part)
+        return "a" * 120000
+
+    mocker.patch("gemini_review.build_codebase_context", side_effect=_fake_build_ctx)
+
+    created_cache = mocker.Mock()
+    created_cache.name = "cachedContents/stripped-multimodal-cache"
+    mock_client.caches.create.side_effect = [
+        RuntimeError("400 INVALID_ARGUMENT: Unknown name 'mediaResolution'"),
+        created_cache,
+    ]
+
+    main()
+
+    assert mock_client.caches.create.call_count == 2
+    second_cache_contents = mock_client.caches.create.call_args_list[1].kwargs["config"].contents
+    assert isinstance(second_cache_contents, list)
+    assert len(second_cache_contents) == 2
+    assert isinstance(second_cache_contents[1], types.Part)
+    assert second_cache_contents[1].media_resolution is None
+    assert (
+        mock_client.models.generate_content.call_args.kwargs["config"].cached_content
+        == "cachedContents/stripped-multimodal-cache"
+    )
+
+
+def test_pr_review_cached_tail_strips_media_resolution_preserving_cache(mocker):
+    """When cached_content is active and tail_visual_parts triggers a media_resolution 400, preserve the cache."""
+    from gemini_pr_review import main
+    from gemini_review.multimodal import build_media_part
+
+    mock_client, mock_response = _setup_dry_run_main(
+        mocker, {"GEMINI_MODEL": "gemini-3.8-flash", "GEMINI_PERSONA": "straight"}, clear_env=True
+    )
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[
+            {"filename": "app.py", "status": "modified", "patch": "@@ -1 +1 @@\n-a\n+b"},
+            {"filename": "assets/ui.png", "status": "modified"},
+        ],
+    )
+    mock_client.caches.list.return_value = []
+    created_cache = mocker.Mock()
+    created_cache.name = "cachedContents/text-cache-keep-me"
+    mock_client.caches.create.return_value = created_cache
+    mocker.patch("gemini_review.build_codebase_context", return_value="a" * 120000)
+
+    diff_part = build_media_part(b"diff-png", "image/png", media_resolution="high")
+    mocker.patch("gemini_review.build_visual_diff_parts", return_value=("Summary", ["Diff Label", diff_part]))
+
+    mock_client.models.generate_content.side_effect = [
+        RuntimeError("400 INVALID_ARGUMENT: Unknown name 'mediaResolution'"),
+        mock_response,
+    ]
+
+    main()
+
+    assert mock_client.models.generate_content.call_count == 2
+    second_call = mock_client.models.generate_content.call_args_list[1].kwargs
+    assert second_call["config"].cached_content == "cachedContents/text-cache-keep-me"
+    retry_parts = [item for item in second_call["contents"] if isinstance(item, types.Part)]
+    assert len(retry_parts) == 1
+    assert retry_parts[0].media_resolution is None
+
+
+def test_pr_review_dual_media_resolution_and_thinking_rejection_and_token_limit_skip(mocker):
+    """Dual mediaResolution + thinking_level 400s keep images; token-limit 400 skips media_resolution stripping."""
+    from gemini_pr_review import main
+    from gemini_review.multimodal import build_media_part
+
+    mock_client, mock_response = _setup_dry_run_main(
+        mocker,
+        {"GEMINI_MODEL": "gemini-4-hydrogen", "GEMINI_THINKING_LEVEL": "low", "GEMINI_PERSONA": "straight"},
+        clear_env=True,
+    )
+    mocker.patch(
+        "gemini_review.get_local_git_files",
+        return_value=[
+            {"filename": "app.py", "status": "modified", "patch": "@@ -1 +1 @@\n-a\n+b"},
+            {"filename": "assets/ui.png", "status": "modified"},
+        ],
+    )
+    mocker.patch("gemini_review.build_codebase_context", return_value="short ctx")
+    diff_part = build_media_part(b"diff-png", "image/png", media_resolution="medium")
+    mocker.patch("gemini_review.build_visual_diff_parts", return_value=("Summary", ["Diff Label", diff_part]))
+
+    # 1. Dual rejection: mediaResolution fails first, then thinking_level fails, 3rd call succeeds WITH image
+    mock_client.models.generate_content.side_effect = [
+        RuntimeError("400 INVALID_ARGUMENT: Unknown name 'mediaResolution'"),
+        RuntimeError("400 INVALID_ARGUMENT: thinking_level is not supported for this model"),
+        mock_response,
+    ]
+
+    main()
+
+    assert mock_client.models.generate_content.call_count == 3
+    third_call = mock_client.models.generate_content.call_args_list[2].kwargs
+    assert third_call["config"].thinking_config is None
+    assert any(isinstance(item, types.Part) and item.media_resolution is None for item in third_call["contents"])
+
+    # 2. Token-limit 400 must NOT retry with media_resolution stripped (which would double medium -> high tokens)
+    mock_client.models.generate_content.reset_mock()
+    mock_client.models.generate_content.side_effect = [
+        RuntimeError("400 INVALID_ARGUMENT: The input token count exceeds the maximum number of tokens allowed"),
+        mock_response,
+    ]
+
+    main()
+
+    assert mock_client.models.generate_content.call_count == 2
+    assert isinstance(mock_client.models.generate_content.call_args_list[1].kwargs["contents"], str)
 
 
 def test_diff_exclude_patterns_filters_text_and_visual_diffs_and_exits_when_all_excluded(mocker):
