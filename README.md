@@ -474,7 +474,7 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 | `persona` | Reviewer persona overlay (`straight`, `dazbo`, `palpatine`, `rick`). | No | `straight` |
 | `custom_instructions` | Custom instructions or guardrails to extend the review prompt. Can be inline text or a file path in the repository (e.g. `.github/review-instruction-additions.md`). | No | `.github/review-instruction-additions.md` |
 | `skip_inline_suggestions` | Whether to skip automated re-reviews when a commit is created by accepting an inline suggestion via GitHub UI. | No | `'true'` |
-| `thinking_level` | Thinking level for reasoning models (`low`, `medium`, `high`, plus `xhigh` on `gemini-4-hydrogen` and `gemini-4-neon`; or `off`/integer token budget on Gemini 3/2.5). When omitted, the model's native default thinking behaviour applies. See [Reasoning & Thinking Budget Control](#reasoning--thinking-budget-control). | No | `''` |
+| `thinking_level` | Thinking level for reasoning models (`low`, `medium`, `high`, plus `xhigh` on `gemini-4-hydrogen` and `gemini-4-neon`; or `off`/integer token budget on Gemini 3). When omitted, the model's native default thinking behaviour applies. See [Reasoning & Thinking Budget Control](#reasoning--thinking-budget-control). | No | `''` |
 | `context_mode` | Codebase background context strategy: `'auto'` (default: Invariant Baseline / Full under `max_context_bytes`, else Sparse), `'full'` (force Full Context), `'sparse'` (force Sparse Context with file tree, core docs, and dynamic selection), or `'diff_only'` (skip repository background dump). | No | `'auto'` |
 | `max_context_bytes` | Total byte ceiling across repository text files before `'auto'` switches from Full Context Mode to Sparse Context Mode (default: 1.5 MB). | No | `'1536000'` |
 | `max_diff_full_file_bytes` | Aggregate UTF-8 byte ceiling across all `Full Current File Content` blocks attached in the diff prompt using water-fill truncation (diff patches themselves stay intact). Set to `'0'` to omit full-file copies and review diff patches only. | No | `'262144'` |
@@ -500,9 +500,9 @@ When using reasoning models (such as `gemini-4-hydrogen`, `gemini-4-neon`, `gemi
   If `thinking_level` is left blank (the default), no thinking configuration override is passed to the Gemini API (`thinking_config=None`), so the model's native default reasoning behaviour applies dynamically.
 * **Categorical Thinking Levels (Gemini 4 & Gemini 3)**:
   * **`gemini-4-hydrogen` / `gemini-4-*`**: Supports `'low'`, `'medium'`, `'high'`, plus `'xhigh'` (extra-high) on `gemini-4-hydrogen` and `gemini-4-neon`. Because Gemini 4 enforces `'low'` as its minimum reasoning level (rejecting `'minimal'` and `thinking_budget=0` with `400 INVALID_ARGUMENT`), setting `'off'`, `'false'`, `'disabled'`, `'minimal'`, or `'0'` on any `gemini-4-*` model automatically logs a warning and clamps to `'low'` upfront.
-  * **Gemini 3 / 2.5**: Supports `'minimal'` (Gemini 3), `'low'`, `'medium'`, and `'high'`.
-* **Disabling Thinking or Explicit Token Budgets (Gemini 3 / 2.5 only)**:
-  * Set `thinking_level` to `'off'`, `'false'`, `'disabled'`, or `0` to pass `thinking_budget=0` on models that support disabling thinking (such as Gemini 3 / 2.5).
+  * **Gemini 3**: Supports `'minimal'`, `'low'`, `'medium'`, and `'high'`.
+* **Disabling Thinking or Explicit Token Budgets (Gemini 3 only)**:
+  * Set `thinking_level` to `'off'`, `'false'`, `'disabled'`, or `0` to pass `thinking_budget=0` on models that support disabling thinking (such as Gemini 3).
   * Set a positive integer (e.g. `1024`, `2048`, `4096`) to cap `thinking_budget` on legacy models that accept explicit token budgets.
 
 Thinking token usage and its associated cost are tracked and reported separately in the comment telemetry summary alongside prompt and candidate tokens (priced at the model's standard output rate), allowing you to monitor reasoning overhead and costs accurately.
@@ -555,7 +555,7 @@ By default, the action uses an intelligent hybrid context engine designed to bal
 
 By default, `service_tier` is **`'standard'`** (fast responses, full priority). For latency-tolerant workflows using Google AI Studio (`GEMINI_API_KEY`), you can **opt in** to `service_tier: 'flex'` — a Preview synchronous inference tier priced at **50% off** all input, cached, thinking, and output tokens:
 
-* **How it works**: Flex sends the exact same synchronous request to the exact same model (supported on Gemini 4 Carbon/Argon/Neon/Hydrogen, Gemini 3.8/3.6/3.5, and Gemini 2.5), but Google schedules it onto **off-peak, sheddable compute capacity** rather than reserving real-time capacity. Because Google never auto-upgrades Flex requests server-side, this action raises the HTTP timeout floor to **600s**, performs bounded client-side retries (`5s`, `15s`) on transient capacity shedding (`503`/`429`/`504`), and falls back to `'standard'` when `service_tier_fallback: 'true'` (default).
+* **How it works**: Flex sends the exact same synchronous request to the exact same model (supported on Gemini 4 Carbon/Argon/Neon/Hydrogen and Gemini 3.8/3.6/3.5), but Google schedules it onto **off-peak, sheddable compute capacity** rather than reserving real-time capacity. Because Google never auto-upgrades Flex requests server-side, this action raises the HTTP timeout floor to **600s**, performs bounded client-side retries (`5s`, `15s`) on transient capacity shedding (`503`/`429`/`504`), and falls back to `'standard'` when `service_tier_fallback: 'true'` (default).
 * **Pros**:
   * **50% cost reduction** on every token with **zero GCP project or WIF setup** (same `GEMINI_API_KEY`).
   * **Identical review quality**: same model weights, thinking level, context, and structured JSON/tool execution as `'standard'`.
@@ -822,6 +822,9 @@ Store your configuration values as GitHub repository secrets:
 * `GCP_SERVICE_ACCOUNT`: The service account email (e.g. `gemini-review-bot@<project>.iam.gserviceaccount.com`).
 * `WIF_POOL_ID`: The Workload Identity Pool ID (e.g. `github-actions-pool`).
 * `WIF_PROVIDER_ID`: The Workload Identity Provider ID (e.g. `github-oidc`).
+
+#### Sharing Across Multiple Repositories
+If you bind `roles/iam.workloadIdentityUser` at owner scope (**Option A**: `attribute.repository_owner/<owner>`), adding each extra repository requires **zero additional `gcloud` commands** — simply add the 5 GitHub secrets above and copy the WIF workflow snippet (whereas strict per-repo scoping, **Option B**, requires one IAM binding per repository). All repositories sharing that WIF pool roll their Vertex AI token costs into that **single GCP project**, with automatic `component=gemini-review-action` and `repo=<owner>_<repo>` Cloud Billing labels keeping per-repository spend separated. See [Reusing One WIF Pool Across Multiple GitHub Repositories](docs/vertex-ai-wif-setup.md#reusing-one-wif-pool-across-multiple-github-repositories).
 
 Example workflow job configured to run the review action with WIF authentication:
 

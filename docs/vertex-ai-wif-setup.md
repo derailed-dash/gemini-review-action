@@ -110,9 +110,18 @@ gcloud services enable \
      --quiet
    ```
 
-3. **Allow GitHub Actions OIDC identities to impersonate the service account (`roles/iam.workloadIdentityUser`)** — choose **Option A** (shared across all your repositories) or **Option B** (restricted to one repository):
+3. **Allow GitHub Actions OIDC identities to impersonate the service account (`roles/iam.workloadIdentityUser`)**:
 
-   - **Option A — All repositories under `YOUR_GITHUB_OWNER` *(recommended for a shared GitHub automation project)***:
+   #### How WIF Scoping Works (Two Layers)
+   - **Layer 1 — Pool & OIDC Provider Boundary (`--attribute-condition`)**: Configured once in Step 2 (`assertion.repository_owner == '${GITHUB_OWNER}'`). Vertex AI / STS rejects OIDC tokens from any other GitHub user or organisation before IAM bindings are even evaluated.
+   - **Layer 2 — Service Account IAM Binding (`roles/iam.workloadIdentityUser`)**: Controls *which* repositories owned by `YOUR_GITHUB_OWNER` may impersonate `${SA_EMAIL}` and consume quota/billing in `${PROJECT_ID}`:
+
+   | Option | Principal Scope | Blast Radius | Onboarding Each Additional Repo | Best When |
+   | :--- | :--- | :--- | :--- | :--- |
+   | **Option A (Owner-wide)** | All repos under `YOUR_GITHUB_OWNER` | Any workflow in any `YOUR_GITHUB_OWNER/*` repo using your pool/SA IDs | **0 `gcloud` commands** — only add the 5 GitHub secrets and WIF workflow | A personal/team automation GCP project shared across your repositories |
+   | **Option B (Per-repo strict)** | Only `YOUR_GITHUB_OWNER/YOUR_REPO` | Strictly isolated to explicitly bound repo(s) | **1 `gcloud` IAM binding** for each new repo | Multi-team orgs, compliance boundaries, or untrusted repo owners |
+
+   - **Option A — All repositories under `YOUR_GITHUB_OWNER` *(recommended for a shared automation project)***:
 
      ```bash
      gcloud iam service-accounts add-iam-policy-binding "${SA_EMAIL}" \
@@ -132,7 +141,7 @@ gcloud services enable \
        --quiet
      ```
 
-   *(Even under Option A, keep fork-PR guards in your workflow `if:` conditions so untrusted pull requests from external forks never trigger the job or access OIDC federation.)*
+   *(Under both options, keep fork-PR guards such as `github.event.pull_request.head.repo.full_name == github.repository` in your workflow `if:` conditions so untrusted pull requests from external forks never run the job or access OIDC federation.)*
 
 ---
 
@@ -264,6 +273,39 @@ jobs:
           thinking_level: 'low'
           language: 'English (UK)'
 ```
+
+---
+
+## Reusing One WIF Pool Across Multiple GitHub Repositories
+
+Once your WIF pool, OIDC provider, and service account exist in a single Google Cloud project, you can reuse them across as many GitHub repositories as you like.
+
+### How Billing & Cost Attribution Work Across Repos
+
+- **Single GCP billing destination**: Every repository configured with that project's WIF secrets sends all Vertex AI token charges (and Developer Knowledge API quota) to that **one shared GCP project**, so you only manage one set of budgets, alerts, and FinOps killswitches.
+- **Per-repository cost breakdown via labels**: `gemini-review-action` automatically attaches `component=gemini-review-action` and `repo=<owner>_<repo>` Cloud Billing labels to every Vertex AI call. You can therefore split costs cleanly per repository in Cloud Billing exports or add custom `billing_labels` (e.g. `team=platform`).
+- **Isolated caches per repo**: Because each repository constructs its own distinct `base_sha` baseline context prefix, sharing one GCP project and WIF pool produces zero context or cache cross-talk — each repo independently benefits from `80%–96%` Vertex AI Durable Implicit Caching on `eu`/`us`.
+
+### Onboarding Additional Repositories under Option A (Owner-Wide)
+
+1. **No GCP changes needed**: Zero additional `gcloud` commands are required because `attribute.repository_owner/${GITHUB_OWNER}` already authorises all repositories under your owner/organisation.
+2. **Set the 5 GitHub secrets on each target repository** (or configure them once as Organisation-level Actions secrets if your repositories live under a GitHub Organisation):
+   ```bash
+   for REPO in repo-two repo-three; do
+     printf '%s' "${PROJECT_ID}"      | gh secret set GCP_PROJECT_ID      --repo "${GITHUB_OWNER}/${REPO}"
+     printf '%s' "${PROJECT_NUMBER}"  | gh secret set GCP_PROJECT_NUMBER  --repo "${GITHUB_OWNER}/${REPO}"
+     printf '%s' "${SA_EMAIL}"        | gh secret set GCP_SERVICE_ACCOUNT --repo "${GITHUB_OWNER}/${REPO}"
+     printf '%s' "${POOL_ID}"         | gh secret set WIF_POOL_ID         --repo "${GITHUB_OWNER}/${REPO}"
+     printf '%s' "${PROVIDER_ID}"     | gh secret set WIF_PROVIDER_ID     --repo "${GITHUB_OWNER}/${REPO}"
+   done
+   ```
+3. **Update each repository's workflow YAML**: Add `id-token: write`, the SHA-pinned `google-github-actions/auth` step, and the `GOOGLE_GENAI_*` / `GOOGLE_CLOUD_*` environment variables shown in Step 5, removing `gemini_api_key` *(note: external repos referencing `derailed-dash/gemini-review-action@v1` require `v1.12.1+` / the updated `@v1` tag for optional `gemini_api_key` support; the bundled `install-gemini-code-review-action` skill can automate these edits for you)*.
+
+### Onboarding Additional Repositories under Option B (Per-Repo Strict)
+
+1. Reuse your existing GCP project, WIF pool, OIDC provider, and service account (**skip Steps 1 and 2**).
+2. Run only the single Option B IAM binding from Step 3 for each new repository (`--member="principalSet://.../attribute.repository/${GITHUB_OWNER}/NEW_REPO"`).
+3. Add the 5 GitHub secrets and WIF workflow YAML to that repository as above.
 
 ---
 

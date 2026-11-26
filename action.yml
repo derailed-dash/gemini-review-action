@@ -87,7 +87,7 @@ inputs:
     required: false
     default: '.github/review-instruction-additions.md'
   thinking_level:
-    description: 'Thinking / reasoning level for Gemini models (e.g. low, medium, high, xhigh, none, or numeric budget on Gemini 3/2.5). Controls reasoning token output.'
+    description: 'Thinking / reasoning level for Gemini models (e.g. low, medium, high, xhigh, none, or numeric budget on Gemini 3). Controls reasoning token output.'
     required: false
     default: ''
   max_candidate_files:

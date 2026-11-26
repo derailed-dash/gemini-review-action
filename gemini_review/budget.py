@@ -60,8 +60,6 @@ MODEL_INPUT_TOKEN_LIMITS: dict[str, int] = {
     "gemini-3.8-flash": 1_048_576,
     "gemini-3.7-flash": 1_048_576,
     "gemini-3.6-flash": 1_048_576,
-    "gemini-2.5-flash": 1_048_576,
-    "gemini-2.5-pro": 1_048_576,
 }
 _FALLBACK_INPUT_TOKEN_LIMIT = 1_048_576
 

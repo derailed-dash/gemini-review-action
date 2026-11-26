@@ -163,7 +163,7 @@ and flag them for clean-up.
   universal phrasing.
 - **Language:** Write all feedback comments using !{echo $LANGUAGE}. Do not flag alternative regional spelling variations in the codebase unless it is a genuine typo.
 - **No Version Downgrades:** Do not suggest downgrading GitHub Actions, dependencies, or Gemini model identifiers 
-  (e.g. recommending `actions/checkout@v4` instead of `v7`, or `gemini-2.5-flash` instead of `gemini-4-hydrogen`) 
+  (e.g. recommending `actions/checkout@v4` instead of `v7`, or `gemini-3.5-flash` instead of `gemini-4-hydrogen`) 
   solely due to knowledge cut-off limits. Assume newer version tags, dependencies, and model identifiers are valid.
 - **Prior Discussions & Review Threads:** When prior PR review comments or conversation threads are provided in the input, review them carefully:
   1. **Do NOT repeat** a suggestion if:
