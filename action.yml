@@ -141,6 +141,14 @@ inputs:
     description: "Scope of Markdown-linked image attachments: 'all' (default, full repo + docs + diff), 'core' (architecture/design/spec docs + extra_context_files + diff additions), 'diff' (diff additions + extra_context_files only), or 'none'."
     required: false
     default: 'all'
+  service_tier:
+    description: "Inference tier for Google AI Studio (GEMINI_API_KEY): 'standard' (default) or 'flex' (50% token discount with 1-15 min target latency and auto-fallback on capacity shedding; ignored on Vertex AI)."
+    required: false
+    default: 'standard'
+  service_tier_fallback:
+    description: "When service_tier is 'flex', automatically fall back to 'standard' tier after bounded retries if capacity is shed (503/429) or timed out."
+    required: false
+    default: 'true'
 
 runs:
   using: 'composite'
@@ -185,6 +193,8 @@ runs:
         GEMINI_MAX_CONTEXT_BYTES: ${{ inputs.max_context_bytes }}
         GEMINI_MAX_DIFF_FULL_FILE_BYTES: ${{ inputs.max_diff_full_file_bytes }}
         GEMINI_ATTACH_MARKDOWN_IMAGES: ${{ inputs.attach_markdown_images }}
+        GEMINI_SERVICE_TIER: ${{ inputs.service_tier }}
+        GEMINI_SERVICE_TIER_FALLBACK: ${{ inputs.service_tier_fallback }}
         GITHUB_REPOSITORY: ${{ github.repository }}
 
         GITHUB_EVENT_PATH: ${{ github.event_path }}

@@ -144,3 +144,40 @@ class TestConfigAndModelResolution:
 
         monkeypatch.setenv("GEMINI_MAX_CONTEXT_BYTES", "not-an-int")
         assert get_max_context_bytes() == DEFAULT_MAX_CONTEXT_BYTES
+
+    def test_get_service_tier_defaults_and_validation(self, monkeypatch, capsys):
+        """get_service_tier defaults to 'standard', accepts 'standard'|'flex', and validates invalid values."""
+        from gemini_review.config import VALID_SERVICE_TIERS, get_service_tier
+
+        assert VALID_SERVICE_TIERS == ("standard", "flex")
+        monkeypatch.delenv("GEMINI_SERVICE_TIER", raising=False)
+        assert get_service_tier() == "standard"
+        assert get_service_tier({"service_tier": "FLEX"}) == "flex"
+
+        monkeypatch.setenv("GEMINI_SERVICE_TIER", "  fLeX ")
+        assert get_service_tier({"service_tier": "standard"}) == "flex"
+
+        monkeypatch.setenv("GEMINI_SERVICE_TIER", "turbo")
+        assert get_service_tier() == "standard"
+        assert "turbo" in capsys.readouterr().err
+
+    def test_get_service_tier_fallback_defaults_and_bool_parsing(self, monkeypatch):
+        """get_service_tier_fallback defaults to True and respects env/config booleans."""
+        from gemini_review.config import get_service_tier_fallback
+
+        monkeypatch.delenv("GEMINI_SERVICE_TIER_FALLBACK", raising=False)
+        assert get_service_tier_fallback() is True
+        assert get_service_tier_fallback({"service_tier_fallback": False}) is False
+
+        monkeypatch.setenv("GEMINI_SERVICE_TIER_FALLBACK", "false")
+        assert get_service_tier_fallback({"service_tier_fallback": True}) is False
+
+        monkeypatch.setenv("GEMINI_SERVICE_TIER_FALLBACK", "0")
+        assert get_service_tier_fallback() is False
+
+        monkeypatch.setenv("GEMINI_SERVICE_TIER_FALLBACK", "YES")
+        assert get_service_tier_fallback({"service_tier_fallback": False}) is True
+
+        monkeypatch.delenv("GEMINI_SERVICE_TIER_FALLBACK", raising=False)
+        assert get_service_tier_fallback({"service_tier_fallback": None}) is True
+        assert get_service_tier_fallback({"service_tier_fallback": "maybe"}) is True

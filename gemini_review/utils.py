@@ -8,6 +8,7 @@ multimodal, diff, and repo modules to ensure full backward compatibility.
 import hashlib
 import os
 import sys
+import time
 from typing import Any, Literal
 
 from google import genai
@@ -373,6 +374,7 @@ def create_genai_client(
     project: str | None = None,
     location: str = "global",
     use_vertexai: bool | None = None,
+    service_tier: str = "standard",
     client_cls: Any = None,
 ) -> tuple[Any, bool]:
     """Initialise a GenAI client with timeout floor and Developer API v1beta pinning.
@@ -381,9 +383,22 @@ def create_genai_client(
     caching (cachedContents), preview/-latest aliases, and the Decisions API require v1beta;
     Vertex AI / Enterprise endpoints keep their native v1beta1 default. Explicit ``vertexai=False``
     prevents GOOGLE_GENAI_USE_ENTERPRISE from colliding with Developer API v1beta options.
+    AI Studio Flex inference enforces a 600s minimum HTTP timeout floor to accommodate 1-15 min
+    tail latency, whereas Vertex AI warns and uses Standard tier (300s floor).
     """
     effective_vertexai = is_vertexai_enabled() if use_vertexai is None else use_vertexai
-    timeout_ms = max(timeout, 300) * 1000
+    req_tier = (service_tier or "standard").strip().lower()
+    min_timeout_seconds = 300
+    if req_tier == "flex":
+        if effective_vertexai:
+            print(
+                "Warning: service_tier='flex' is supported on Google AI Studio (GEMINI_API_KEY) only; "
+                "using Standard tier on Vertex AI.",
+                file=sys.stderr,
+            )
+        else:
+            min_timeout_seconds = 600
+    timeout_ms = max(timeout, min_timeout_seconds) * 1000
     factory = client_cls or genai.Client
 
     if effective_vertexai:
@@ -525,20 +540,53 @@ class _AggregatedStreamResponse:
         self.usage_metadata = usage_metadata
 
 
-def generate_content_with_stream_fallback(
+def _is_flex_tier_config(config: Any) -> bool:
+    """Return True if `config.service_tier` targets the Flex inference tier."""
+    tier = getattr(config, "service_tier", None) if config is not None else None
+    if tier is None:
+        return False
+    val = getattr(tier, "value", tier)
+    return str(val).strip().lower().endswith("flex")
+
+
+def _is_flex_capacity_error(err: Exception) -> bool:
+    """Return True for transient Flex capacity-shedding, quota (429/503/504), or timeout errors."""
+    if isinstance(err, (ValueError, TypeError, KeyError, AttributeError)):
+        return False
+
+    code = getattr(err, "code", None)
+    status_code = getattr(err, "status_code", None)
+    for numeric in (code, status_code):
+        if numeric in (429, 503, 504):
+            return True
+        if isinstance(numeric, int) and 400 <= numeric < 500:
+            return False
+
+    if _is_connection_or_timeout_error(err):
+        return True
+
+    msg = str(err).lower()
+    capacity_markers = (
+        "503",
+        "429",
+        "504",
+        "unavailable",
+        "resource_exhausted",
+        "deadline_exceeded",
+        "capacity",
+        "overloaded",
+    )
+    return any(marker in msg for marker in capacity_markers)
+
+
+def _generate_once_with_stream_fallback(
     client: Any,
     *,
     model: str,
     contents: Any,
     config: Any,
 ) -> Any:
-    """Call `client.models.generate_content` and retry with `generate_content_stream` on connection resets.
-
-    Large uncached prompts with thinking tokens enabled can take several minutes before the first
-    byte is returned in non-streaming mode, causing GFE or NAT gateways to drop the idle TCP socket
-    with `[Errno 104] Connection reset by peer`. Streaming keeps chunks flowing continuously over
-    the connection so idle timeouts do not trigger.
-    """
+    """Call `client.models.generate_content` once and retry with `generate_content_stream` on resets."""
     try:
         return client.models.generate_content(
             model=model,
@@ -618,6 +666,76 @@ def generate_content_with_stream_fallback(
         )
 
 
+def generate_content_with_stream_fallback(
+    client: Any,
+    *,
+    model: str,
+    contents: Any,
+    config: Any,
+    service_tier_fallback: bool = True,
+    tier_state: dict[str, Any] | None = None,
+    retry_delays: tuple[float, ...] = (5.0, 15.0),
+) -> Any:
+    """Invoke Gemini generation with streaming reset fallback and Flex capacity retry/fallback.
+
+    Large uncached prompts with thinking tokens enabled can take several minutes before the first
+    byte is returned in non-streaming mode, causing GFE or NAT gateways to drop the idle TCP socket
+    with `[Errno 104] Connection reset by peer`. Streaming keeps chunks flowing continuously over
+    the connection so idle timeouts do not trigger.
+
+    When ``config.service_tier`` is Flex, transient ``503``/``429``/timeout capacity errors are
+    retried up to ``len(retry_delays)`` times before falling back to Standard tier (unless
+    ``service_tier_fallback`` is False).
+    """
+    if not _is_flex_tier_config(config):
+        if tier_state is not None and "effective_service_tier" not in tier_state:
+            tier_state["effective_service_tier"] = "standard"
+            tier_state.setdefault("flex_fallback", False)
+        return _generate_once_with_stream_fallback(client, model=model, contents=contents, config=config)
+
+    total_attempts = 1 + len(retry_delays)
+    last_err: Exception | None = None
+    for attempt in range(total_attempts):
+        try:
+            response = _generate_once_with_stream_fallback(client, model=model, contents=contents, config=config)
+            if tier_state is not None:
+                tier_state["effective_service_tier"] = "flex"
+                tier_state.setdefault("flex_fallback", False)
+            return response
+        except Exception as err:
+            if not _is_flex_capacity_error(err):
+                raise
+            last_err = err
+            if attempt < len(retry_delays):
+                delay = retry_delays[attempt]
+                print(
+                    f"Warning: Flex tier capacity unavailable ({err}); retrying Flex "
+                    f"(attempt {attempt + 2}/{total_attempts}) in {delay:.0f}s...",
+                    file=sys.stderr,
+                )
+                if delay > 0:
+                    time.sleep(delay)
+
+    if not service_tier_fallback or last_err is None:
+        if last_err is not None:
+            raise last_err
+        raise RuntimeError("Flex generation failed without an exception.")
+
+    print(
+        f"Warning: Flex tier capacity exhausted after {total_attempts} attempts ({last_err}); "
+        "falling back to Standard tier...",
+        file=sys.stderr,
+    )
+    try:
+        config.service_tier = None
+    except Exception:
+        pass
+    if tier_state is not None:
+        tier_state["effective_service_tier"] = "standard"
+        tier_state["flex_fallback"] = True
+    return _generate_once_with_stream_fallback(client, model=model, contents=contents, config=config)
+
+
 def resolve_tool_calls_loop(
     client: Any,
     model_name: str,
@@ -630,6 +748,9 @@ def resolve_tool_calls_loop(
     billing_labels: dict[str, str] | None = None,
     thinking_cfg: Any = None,
     max_turns: int = 5,
+    *,
+    service_tier_fallback: bool = True,
+    tier_state: dict[str, Any] | None = None,
 ) -> Any:
     """Resolve function_call-only responses and fall back to tool-free generation if needed.
 
@@ -728,6 +849,8 @@ def resolve_tool_calls_loop(
                 model=model_name,
                 contents=history,
                 config=gen_config,
+                service_tier_fallback=service_tier_fallback,
+                tier_state=tier_state,
             )
             _accumulate_usage(accumulated_usage, response)
         except Exception as turn_err:
@@ -766,6 +889,7 @@ def resolve_tool_calls_loop(
             response_schema=getattr(gen_config, "response_schema", None),
             labels=billing_labels,
             thinking_config=thinking_cfg,
+            service_tier=getattr(gen_config, "service_tier", None),
         )
         target_contents = fallback_contents if fallback_contents is not None else initial_contents
         try:
@@ -774,6 +898,8 @@ def resolve_tool_calls_loop(
                 model=model_name,
                 contents=target_contents,
                 config=fallback_cfg,
+                service_tier_fallback=service_tier_fallback,
+                tier_state=tier_state,
             )
             _accumulate_usage(accumulated_usage, response)
         except Exception as fb_err:

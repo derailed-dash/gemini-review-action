@@ -64,6 +64,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           # resolve_addressed_threads: 'true' # auto-resolve threads this review marks addressed
           gemini_model: 'gemini-4-hydrogen'
+          # service_tier: 'flex'            # Optional (AI Studio only): 50% off tokens with 1-15 min latency and auto-fallback to standard
           language: 'English (UK)'           # Optional (e.g. English (UK), French, Spanish)
           # persona: 'straight'                # Optional: straight (default), dazbo, palpatine, rick
           # timeout: '60'                     # Optional API timeout in seconds

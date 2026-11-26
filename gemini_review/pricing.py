@@ -26,6 +26,8 @@ from datetime import date, datetime, timezone
 # $0.15 against $1.50, i.e. 0.1x. Per-rate override exists so a vendor changing it is a
 # one-line edit rather than a silently wrong global.
 DEFAULT_CACHE_READ_MULTIPLIER = 0.1
+FLEX_TIER_MULTIPLIER = 0.5
+VERTEX_REGIONAL_MULTIPLIER = 1.10
 
 
 @dataclass(frozen=True)
@@ -193,6 +195,14 @@ class Cost:
     candidates_output: float = 0.0
 
 
+def _is_vertex_regional_location(location: str | None) -> bool:
+    """Return True if a Vertex AI endpoint location is a regional/multi-region endpoint (non-global)."""
+    if not location:
+        return False
+    cleaned = location.strip().lower()
+    return bool(cleaned) and cleaned != "global"
+
+
 def estimate_cost(usage: dict, model: str | None, config: dict | None = None, today: date | None = None) -> Cost:
     """Price one review from the usage dict `gemini_pr_review` already builds.
 
@@ -204,7 +214,9 @@ def estimate_cost(usage: dict, model: str | None, config: dict | None = None, to
     config = config or {}
     caveats: list[str] = []
 
-    rate = _override(config)
+    override_rate = _override(config)
+    is_override = override_rate is not None
+    rate = override_rate
     if rate is None:
         listed = RATES.get(_normalise(model))
         if listed is None:
@@ -251,6 +263,30 @@ def estimate_cost(usage: dict, model: str | None, config: dict | None = None, to
         ),
     )
     context_selection_cost = (ctx_prompt_tokens / 1e6 * rate.input) + (ctx_output_tokens / 1e6 * rate.output)
+
+    service_tier = str(usage.get("service_tier") or "standard").strip().lower()
+    flex_fallback = bool(usage.get("flex_fallback", False))
+    vertex_location = str(usage.get("vertex_location") or "").strip()
+
+    if not is_override:
+        multiplier = 1.0
+        if service_tier == "flex":
+            multiplier *= FLEX_TIER_MULTIPLIER
+            caveats.append("Flex inference tier: 50% discount applied.")
+        elif flex_fallback:
+            caveats.append("Flex inference capacity unavailable; fell back to Standard tier pricing.")
+
+        if _is_vertex_regional_location(vertex_location):
+            multiplier *= VERTEX_REGIONAL_MULTIPLIER
+            caveats.append(f"Vertex AI regional endpoint ({vertex_location}): 10% regional surcharge applied.")
+
+        if multiplier != 1.0:
+            uncached_cost *= multiplier
+            cached_cost *= multiplier
+            output_cost *= multiplier
+            thinking_cost *= multiplier
+            candidates_cost *= multiplier
+            context_selection_cost *= multiplier
 
     if cached > 0:
         # Deliberately hedged. Cache STORAGE is a separate per-token-hour SKU for some model families
