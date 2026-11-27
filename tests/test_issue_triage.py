@@ -106,6 +106,7 @@ def test_triage_main_with_remote_screenshots(mocker, monkeypatch, tmp_path):
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
     monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
     monkeypatch.setenv("GEMINI_EXCLUDE_COMMENT_AUTHORS", "github-actions[bot]")
+    monkeypatch.setenv("GEMINI_TRIAGE_ENGINE", "generate_content")
 
     mocker.patch("gemini_issue_triage.get_available_labels", return_value=["bug", "ui", "enhancement"])
     mocker.patch(
@@ -180,6 +181,7 @@ def test_triage_main_fallback_to_text_only_on_failure(mocker, monkeypatch, tmp_p
     monkeypatch.setenv("GITHUB_REPOSITORY", "derailed-dash/gemini-review-action")
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
     monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.setenv("GEMINI_TRIAGE_ENGINE", "generate_content")
 
     mocker.patch("gemini_issue_triage.get_available_labels", return_value=["bug", "enhancement"])
     mocker.patch("gemini_issue_triage.get_issue_comments", return_value=[])
@@ -227,6 +229,7 @@ def test_triage_main_filters_unrecognised_labels(mocker, monkeypatch, tmp_path, 
     monkeypatch.setenv("GITHUB_REPOSITORY", "derailed-dash/gemini-review-action")
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
     monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.setenv("GEMINI_TRIAGE_ENGINE", "generate_content")
 
     mocker.patch("gemini_issue_triage.get_available_labels", return_value=["bug", "question"])
     mocker.patch("gemini_issue_triage.get_issue_comments", return_value=[])
@@ -279,6 +282,7 @@ def test_triage_client_enforces_timeout_floor_and_stream_fallback(mocker, monkey
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
     monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
     monkeypatch.setenv("GEMINI_TIMEOUT", "60")
+    monkeypatch.setenv("GEMINI_TRIAGE_ENGINE", "generate_content")
 
     mocker.patch("gemini_issue_triage.get_available_labels", return_value=["bug", "question"])
     mocker.patch("gemini_issue_triage.get_issue_comments", return_value=[])
@@ -347,6 +351,7 @@ def test_triage_vertex_client_preserves_default_api_version(mocker, monkeypatch,
 
     gemini_issue_triage.main()
 
+    mock_client_cls.return_value.decisions.create.assert_not_called()
     call_kwargs = mock_client_cls.call_args.kwargs
     assert call_kwargs["vertexai"] is True
     assert call_kwargs["http_options"].timeout == 300000
@@ -387,6 +392,7 @@ def test_triage_enterprise_env_var_uses_vertex_branch(mocker, monkeypatch, tmp_p
 
     gemini_issue_triage.main()
 
+    mock_client_cls.return_value.decisions.create.assert_not_called()
     call_kwargs = mock_client_cls.call_args.kwargs
     assert call_kwargs["vertexai"] is True
     assert call_kwargs["http_options"].timeout == 300000
@@ -413,6 +419,7 @@ def test_triage_does_not_retry_thinking_config_on_token_limit_400(mocker, monkey
     monkeypatch.setenv("GITHUB_REPOSITORY", "derailed-dash/gemini-review-action")
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
     monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.setenv("GEMINI_TRIAGE_ENGINE", "generate_content")
 
     mocker.patch("gemini_issue_triage.get_available_labels", return_value=["bug"])
     mocker.patch("gemini_issue_triage.get_issue_comments", return_value=[])
@@ -460,6 +467,7 @@ def test_triage_strips_media_resolution_before_text_only_fallback(mocker, monkey
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
     monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
     monkeypatch.delenv("GEMINI_THINKING_LEVEL", raising=False)
+    monkeypatch.setenv("GEMINI_TRIAGE_ENGINE", "generate_content")
 
     mocker.patch("gemini_issue_triage.get_available_labels", return_value=["bug", "ui"])
     mocker.patch("gemini_issue_triage.get_issue_comments", return_value=[])
@@ -523,6 +531,7 @@ def test_triage_dual_rejection_token_limit_and_auth_guards(mocker, monkeypatch, 
     monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
     monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
     monkeypatch.setenv("GEMINI_THINKING_LEVEL", "low")
+    monkeypatch.setenv("GEMINI_TRIAGE_ENGINE", "generate_content")
 
     mocker.patch("gemini_issue_triage.get_available_labels", return_value=["bug"])
     mocker.patch("gemini_issue_triage.get_issue_comments", return_value=[])
@@ -564,3 +573,704 @@ def test_triage_dual_rejection_token_limit_and_auth_guards(mocker, monkeypatch, 
     with pytest.raises(RuntimeError, match="API key not valid"):
         gemini_issue_triage.main()
     assert mock_client.models.generate_content.call_count == 1
+
+
+def test_get_available_label_metadata(mocker):
+    from gemini_issue_triage import get_available_label_metadata
+
+    mock_get = mocker.patch("requests.get")
+    resp_1 = mocker.Mock(status_code=200)
+    resp_1.json.return_value = [
+        {"name": "bug", "description": "Something isn't working"},
+        {"name": "docs", "description": None},
+    ]
+    resp_2 = mocker.Mock(status_code=200)
+    resp_2.json.return_value = []
+    mock_get.side_effect = [resp_1, resp_2]
+
+    metadata = get_available_label_metadata("derailed-dash/gemini-review-action", {"Authorization": "token test"})
+    assert metadata == [
+        {"name": "bug", "description": "Something isn't working"},
+        {"name": "docs", "description": ""},
+    ]
+
+
+def test_triage_decisions_happy_path_multilabel_and_screenshots(mocker, monkeypatch, tmp_path, capsys):
+    """Verify Decisions API Wave 1 scores labels with descriptions + medium screenshots and logs telemetry."""
+    import base64
+    import json
+
+    import gemini_issue_triage
+    from gemini_review.multimodal import build_media_part
+
+    event_file = tmp_path / "event.json"
+    event_file.write_text(
+        json.dumps(
+            {
+                "issue": {
+                    "number": 75,
+                    "title": "Settings modal overflows on narrow viewports",
+                    "body": "See screenshot:\n![Bug](https://github.com/user-attachments/assets/abc)",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token")
+    monkeypatch.setenv("GEMINI_API_KEY", "ai_test_key")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "derailed-dash/gemini-review-action")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.delenv("GEMINI_TRIAGE_ENGINE", raising=False)
+    monkeypatch.delenv("GEMINI_TRIAGE_THRESHOLD", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_ENTERPRISE", raising=False)
+
+    mocker.patch(
+        "gemini_issue_triage.get_available_label_metadata",
+        return_value=[
+            {"name": "bug", "description": "Something isn't working"},
+            {"name": "ui", "description": "Visual or layout defect in the interface"},
+            {"name": "documentation", "description": "Improvements or additions to documentation"},
+        ],
+    )
+    mocker.patch("gemini_issue_triage.get_issue_comments", return_value=[])
+    mocker.patch("gemini_issue_triage.has_custom_triage_toml", return_value=False)
+    part_med = build_media_part(b"png-image-bytes", "image/png", media_resolution="medium")
+    mocker.patch("gemini_issue_triage.build_triage_multimodal_parts", return_value=[part_med])
+
+    mock_client_cls = mocker.patch("gemini_issue_triage.genai.Client")
+    mock_client = mock_client_cls.return_value
+    mock_client.decisions.create.return_value = mocker.Mock(
+        prompt_feedback=None,
+        usage=mocker.Mock(total_input_tokens=1200, total_tokens=1200),
+        answers={
+            "is_actionable_issue": mocker.Mock(noul=0.95, confidence=0.95, type="noul"),
+            "label_0": mocker.Mock(noul=0.91, confidence=0.91, type="noul"),
+            "label_1": mocker.Mock(noul=0.84, confidence=0.84, type="noul"),
+            "label_2": mocker.Mock(noul=0.12, confidence=0.88, type="noul"),
+        },
+    )
+    mock_apply = mocker.patch("gemini_issue_triage.apply_labels")
+
+    gemini_issue_triage.main()
+
+    mock_client.decisions.create.assert_called_once()
+    call_kwargs = mock_client.decisions.create.call_args.kwargs
+    assert call_kwargs["model"] == "gemini-decision-1"
+    assert call_kwargs["api_version"] == "v1beta"
+    sent_input = call_kwargs["input"]
+    assert isinstance(sent_input, list) and len(sent_input) == 2
+    assert sent_input[0]["type"] == "text"
+    assert "Settings modal overflows" in sent_input[0]["text"]
+    assert sent_input[1] == {
+        "type": "image",
+        "data": base64.b64encode(b"png-image-bytes").decode("ascii"),
+        "mime_type": "image/png",
+        "resolution": "medium",
+    }
+    sent_questions = call_kwargs["questions"]
+    assert "is_actionable_issue" in sent_questions
+    criteria = sent_questions["is_actionable_issue"]["criteria"]
+    assert "true_description" in criteria and "false_description" in criteria
+    assert "true" not in criteria and "false" not in criteria
+
+    from google.genai._gaos.types.decisions import CreateDecisionRequest
+
+    validated_req = CreateDecisionRequest.model_validate(
+        {
+            "model": call_kwargs["model"],
+            "input": sent_input,
+            "questions": sent_questions,
+        }
+    )
+    actionable_q = validated_req.questions["is_actionable_issue"]
+    assert getattr(actionable_q.criteria, "true_description", None)
+    assert getattr(actionable_q.criteria, "false_description", None)
+
+    assert "Something isn't working" in sent_questions["label_0"]["instructions"]
+    assert "Visual or layout defect" in sent_questions["label_1"]["instructions"]
+
+    mock_client.models.generate_content.assert_not_called()
+    mock_apply.assert_called_once_with(
+        "derailed-dash/gemini-review-action",
+        75,
+        ["bug", "ui"],
+        {"Authorization": "token ghp_test_token", "Accept": "application/vnd.github.v3+json"},
+        timeout=60,
+    )
+    err = capsys.readouterr().err
+    assert "gemini-decision-1" in err
+    assert "P(yes)=0.91" in err
+    assert "conf=0.91" in err
+    assert "1,200" in err
+    assert "$" in err
+    assert "ms" in err
+
+
+def test_triage_decisions_actionability_guardrail_returns_empty(mocker, monkeypatch, tmp_path):
+    """When is_actionable_issue < 0.50, apply_labels receives [] even if a label scored high."""
+    import json
+
+    import gemini_issue_triage
+
+    event_file = tmp_path / "event.json"
+    event_file.write_text(
+        json.dumps({"issue": {"number": 76, "title": "test", "body": "test issue"}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token")
+    monkeypatch.setenv("GEMINI_API_KEY", "ai_test_key")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "derailed-dash/gemini-review-action")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.delenv("GEMINI_TRIAGE_ENGINE", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_ENTERPRISE", raising=False)
+
+    mocker.patch(
+        "gemini_issue_triage.get_available_label_metadata",
+        return_value=[{"name": "bug", "description": "Bug report"}],
+    )
+    mocker.patch("gemini_issue_triage.get_issue_comments", return_value=[])
+    mocker.patch("gemini_issue_triage.has_custom_triage_toml", return_value=False)
+    mocker.patch("gemini_issue_triage.build_triage_multimodal_parts", return_value=[])
+
+    mock_client_cls = mocker.patch("gemini_issue_triage.genai.Client")
+    mock_client_cls.return_value.decisions.create.return_value = mocker.Mock(
+        prompt_feedback=None,
+        usage=mocker.Mock(total_input_tokens=300, total_tokens=300),
+        answers={
+            "is_actionable_issue": mocker.Mock(noul=0.18, confidence=0.82, type="noul"),
+            "label_0": mocker.Mock(noul=0.90, confidence=0.90, type="noul"),
+        },
+    )
+    mock_apply = mocker.patch("gemini_issue_triage.apply_labels")
+
+    gemini_issue_triage.main()
+
+    mock_apply.assert_called_once_with(
+        "derailed-dash/gemini-review-action",
+        76,
+        [],
+        {"Authorization": "token ghp_test_token", "Accept": "application/vnd.github.v3+json"},
+        timeout=60,
+    )
+
+
+def test_triage_decisions_respects_custom_threshold(mocker, monkeypatch, tmp_path):
+    """GEMINI_TRIAGE_THRESHOLD=0.85 excludes labels below 0.85 and keeps labels >= 0.85."""
+    import json
+
+    import gemini_issue_triage
+
+    event_file = tmp_path / "event.json"
+    event_file.write_text(
+        json.dumps({"issue": {"number": 77, "title": "Feature request", "body": "Add CLI flag"}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token")
+    monkeypatch.setenv("GEMINI_API_KEY", "ai_test_key")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "derailed-dash/gemini-review-action")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.setenv("GEMINI_TRIAGE_THRESHOLD", "0.85")
+    monkeypatch.delenv("GEMINI_TRIAGE_ENGINE", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_ENTERPRISE", raising=False)
+
+    mocker.patch(
+        "gemini_issue_triage.get_available_label_metadata",
+        return_value=[
+            {"name": "enhancement", "description": "New feature"},
+            {"name": "documentation", "description": "Docs update"},
+        ],
+    )
+    mocker.patch("gemini_issue_triage.get_issue_comments", return_value=[])
+    mocker.patch("gemini_issue_triage.has_custom_triage_toml", return_value=False)
+    mocker.patch("gemini_issue_triage.build_triage_multimodal_parts", return_value=[])
+
+    mock_client_cls = mocker.patch("gemini_issue_triage.genai.Client")
+    mock_client_cls.return_value.decisions.create.return_value = mocker.Mock(
+        prompt_feedback=None,
+        usage=mocker.Mock(total_input_tokens=400, total_tokens=400),
+        answers={
+            "is_actionable_issue": mocker.Mock(noul=0.92, confidence=0.92, type="noul"),
+            "label_0": mocker.Mock(noul=0.91, confidence=0.91, type="noul"),
+            "label_1": mocker.Mock(noul=0.78, confidence=0.78, type="noul"),
+        },
+    )
+    mock_apply = mocker.patch("gemini_issue_triage.apply_labels")
+
+    gemini_issue_triage.main()
+
+    mock_apply.assert_called_once_with(
+        "derailed-dash/gemini-review-action",
+        77,
+        ["enhancement"],
+        {"Authorization": "token ghp_test_token", "Accept": "application/vnd.github.v3+json"},
+        timeout=60,
+    )
+
+
+def test_triage_decisions_custom_toml_fallback_and_override(mocker, monkeypatch, tmp_path):
+    """Custom .github/commands/gemini-triage.toml falls back under 'auto' but runs Decisions under 'decisions'."""
+    import json
+
+    import gemini_issue_triage
+
+    event_file = tmp_path / "event.json"
+    event_file.write_text(
+        json.dumps({"issue": {"number": 78, "title": "Custom prompt", "body": "Body"}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token")
+    monkeypatch.setenv("GEMINI_API_KEY", "ai_test_key")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "derailed-dash/gemini-review-action")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_ENTERPRISE", raising=False)
+
+    mocker.patch(
+        "gemini_issue_triage.get_available_label_metadata",
+        return_value=[{"name": "bug", "description": "Bug"}],
+    )
+    mocker.patch("gemini_issue_triage.get_issue_comments", return_value=[])
+    mocker.patch("gemini_issue_triage.has_custom_triage_toml", return_value=True)
+    mocker.patch("gemini_issue_triage.build_triage_multimodal_parts", return_value=[])
+    mocker.patch("gemini_issue_triage.load_triage_prompt", return_value="Custom TOML prompt")
+
+    mock_client_cls = mocker.patch("gemini_issue_triage.genai.Client")
+    mock_client = mock_client_cls.return_value
+    mock_client.models.generate_content.return_value = mocker.Mock(
+        text=json.dumps({"selected_labels": ["bug"], "reasoning": "Custom TOML."})
+    )
+    mock_client.decisions.create.return_value = mocker.Mock(
+        prompt_feedback=None,
+        usage=mocker.Mock(total_input_tokens=200, total_tokens=200),
+        answers={
+            "is_actionable_issue": mocker.Mock(noul=0.90, confidence=0.90, type="noul"),
+            "label_0": mocker.Mock(noul=0.88, confidence=0.88, type="noul"),
+        },
+    )
+    mock_apply = mocker.patch("gemini_issue_triage.apply_labels")
+
+    # 1. auto -> falls back to generate_content
+    monkeypatch.setenv("GEMINI_TRIAGE_ENGINE", "auto")
+    gemini_issue_triage.main()
+    mock_client.decisions.create.assert_not_called()
+    assert mock_client.models.generate_content.call_count == 1
+
+    # 2. explicit 'decisions' -> overrides custom TOML
+    mock_client.models.generate_content.reset_mock()
+    mock_apply.reset_mock()
+    monkeypatch.setenv("GEMINI_TRIAGE_ENGINE", "decisions")
+    gemini_issue_triage.main()
+    mock_client.decisions.create.assert_called_once()
+    mock_client.models.generate_content.assert_not_called()
+    mock_apply.assert_called_once()
+
+
+def test_triage_decisions_fallback_on_label_and_token_limits(mocker, monkeypatch, tmp_path, capsys):
+    """Exceeding 990 labels or 262,144 estimated tokens logs a warning and falls back to generate_content."""
+    import json
+
+    import gemini_issue_triage
+
+    event_file = tmp_path / "event.json"
+    event_file.write_text(
+        json.dumps({"issue": {"number": 79, "title": "Huge repo", "body": "Body"}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token")
+    monkeypatch.setenv("GEMINI_API_KEY", "ai_test_key")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "derailed-dash/gemini-review-action")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.delenv("GEMINI_TRIAGE_ENGINE", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_ENTERPRISE", raising=False)
+
+    mocker.patch("gemini_issue_triage.get_issue_comments", return_value=[])
+    mocker.patch("gemini_issue_triage.has_custom_triage_toml", return_value=False)
+    mocker.patch("gemini_issue_triage.build_triage_multimodal_parts", return_value=[])
+
+    mock_client_cls = mocker.patch("gemini_issue_triage.genai.Client")
+    mock_client = mock_client_cls.return_value
+    mock_client.models.generate_content.return_value = mocker.Mock(
+        text=json.dumps({"selected_labels": ["lbl-0"], "reasoning": "Fallback."})
+    )
+    mock_apply = mocker.patch("gemini_issue_triage.apply_labels")
+
+    # 1. >990 labels triggers fallback
+    many_labels = [{"name": f"lbl-{i}", "description": ""} for i in range(991)]
+    mocker.patch("gemini_issue_triage.get_available_label_metadata", return_value=many_labels)
+    gemini_issue_triage.main()
+    mock_client.decisions.create.assert_not_called()
+    assert mock_client.models.generate_content.call_count == 1
+    assert "990" in capsys.readouterr().err
+    mock_apply.assert_called_once()
+
+    # 2. >262,144 estimated tokens triggers fallback
+    mock_client.models.generate_content.reset_mock()
+    mock_apply.reset_mock()
+    mocker.patch(
+        "gemini_issue_triage.get_available_label_metadata",
+        return_value=[{"name": "lbl-0", "description": "desc"}],
+    )
+    event_file.write_text(
+        json.dumps({"issue": {"number": 79, "title": "Huge issue", "body": "x" * 1_100_000}}),
+        encoding="utf-8",
+    )
+    gemini_issue_triage.main()
+    mock_client.decisions.create.assert_not_called()
+    assert mock_client.models.generate_content.call_count == 1
+    assert "262,144" in capsys.readouterr().err
+
+
+def test_triage_decisions_fallback_on_api_error_and_safety_block(mocker, monkeypatch, tmp_path, capsys):
+    """Decisions API exceptions and prompt_feedback safety blocks fall back cleanly to generate_content."""
+    import json
+
+    import gemini_issue_triage
+
+    event_file = tmp_path / "event.json"
+    event_file.write_text(
+        json.dumps({"issue": {"number": 80, "title": "Error case", "body": "Details"}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token")
+    monkeypatch.setenv("GEMINI_API_KEY", "ai_test_key")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "derailed-dash/gemini-review-action")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.delenv("GEMINI_TRIAGE_ENGINE", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_ENTERPRISE", raising=False)
+
+    mocker.patch(
+        "gemini_issue_triage.get_available_label_metadata",
+        return_value=[{"name": "bug", "description": "Bug"}],
+    )
+    mocker.patch("gemini_issue_triage.get_issue_comments", return_value=[])
+    mocker.patch("gemini_issue_triage.has_custom_triage_toml", return_value=False)
+    mocker.patch("gemini_issue_triage.build_triage_multimodal_parts", return_value=[])
+
+    mock_client_cls = mocker.patch("gemini_issue_triage.genai.Client")
+    mock_client = mock_client_cls.return_value
+    mock_client.models.generate_content.return_value = mocker.Mock(
+        text=json.dumps({"selected_labels": ["bug"], "reasoning": "Fallback ok."})
+    )
+    mock_apply = mocker.patch("gemini_issue_triage.apply_labels")
+
+    # 1. API error -> fallback
+    mock_client.decisions.create.side_effect = RuntimeError("503 Service Unavailable")
+    gemini_issue_triage.main()
+    assert mock_client.models.generate_content.call_count == 1
+    assert "Falling back to generate_content" in capsys.readouterr().err
+    mock_apply.assert_called_once()
+
+    # 2. Safety block -> fallback
+    mock_client.models.generate_content.reset_mock()
+    mock_apply.reset_mock()
+    mock_client.decisions.create.side_effect = None
+    mock_client.decisions.create.return_value = mocker.Mock(
+        answers=None,
+        prompt_feedback=mocker.Mock(block_reason="safety", block_reason_message="Filtered"),
+    )
+    gemini_issue_triage.main()
+    assert mock_client.models.generate_content.call_count == 1
+    assert "safety" in capsys.readouterr().err.lower()
+    mock_apply.assert_called_once()
+
+
+def test_triage_decisions_dry_run_output(mocker, monkeypatch, capsys):
+    """Dry-run mode prints per-label probabilities, confidence scores, latency, and cost without apply_labels."""
+    import gemini_issue_triage
+
+    monkeypatch.setenv("GEMINI_API_KEY", "ai_test_key")
+    monkeypatch.delenv("GITHUB_EVENT_PATH", raising=False)
+    monkeypatch.delenv("GEMINI_TRIAGE_ENGINE", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_ENTERPRISE", raising=False)
+
+    mocker.patch("gemini_issue_triage.has_custom_triage_toml", return_value=False)
+    mocker.patch("gemini_issue_triage.build_triage_multimodal_parts", return_value=[])
+
+    mock_client_cls = mocker.patch("gemini_issue_triage.genai.Client")
+    mock_client_cls.return_value.decisions.create.return_value = mocker.Mock(
+        prompt_feedback=None,
+        usage=mocker.Mock(total_input_tokens=500, total_tokens=500),
+        answers={
+            "is_actionable_issue": mocker.Mock(noul=0.91, confidence=0.91, type="noul"),
+            "label_0": mocker.Mock(noul=0.88, confidence=0.88, type="noul"),
+            "label_1": mocker.Mock(noul=0.22, confidence=0.78, type="noul"),
+            "label_2": mocker.Mock(noul=0.75, confidence=0.75, type="noul"),
+            "label_3": mocker.Mock(noul=0.05, confidence=0.95, type="noul"),
+            "label_4": mocker.Mock(noul=0.10, confidence=0.90, type="noul"),
+            "label_5": mocker.Mock(noul=0.08, confidence=0.92, type="noul"),
+        },
+    )
+    mock_apply = mocker.patch("gemini_issue_triage.apply_labels")
+
+    gemini_issue_triage.main()
+
+    mock_apply.assert_not_called()
+    captured = capsys.readouterr()
+    assert "DRY RUN TRIAGE RESULTS" in captured.err
+    assert "Chosen Labels: ['bug', 'enhancement']" in captured.out
+    assert "Engine: decisions (gemini-decision-1)" in captured.out
+    assert "bug" in captured.out and "0.88" in captured.out
+
+
+def test_get_available_label_metadata_pagination_and_non_list(mocker):
+    """Verify 2-page pagination stops cleanly when <100 items and non-list JSON terminates without looping."""
+    from gemini_issue_triage import get_available_label_metadata
+
+    mock_get = mocker.patch("requests.get")
+    page1 = [{"name": f"lbl-{i}", "description": None} for i in range(100)]
+    page2 = [{"name": "lbl-100", "description": "Last"}, {"name": "lbl-101", "description": "Final"}]
+    resp_1 = mocker.Mock(status_code=200)
+    resp_1.json.return_value = page1
+    resp_2 = mocker.Mock(status_code=200)
+    resp_2.json.return_value = page2
+    mock_get.side_effect = [resp_1, resp_2]
+
+    labels = get_available_label_metadata("derailed-dash/gemini-review-action", {"Authorization": "token test"})
+    assert len(labels) == 102
+    assert labels[0]["description"] == ""
+    assert labels[100]["description"] == "Last"
+    assert mock_get.call_count == 2  # Must stop after <100 items without a wasted 3rd request
+
+    # Non-list 200 JSON (e.g. proxy error dict) must terminate on call 1 instead of looping
+    mock_get.reset_mock()
+    mock_get.side_effect = None
+    bad_resp = mocker.Mock(status_code=200)
+    bad_resp.json.return_value = {"message": "unexpected object"}
+    mock_get.return_value = bad_resp
+
+    assert get_available_label_metadata("derailed-dash/gemini-review-action", {}) == []
+    assert mock_get.call_count == 1
+
+
+def test_evaluate_triage_decisions_malformed_partial_empty_and_none_descriptions(mocker, capsys):
+    """Verify malformed/partial/empty Decisions inputs fall back cleanly and description=None is handled."""
+    from gemini_issue_triage import build_triage_decision_questions, evaluate_triage_decisions
+
+    mock_client = mocker.Mock()
+
+    # 1. description=None does not raise AttributeError
+    questions, key_map = build_triage_decision_questions([{"name": "docs", "description": None}])  # type: ignore[list-item]
+    assert key_map == {"label_0": "docs"}
+    assert "Label description" not in questions["label_0"]["instructions"]
+
+    # 2. Empty label_metadata returns None without making an API call
+    assert (
+        evaluate_triage_decisions(
+            mock_client,
+            issue_title="Empty",
+            issue_body="Body",
+            label_metadata=[],
+        )
+        is None
+    )
+    mock_client.decisions.create.assert_not_called()
+
+    labels = [{"name": "bug", "description": "Bug"}]
+
+    # 3. Malformed noul payloads (None, NaN, bool) trigger fallback cleanly
+    for bad_answer in (
+        mocker.Mock(noul=None, confidence=0.5),
+        mocker.Mock(noul=float("nan"), confidence=0.9),
+        mocker.Mock(noul=True, confidence=0.9),
+    ):
+        mock_client.decisions.create.return_value = mocker.Mock(
+            prompt_feedback=None,
+            usage=mocker.Mock(total_input_tokens=100, total_tokens=100),
+            answers={"is_actionable_issue": mocker.Mock(noul=0.95, confidence=0.95), "label_0": bad_answer},
+        )
+        assert (
+            evaluate_triage_decisions(
+                mock_client,
+                issue_title="Bug",
+                issue_body="Crash",
+                label_metadata=labels,
+            )
+            is None
+        )
+        assert "Malformed Decisions API answer payload" in capsys.readouterr().err
+
+    # 4. Partial response missing all label_* keys triggers fallback instead of returning []
+    mock_client.decisions.create.return_value = mocker.Mock(
+        prompt_feedback=None,
+        usage=mocker.Mock(total_input_tokens=100, total_tokens=100),
+        answers={"is_actionable_issue": mocker.Mock(noul=0.95, confidence=0.95)},
+    )
+    assert (
+        evaluate_triage_decisions(
+            mock_client,
+            issue_title="Bug",
+            issue_body="Crash",
+            label_metadata=labels,
+        )
+        is None
+    )
+    assert "no label scores" in capsys.readouterr().err
+
+
+def test_triage_decisions_boundaries_and_explicit_vertex_fallback(mocker, monkeypatch, tmp_path):
+    """Verify exact boundaries (990 labels, p==threshold, actionable==0.50), high resolution, and Vertex fallback."""
+    import base64
+    import json
+
+    import gemini_issue_triage
+    from gemini_review.multimodal import build_media_part
+
+    event_file = tmp_path / "event.json"
+    event_file.write_text(
+        json.dumps({"issue": {"number": 81, "title": "Boundary test", "body": "Details"}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token")
+    monkeypatch.setenv("GEMINI_API_KEY", "ai_test_key")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "derailed-dash/gemini-review-action")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.setenv("GEMINI_TRIAGE_MEDIA_RESOLUTION", "high")
+    monkeypatch.setenv("GEMINI_TRIAGE_THRESHOLD", "0.70")
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_ENTERPRISE", raising=False)
+
+    # Exactly 990 labels should succeed via Decisions
+    labels_990 = [{"name": f"lbl-{i}", "description": ""} for i in range(990)]
+    mocker.patch("gemini_issue_triage.get_available_label_metadata", return_value=labels_990)
+    mocker.patch(
+        "gemini_issue_triage.get_issue_comments",
+        return_value=[
+            {"user": {"login": "alice"}, "body": "User comment"},
+            {"user": {"login": "bot[bot]"}, "body": "Hidden bot comment"},
+        ],
+    )
+    monkeypatch.setenv("GEMINI_EXCLUDE_COMMENT_AUTHORS", "bot[bot]")
+    part_high = build_media_part(b"png-hi", "image/png", media_resolution="high")
+    mocker.patch("gemini_issue_triage.build_triage_multimodal_parts", return_value=[part_high])
+
+    answers = {
+        "is_actionable_issue": mocker.Mock(noul=0.50, confidence=0.50),
+        "label_0": mocker.Mock(noul=0.70, confidence=0.70),
+    }
+    for i in range(1, 990):
+        answers[f"label_{i}"] = mocker.Mock(noul=0.10, confidence=0.90)
+
+    mock_client_cls = mocker.patch("gemini_issue_triage.genai.Client")
+    mock_client = mock_client_cls.return_value
+    mock_client.decisions.create.return_value = mocker.Mock(
+        prompt_feedback=None,
+        usage=mocker.Mock(total_input_tokens=2000, total_tokens=2000),
+        answers=answers,
+    )
+    mock_apply = mocker.patch("gemini_issue_triage.apply_labels")
+
+    gemini_issue_triage.main()
+
+    call_kwargs = mock_client.decisions.create.call_args.kwargs
+    sent_input = call_kwargs["input"]
+    assert "User comment" in sent_input[0]["text"]
+    assert "Hidden bot comment" not in sent_input[0]["text"]
+    assert sent_input[1] == {
+        "type": "image",
+        "data": base64.b64encode(b"png-hi").decode("ascii"),
+        "mime_type": "image/png",
+        "resolution": "high",
+    }
+    mock_apply.assert_called_once_with(
+        "derailed-dash/gemini-review-action",
+        81,
+        ["lbl-0"],
+        {"Authorization": "token ghp_test_token", "Accept": "application/vnd.github.v3+json"},
+        timeout=60,
+    )
+
+    # Explicit triage_engine='decisions' on Vertex AI still falls back to generate_content
+    monkeypatch.setenv("GEMINI_TRIAGE_ENGINE", "decisions")
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "proj")
+    mocker.patch("gemini_issue_triage.get_available_label_metadata", return_value=[{"name": "bug", "description": ""}])
+    mocker.patch("gemini_issue_triage.build_triage_multimodal_parts", return_value=[])
+    mock_client.decisions.create.reset_mock()
+    mock_client.models.generate_content.return_value = mocker.Mock(
+        text=json.dumps({"selected_labels": ["bug"], "reasoning": "Vertex fallback."}),
+        usage_metadata=None,
+    )
+    gemini_issue_triage.main()
+    mock_client.decisions.create.assert_not_called()
+    assert mock_client.models.generate_content.call_count == 1
+
+
+def test_triage_generate_content_telemetry_flex_fallback_and_unpriced_model(mocker, monkeypatch, tmp_path, capsys):
+    """Verify generate_content telemetry reports Standard cost after Flex shedding and 'n/a' for unknown models."""
+    import json
+
+    import gemini_issue_triage
+
+    event_file = tmp_path / "event.json"
+    event_file.write_text(
+        json.dumps({"issue": {"number": 82, "title": "Telemetry test", "body": "Body"}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token")
+    monkeypatch.setenv("GEMINI_API_KEY", "ai_test_key")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "derailed-dash/gemini-review-action")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.setenv("GEMINI_TRIAGE_ENGINE", "generate_content")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-4-hydrogen")
+    monkeypatch.setenv("GEMINI_SERVICE_TIER", "flex")
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_ENTERPRISE", raising=False)
+
+    mocker.patch("gemini_issue_triage.get_available_label_metadata", return_value=[{"name": "bug", "description": ""}])
+    mocker.patch("gemini_issue_triage.get_issue_comments", return_value=[])
+    mocker.patch("gemini_issue_triage.build_triage_multimodal_parts", return_value=[])
+    mocker.patch("gemini_issue_triage.apply_labels")
+
+    # 1. Simulate Flex shedding -> Standard fallback inside generate_content_with_stream_fallback
+    def _fake_stream_fallback(client, *, model, contents, config, service_tier_fallback=True, tier_state=None):
+        if tier_state is not None:
+            tier_state["effective_service_tier"] = "standard"
+            tier_state["flex_fallback"] = True
+        return mocker.Mock(
+            text=json.dumps({"selected_labels": ["bug"], "reasoning": "Standard fallback."}),
+            usage_metadata=mocker.Mock(
+                prompt_token_count=1000,
+                cached_content_token_count=0,
+                candidates_token_count=100,
+                thoughts_token_count=0,
+            ),
+        )
+
+    mocker.patch("gemini_issue_triage.genai.Client")
+    mocker.patch("gemini_issue_triage.generate_content_with_stream_fallback", side_effect=_fake_stream_fallback)
+
+    gemini_issue_triage.main()
+    err = capsys.readouterr().err
+    # Standard cost for gemini-4-hydrogen: 1000 * $1.50/1M + 100 * $7.50/1M = $0.0015 + $0.00075 = $0.00225 -> $0.0023
+    # (Flex would have been $0.0011)
+    assert "cost=$0.0023" in err
+
+    # 2. Unknown/unpriced model logs cost=n/a rather than $0.00
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-future-unknown")
+    monkeypatch.setenv("GEMINI_SERVICE_TIER", "standard")
+    gemini_issue_triage.main()
+    err2 = capsys.readouterr().err
+    assert "cost=n/a" in err2
+    assert "cost=$0.00" not in err2

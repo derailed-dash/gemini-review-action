@@ -17,7 +17,8 @@ The action runs as a native GitHub Composite Action (`action.yml`) that boots a 
 The code review action is organized into a modular Python package (`gemini_review/`) separating domain responsibilities, with `gemini_pr_review.py` serving as the top-level execution entrypoint and backward-compatible API facade:
 
 * **`gemini_review/schemas.py`**: Pydantic schemas defining structured outputs (`InlineComment`, `ReviewResult`, `DynamicContextSelection`).
-* **`gemini_review/config.py`**: Configuration loader for `gemini-review.toml`, timeout/model defaults, context and image scope resolvers (`get_context_mode`, `get_max_context_bytes`, `get_attach_markdown_images`, `get_service_tier`, `get_service_tier_fallback`), exclusion pattern parsers (`get_diff_exclude_patterns`, `get_context_exclude_patterns`), and multimodal budget/resolution controls (`max_multimodal_images`, `max_triage_images`, `image_trigger_bytes`, `image_target_bytes`, `get_context_media_resolution`, `get_visual_diff_media_resolution`, `get_triage_media_resolution`).
+* **`gemini_review/config.py`**: Configuration loader for `gemini-review.toml`, timeout/model defaults, context and image scope resolvers (`get_context_mode`, `get_max_context_bytes`, `get_attach_markdown_images`, `get_service_tier`, `get_service_tier_fallback`), exclusion pattern parsers (`get_diff_exclude_patterns`, `get_context_exclude_patterns`), issue triage engine/threshold controls (`get_triage_engine`, `get_triage_threshold`), and multimodal budget/resolution controls (`max_multimodal_images`, `max_triage_images`, `image_trigger_bytes`, `image_target_bytes`, `get_context_media_resolution`, `get_visual_diff_media_resolution`, `get_triage_media_resolution`).
+* **`gemini_review/decisions.py`**: Shared Gemini Decisions API helper (`call_decisions`, `build_decision_input_blocks`, `estimate_decision_tokens`, `extract_decision_usage`) targeting `gemini-decision-1` (`v1beta`), enforcing safe `'medium'`/`'high'` image resolutions (never `'low'`), pre-flight 262,144-token ceiling checks, safety-block detection (`DecisionsBlockedError`), and cost/latency telemetry.
 * **`gemini_review/multimodal.py`**: Multimodal MIME type detection and allowlist validation (`is_gemini_supported_mime`), tiered per-part `media_resolution` part assembly and stripping (`resolve_part_media_resolution`, `build_media_part`, `strip_media_resolution`), in-memory SVG-to-PNG rasterisation via `resvg_py` (`rasterize_svg_bytes`), deterministic Pillow downscaling (`optimize_image_bytes`), local Markdown/HTML image reference extraction (`extract_markdown_image_references`), and remote issue screenshot extraction/authenticated fetching (`extract_remote_image_urls`, `fetch_remote_image`, `build_triage_multimodal_parts`).
 * **`gemini_review/diff.py`**: Unified diff patch parsing, line numbering annotations (`format_diff_patch_with_line_numbers`), suggestion indentation alignment, line-range auto-correction, and inline comment filtering (`filter_review_comments`).
 * **`gemini_review/repo.py`**: Safe baseline Git tree inspection (`ensure_git_ref_available`, `list_git_tree_files`, `read_git_tree_texts`), file discovery (`get_all_repo_files`), file tree formatting (`generate_file_tree`), core manifest pattern matching (`is_core_file`), PR diff glob filtering (`matches_exclude_patterns`, `filter_excluded_diff_files`), import extraction, and candidate pool ranking & bounding (`rank_and_bound_candidates`).
@@ -177,29 +178,32 @@ The review prompt assembly in `gemini_review/prompts.py` provides two distinct c
 
 The issue triage script automatically categorises and labels new or reopened issues using both text context and attached screenshots.
 
-### 1. Label & Discussion Comment Retrieval
+### 1. Label Metadata & Discussion Comment Retrieval
 
-* The script calls `get_available_labels()` to fetch all labels currently configured on the repository, handling pagination dynamically.
+* The script calls `get_available_label_metadata()` (with `get_available_labels()` preserved for backwards compatibility) to fetch all repository labels alongside their GitHub descriptions, handling pagination dynamically.
 * When comment history is enabled (`include_comment_history: 'true'`), `get_issue_comments()` retrieves existing issue discussion comments so follow-up context and screenshots are included.
 
 ### 2. Remote Screenshot Extraction & Multimodal Assembly
 
 * `extract_remote_image_urls()` parses the issue body and discussion comments in document order for remote HTTPS image links (`![alt](https://...)` and `<img src="https://...">`), supporting extensionless GitHub user-uploaded asset URLs (`github.com/user-attachments/assets/...` and `githubusercontent.com/...`).
 * `fetch_remote_image()` streams remote screenshots with a 20 MB size ceiling, attaching `Authorization: Bearer <GITHUB_TOKEN>` strictly for GitHub-hosted domains (`github.com` and `githubusercontent.com`) to support private/internal repositories without leaking credentials to third-party servers.
-* `build_triage_multimodal_parts()` caps screenshots at `max_triage_images` (default: 5), downscales large raster images via `optimize_image_bytes()`, and attaches them via `build_media_part()` at `triage_media_resolution` (default `'medium'`) alongside the triage prompt. If any remote download fails or times out, triage gracefully degrades to text-only classification.
+* `build_triage_multimodal_parts()` caps screenshots at `max_triage_images` (default: 5), downscales large raster images via `optimize_image_bytes()`, and attaches them via `build_media_part()` at `triage_media_resolution` (default `'medium'`) once up front so both classification engines share the prepared screenshots. If any remote download fails or times out, triage gracefully degrades to text-only classification.
 
-### 3. Prompting & Classification
+### 3. Classification: Decisions API (`gemini-decision-1`) & Automatic `generate_content` Fallback
 
-* The system instruction (loaded from `gemini-triage.toml`) instructs the model to act as a triage assistant and inspect both text and any attached screenshots.
-* Using structured output, Gemini returns a `TriageResult` containing:
-  - `selected_labels`: The subset of repo labels that match the issue.
-  - `reasoning`: The explanation for applying those labels.
-* The Gemini client enforces a 300-second minimum HTTP timeout floor (`types.HttpOptions(timeout=max(timeout, 300) * 1000)`), applies model-aware `build_thinking_config()` (clamping unsupported `'off'`/`'minimal'` levels to `'low'` on Gemini 4), and wraps calls in `generate_content_with_stream_fallback()` so connection resets recover via `generate_content_stream`.
-* If a model rejects per-part `media_resolution` (`is_media_resolution_error()`), Stage 2 calls `strip_media_resolution()` and retries with the screenshots still attached (re-checking `is_thinking_config_error()` if needed). Only if multimodal triage still fails on a non-auth/non-quota error does Stage 3 retry with text-only triage (`triage_prompt`).
+* **Primary Engine on Gemini Developer API (`triage_engine: 'auto'` or `'decisions'`)**:
+  - `build_triage_decision_questions()` constructs an `is_actionable_issue` `noul` guardrail plus one `noul` question (`label_0`, `label_1`, ...) per repository label, injecting both label `name` and GitHub `description`.
+  - `evaluate_triage_decisions()` converts text and screenshots into `DecisionInputContent` blocks at `triage_media_resolution` (`'medium'` or `'high'`, never `'low'`), verifies the `<= 990` label cap and `262,144`-token ceiling, and calls `client.decisions.create(model="gemini-decision-1", api_version="v1beta", ...)` in a single zero-output-token prefill pass.
+  - Labels are selected when `is_actionable_issue` passes (`>= 0.50`) and the label's calibrated `P(yes)` meets `triage_threshold` (default `'0.70'`), with per-label `P(yes)`, `confidence`, latency, token count, and estimated USD cost logged to stderr.
+* **Automatic Fallback to `generate_content` (`TriageResult` Structured Outputs)**:
+  - Triage seamlessly falls back to `generate_content` (loaded from `gemini-triage.toml`) when `triage_engine` is `'generate_content'`, when running on Vertex AI / Enterprise (where `gemini-decision-1` is not currently hosted), when a custom `.github/commands/gemini-triage.toml` exists under `triage_engine: 'auto'`, when labels exceed `990` or input exceeds `262,144` tokens, or if `decisions.create` errors or hits a `prompt_feedback` block.
+  - Using structured output, Gemini returns a `TriageResult` (`selected_labels`, `reasoning`).
+  - The Gemini client enforces a 300-second minimum HTTP timeout floor (`types.HttpOptions(timeout=max(timeout, 300) * 1000)`), applies model-aware `build_thinking_config()` (clamping unsupported `'off'`/`'minimal'` levels to `'low'` on Gemini 4), and wraps calls in `generate_content_with_stream_fallback()` so connection resets recover via `generate_content_stream`.
+  - If a model rejects per-part `media_resolution` (`is_media_resolution_error()`), Stage 2 calls `strip_media_resolution()` and retries with the screenshots still attached (re-checking `is_thinking_config_error()` if needed). Only if multimodal triage still fails on a non-auth/non-quota error does Stage 3 retry with text-only triage (`triage_prompt`).
 
 ### 4. Deterministic Allowlist Filtering & API Label Application
 
-* Before calling the GitHub API, `gemini_issue_triage.py` deduplicates `triage.selected_labels` in order and filters them strictly against the repository's `available_labels` allowlist, dropping any hallucinated or unrecognised labels with a warning.
+* Before calling the GitHub API, `gemini_issue_triage.py` deduplicates selected labels (from either Decisions triage or `TriageResult`) in order and filters them strictly against the repository's `available_labels` allowlist, dropping any hallucinated or unrecognised labels with a warning.
 * The script then calls `apply_labels()` to add the validated labels to the issue on GitHub.
 
 ---
