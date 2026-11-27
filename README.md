@@ -525,9 +525,9 @@ Thinking token usage and its associated cost are tracked and reported separately
 
 ```yaml
         with:
-          # Recommended lightweight thinking level for fast issue triage or quick reviews on Gemini 4
-          thinking_level: 'low'
-          # Or choose 'medium', 'high', or 'xhigh' (on gemini-4-hydrogen / gemini-4-neon) for deeper architectural analysis
+          # Balanced default thinking level for Gemini 4 PR reviews (use 'low' for fast issue triage or trivial PRs)
+          thinking_level: 'medium'
+          # Or choose 'high' or 'xhigh' (on gemini-4-hydrogen / gemini-4-neon) for deeper architectural analysis
           # thinking_level: 'high'
 ```
 
@@ -903,6 +903,7 @@ Here is an overview of the directory tree and the purpose of each file:
 │   ├── budget.py            # Token budget allocation & per-file content truncation
 │   ├── config.py            # Configuration loader and default settings
 │   ├── context.py           # Hybrid codebase context engine & dynamic context selection
+│   ├── decisions.py         # Shared Gemini Decisions API helper (gemini-decision-1)
 │   ├── developer_knowledge.py # Google Developer Knowledge API integration
 │   ├── diff.py              # Diff patch parsing, line numbering & suggestion alignment
 │   ├── github.py            # GitHub REST API interactions & review submission

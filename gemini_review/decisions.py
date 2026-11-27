@@ -76,9 +76,10 @@ def build_decision_input_blocks(
 ) -> list[dict[str, Any]]:
     """Build Decisions API ``input`` blocks from text and multimodal ``types.Part`` images.
 
-    Only image MIME types supported by ``DecisionInputContent`` are attached; PDFs and
-    unsupported formats (e.g. ``image/svg+xml``) are skipped with a warning. Image
-    resolution is strictly constrained to ``medium`` or ``high`` (never ``low``).
+    Only supported image blocks (``ImageContent``) are attached by this helper; PDFs
+    (which use ``DocumentContent`` in the Decisions schema) and unsupported formats
+    (e.g. ``image/svg+xml``) are skipped with a warning. Image resolution is strictly
+    constrained to ``medium`` or ``high`` (never ``low``).
     """
     safe_resolution = _normalise_decision_image_resolution(image_resolution)
     blocks: list[dict[str, Any]] = []
@@ -91,9 +92,10 @@ def build_decision_input_blocks(
             continue
         raw_data = getattr(inline_data, "data", None)
         mime_type = (getattr(inline_data, "mime_type", None) or "").strip().lower()
-        if raw_data is None or mime_type not in DECISIONS_SUPPORTED_IMAGE_MIMES:
+        if not raw_data or mime_type not in DECISIONS_SUPPORTED_IMAGE_MIMES:
             print(
-                f"Warning: Skipping Decisions multimodal part with unsupported MIME type '{mime_type or 'unknown'}'.",
+                f"Warning: Skipping Decisions multimodal part with unsupported or empty payload "
+                f"(mime='{mime_type or 'unknown'}').",
                 file=sys.stderr,
             )
             continue
@@ -103,6 +105,9 @@ def build_decision_input_blocks(
         elif isinstance(raw_data, str):
             b64_data = raw_data
         else:
+            continue
+
+        if not b64_data:
             continue
 
         blocks.append(
@@ -117,6 +122,23 @@ def build_decision_input_blocks(
     return blocks
 
 
+def _approx_text_tokens(text: str) -> int:
+    """Return ceiling token estimate (~4 chars/token) for a non-empty string."""
+    return (len(text) + 3) // 4 if text else 0
+
+
+def _approx_instructions_tokens(instructions: Any) -> int:
+    """Estimate tokens for Decisions ``instructions`` (str, content block, or sequence)."""
+    if isinstance(instructions, str):
+        return _approx_text_tokens(instructions)
+    if isinstance(instructions, Mapping):
+        text = instructions.get("text")
+        return _approx_text_tokens(text) if isinstance(text, str) else 0
+    if isinstance(instructions, Sequence) and not isinstance(instructions, (str, bytes, bytearray)):
+        return sum(_approx_instructions_tokens(item) for item in instructions)
+    return 0
+
+
 def estimate_decision_tokens(
     input_blocks: Sequence[Mapping[str, Any]] | str,
     questions: Mapping[str, Mapping[str, Any]],
@@ -125,29 +147,29 @@ def estimate_decision_tokens(
     total = 0
 
     if isinstance(input_blocks, str):
-        total += len(input_blocks) // 4
+        total += _approx_text_tokens(input_blocks)
     else:
         for block in input_blocks:
             btype = str(block.get("type", "")).lower()
             if btype == "text":
-                total += len(str(block.get("text", ""))) // 4
+                total += _approx_text_tokens(str(block.get("text", "")))
             elif btype == "image":
                 res = str(block.get("resolution", "medium")).lower()
                 total += 1120 if res == "high" else 560
 
     for q in questions.values():
-        instructions = q.get("instructions", "")
-        if isinstance(instructions, str):
-            total += len(instructions) // 4
+        total += _approx_instructions_tokens(q.get("instructions"))
         criteria = q.get("criteria")
         if isinstance(criteria, Mapping):
-            for c_val in criteria.values():
+            for c_key, c_val in criteria.items():
+                if isinstance(c_key, str):
+                    total += _approx_text_tokens(c_key)
                 if isinstance(c_val, str):
-                    total += len(c_val) // 4
-        choices = q.get("choices")
-        if isinstance(choices, Sequence) and not isinstance(choices, str):
-            for ch in choices:
-                total += len(str(ch)) // 4
+                    total += _approx_text_tokens(c_val)
+        elif isinstance(criteria, Sequence) and not isinstance(criteria, (str, bytes, bytearray)):
+            for c_item in criteria:
+                if isinstance(c_item, str):
+                    total += _approx_text_tokens(c_item)
 
     return max(1, total)
 
@@ -202,6 +224,8 @@ def call_decisions(
     api_version: str = DECISIONS_API_VERSION,
 ) -> DecisionsResult:
     """Execute ``client.decisions.create`` and return calibrated answers with telemetry."""
+    if not input_blocks or (isinstance(input_blocks, str) and not input_blocks.strip()):
+        raise ValueError("Decisions API requires non-empty input.")
     if not questions:
         raise ValueError("Decisions API requires at least 1 question.")
     if len(questions) > MAX_DECISIONS_QUESTIONS:

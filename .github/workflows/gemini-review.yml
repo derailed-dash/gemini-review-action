@@ -55,7 +55,7 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           gemini_model: 'gemini-4-hydrogen'
-          thinking_level: 'low'
+          thinking_level: 'medium'
           language: 'English (UK)'
           persona: 'dazbo'  # Optional: straight (default), dazbo, palpatine, rick
           diff_exclude_patterns: 'starter-examples/skills/**'

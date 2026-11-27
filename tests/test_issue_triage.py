@@ -1028,3 +1028,249 @@ def test_triage_decisions_dry_run_output(mocker, monkeypatch, capsys):
     assert "Chosen Labels: ['bug', 'enhancement']" in captured.out
     assert "Engine: decisions (gemini-decision-1)" in captured.out
     assert "bug" in captured.out and "0.88" in captured.out
+
+
+def test_get_available_label_metadata_pagination_and_non_list(mocker):
+    """Verify 2-page pagination stops cleanly when <100 items and non-list JSON terminates without looping."""
+    from gemini_issue_triage import get_available_label_metadata
+
+    mock_get = mocker.patch("requests.get")
+    page1 = [{"name": f"lbl-{i}", "description": None} for i in range(100)]
+    page2 = [{"name": "lbl-100", "description": "Last"}, {"name": "lbl-101", "description": "Final"}]
+    resp_1 = mocker.Mock(status_code=200)
+    resp_1.json.return_value = page1
+    resp_2 = mocker.Mock(status_code=200)
+    resp_2.json.return_value = page2
+    mock_get.side_effect = [resp_1, resp_2]
+
+    labels = get_available_label_metadata("derailed-dash/gemini-review-action", {"Authorization": "token test"})
+    assert len(labels) == 102
+    assert labels[0]["description"] == ""
+    assert labels[100]["description"] == "Last"
+    assert mock_get.call_count == 2  # Must stop after <100 items without a wasted 3rd request
+
+    # Non-list 200 JSON (e.g. proxy error dict) must terminate on call 1 instead of looping
+    mock_get.reset_mock()
+    mock_get.side_effect = None
+    bad_resp = mocker.Mock(status_code=200)
+    bad_resp.json.return_value = {"message": "unexpected object"}
+    mock_get.return_value = bad_resp
+
+    assert get_available_label_metadata("derailed-dash/gemini-review-action", {}) == []
+    assert mock_get.call_count == 1
+
+
+def test_evaluate_triage_decisions_malformed_partial_empty_and_none_descriptions(mocker, capsys):
+    """Verify malformed/partial/empty Decisions inputs fall back cleanly and description=None is handled."""
+    from gemini_issue_triage import build_triage_decision_questions, evaluate_triage_decisions
+
+    mock_client = mocker.Mock()
+
+    # 1. description=None does not raise AttributeError
+    questions, key_map = build_triage_decision_questions([{"name": "docs", "description": None}])  # type: ignore[list-item]
+    assert key_map == {"label_0": "docs"}
+    assert "Label description" not in questions["label_0"]["instructions"]
+
+    # 2. Empty label_metadata returns None without making an API call
+    assert (
+        evaluate_triage_decisions(
+            mock_client,
+            issue_title="Empty",
+            issue_body="Body",
+            label_metadata=[],
+        )
+        is None
+    )
+    mock_client.decisions.create.assert_not_called()
+
+    labels = [{"name": "bug", "description": "Bug"}]
+
+    # 3. Malformed noul payloads (None, NaN, bool) trigger fallback cleanly
+    for bad_answer in (
+        mocker.Mock(noul=None, confidence=0.5),
+        mocker.Mock(noul=float("nan"), confidence=0.9),
+        mocker.Mock(noul=True, confidence=0.9),
+    ):
+        mock_client.decisions.create.return_value = mocker.Mock(
+            prompt_feedback=None,
+            usage=mocker.Mock(total_input_tokens=100, total_tokens=100),
+            answers={"is_actionable_issue": mocker.Mock(noul=0.95, confidence=0.95), "label_0": bad_answer},
+        )
+        assert (
+            evaluate_triage_decisions(
+                mock_client,
+                issue_title="Bug",
+                issue_body="Crash",
+                label_metadata=labels,
+            )
+            is None
+        )
+        assert "Malformed Decisions API answer payload" in capsys.readouterr().err
+
+    # 4. Partial response missing all label_* keys triggers fallback instead of returning []
+    mock_client.decisions.create.return_value = mocker.Mock(
+        prompt_feedback=None,
+        usage=mocker.Mock(total_input_tokens=100, total_tokens=100),
+        answers={"is_actionable_issue": mocker.Mock(noul=0.95, confidence=0.95)},
+    )
+    assert (
+        evaluate_triage_decisions(
+            mock_client,
+            issue_title="Bug",
+            issue_body="Crash",
+            label_metadata=labels,
+        )
+        is None
+    )
+    assert "no label scores" in capsys.readouterr().err
+
+
+def test_triage_decisions_boundaries_and_explicit_vertex_fallback(mocker, monkeypatch, tmp_path):
+    """Verify exact boundaries (990 labels, p==threshold, actionable==0.50), high resolution, and Vertex fallback."""
+    import base64
+    import json
+
+    import gemini_issue_triage
+    from gemini_review.multimodal import build_media_part
+
+    event_file = tmp_path / "event.json"
+    event_file.write_text(
+        json.dumps({"issue": {"number": 81, "title": "Boundary test", "body": "Details"}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token")
+    monkeypatch.setenv("GEMINI_API_KEY", "ai_test_key")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "derailed-dash/gemini-review-action")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.setenv("GEMINI_TRIAGE_MEDIA_RESOLUTION", "high")
+    monkeypatch.setenv("GEMINI_TRIAGE_THRESHOLD", "0.70")
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_ENTERPRISE", raising=False)
+
+    # Exactly 990 labels should succeed via Decisions
+    labels_990 = [{"name": f"lbl-{i}", "description": ""} for i in range(990)]
+    mocker.patch("gemini_issue_triage.get_available_label_metadata", return_value=labels_990)
+    mocker.patch(
+        "gemini_issue_triage.get_issue_comments",
+        return_value=[
+            {"user": {"login": "alice"}, "body": "User comment"},
+            {"user": {"login": "bot[bot]"}, "body": "Hidden bot comment"},
+        ],
+    )
+    monkeypatch.setenv("GEMINI_EXCLUDE_COMMENT_AUTHORS", "bot[bot]")
+    part_high = build_media_part(b"png-hi", "image/png", media_resolution="high")
+    mocker.patch("gemini_issue_triage.build_triage_multimodal_parts", return_value=[part_high])
+
+    answers = {
+        "is_actionable_issue": mocker.Mock(noul=0.50, confidence=0.50),
+        "label_0": mocker.Mock(noul=0.70, confidence=0.70),
+    }
+    for i in range(1, 990):
+        answers[f"label_{i}"] = mocker.Mock(noul=0.10, confidence=0.90)
+
+    mock_client_cls = mocker.patch("gemini_issue_triage.genai.Client")
+    mock_client = mock_client_cls.return_value
+    mock_client.decisions.create.return_value = mocker.Mock(
+        prompt_feedback=None,
+        usage=mocker.Mock(total_input_tokens=2000, total_tokens=2000),
+        answers=answers,
+    )
+    mock_apply = mocker.patch("gemini_issue_triage.apply_labels")
+
+    gemini_issue_triage.main()
+
+    call_kwargs = mock_client.decisions.create.call_args.kwargs
+    sent_input = call_kwargs["input"]
+    assert "User comment" in sent_input[0]["text"]
+    assert "Hidden bot comment" not in sent_input[0]["text"]
+    assert sent_input[1] == {
+        "type": "image",
+        "data": base64.b64encode(b"png-hi").decode("ascii"),
+        "mime_type": "image/png",
+        "resolution": "high",
+    }
+    mock_apply.assert_called_once_with(
+        "derailed-dash/gemini-review-action",
+        81,
+        ["lbl-0"],
+        {"Authorization": "token ghp_test_token", "Accept": "application/vnd.github.v3+json"},
+        timeout=60,
+    )
+
+    # Explicit triage_engine='decisions' on Vertex AI still falls back to generate_content
+    monkeypatch.setenv("GEMINI_TRIAGE_ENGINE", "decisions")
+    monkeypatch.setenv("GOOGLE_GENAI_USE_VERTEXAI", "true")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "proj")
+    mocker.patch("gemini_issue_triage.get_available_label_metadata", return_value=[{"name": "bug", "description": ""}])
+    mocker.patch("gemini_issue_triage.build_triage_multimodal_parts", return_value=[])
+    mock_client.decisions.create.reset_mock()
+    mock_client.models.generate_content.return_value = mocker.Mock(
+        text=json.dumps({"selected_labels": ["bug"], "reasoning": "Vertex fallback."}),
+        usage_metadata=None,
+    )
+    gemini_issue_triage.main()
+    mock_client.decisions.create.assert_not_called()
+    assert mock_client.models.generate_content.call_count == 1
+
+
+def test_triage_generate_content_telemetry_flex_fallback_and_unpriced_model(mocker, monkeypatch, tmp_path, capsys):
+    """Verify generate_content telemetry reports Standard cost after Flex shedding and 'n/a' for unknown models."""
+    import json
+
+    import gemini_issue_triage
+
+    event_file = tmp_path / "event.json"
+    event_file.write_text(
+        json.dumps({"issue": {"number": 82, "title": "Telemetry test", "body": "Body"}}),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test_token")
+    monkeypatch.setenv("GEMINI_API_KEY", "ai_test_key")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "derailed-dash/gemini-review-action")
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event_file))
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "issues")
+    monkeypatch.setenv("GEMINI_TRIAGE_ENGINE", "generate_content")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-4-hydrogen")
+    monkeypatch.setenv("GEMINI_SERVICE_TIER", "flex")
+    monkeypatch.delenv("GOOGLE_GENAI_USE_VERTEXAI", raising=False)
+    monkeypatch.delenv("GOOGLE_GENAI_USE_ENTERPRISE", raising=False)
+
+    mocker.patch("gemini_issue_triage.get_available_label_metadata", return_value=[{"name": "bug", "description": ""}])
+    mocker.patch("gemini_issue_triage.get_issue_comments", return_value=[])
+    mocker.patch("gemini_issue_triage.build_triage_multimodal_parts", return_value=[])
+    mocker.patch("gemini_issue_triage.apply_labels")
+
+    # 1. Simulate Flex shedding -> Standard fallback inside generate_content_with_stream_fallback
+    def _fake_stream_fallback(client, *, model, contents, config, service_tier_fallback=True, tier_state=None):
+        if tier_state is not None:
+            tier_state["effective_service_tier"] = "standard"
+            tier_state["flex_fallback"] = True
+        return mocker.Mock(
+            text=json.dumps({"selected_labels": ["bug"], "reasoning": "Standard fallback."}),
+            usage_metadata=mocker.Mock(
+                prompt_token_count=1000,
+                cached_content_token_count=0,
+                candidates_token_count=100,
+                thoughts_token_count=0,
+            ),
+        )
+
+    mocker.patch("gemini_issue_triage.genai.Client")
+    mocker.patch("gemini_issue_triage.generate_content_with_stream_fallback", side_effect=_fake_stream_fallback)
+
+    gemini_issue_triage.main()
+    err = capsys.readouterr().err
+    # Standard cost for gemini-4-hydrogen: 1000 * $1.50/1M + 100 * $7.50/1M = $0.0015 + $0.00075 = $0.00225 -> $0.0023
+    # (Flex would have been $0.0011)
+    assert "cost=$0.0023" in err
+
+    # 2. Unknown/unpriced model logs cost=n/a rather than $0.00
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-future-unknown")
+    monkeypatch.setenv("GEMINI_SERVICE_TIER", "standard")
+    gemini_issue_triage.main()
+    err2 = capsys.readouterr().err
+    assert "cost=n/a" in err2
+    assert "cost=$0.00" not in err2

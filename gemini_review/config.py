@@ -3,6 +3,7 @@ Description: Configuration loader for Gemini PR review action.
 Loads settings from gemini-review.toml or starter default configurations.
 """
 
+import math
 import os
 import sys
 import tomllib
@@ -445,6 +446,12 @@ def get_triage_threshold(config: dict | None = None) -> float:
     ):
         if raw is None or (isinstance(raw, str) and not raw.strip()):
             continue
+        if isinstance(raw, bool):
+            print(
+                f"Warning: Invalid {source}='{raw}'. Defaulting to {DEFAULT_TRIAGE_THRESHOLD:.2f}.",
+                file=sys.stderr,
+            )
+            return DEFAULT_TRIAGE_THRESHOLD
         try:
             parsed = float(raw)
         except (TypeError, ValueError):
@@ -453,7 +460,7 @@ def get_triage_threshold(config: dict | None = None) -> float:
                 file=sys.stderr,
             )
             return DEFAULT_TRIAGE_THRESHOLD
-        if not (0.0 < parsed <= 1.0):
+        if not math.isfinite(parsed) or not (0.0 < parsed <= 1.0):
             print(
                 f"Warning: {source} must be in (0.0, 1.0] (got {parsed}). "
                 f"Defaulting to {DEFAULT_TRIAGE_THRESHOLD:.2f}.",

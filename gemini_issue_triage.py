@@ -14,6 +14,7 @@ Actions runner execution logs for the workflow run.
 """
 
 import json
+import math
 import os
 import sys
 import time
@@ -112,7 +113,7 @@ def get_available_label_metadata(
             print(f"Error fetching repository labels: {response.status_code} - {response.text}", file=sys.stderr)
             break
         data = response.json()
-        if not data:
+        if not data or not isinstance(data, list):
             break
         for label in data:
             if isinstance(label, dict) and label.get("name"):
@@ -122,6 +123,8 @@ def get_available_label_metadata(
                         "description": str(label.get("description") or "").strip(),
                     }
                 )
+        if len(data) < 100:
+            break
         page += 1
     return labels
 
@@ -195,7 +198,7 @@ def build_triage_decision_questions(
     for idx, entry in enumerate(label_metadata):
         key = f"label_{idx}"
         name = entry["name"]
-        desc = entry.get("description", "").strip()
+        desc = str(entry.get("description") or "").strip()
         desc_clause = f" Label description: {desc}." if desc else ""
         questions[key] = {
             "type": "noul",
@@ -209,14 +212,20 @@ def build_triage_decision_questions(
 
 
 def _extract_noul_scores(answer: Any) -> tuple[float, float]:
-    """Extract ``(p_yes, confidence)`` from a Decisions ``NoulAnswer`` or dict."""
+    """Extract finite ``(p_yes, confidence)`` from a Decisions ``NoulAnswer`` or dict."""
     if isinstance(answer, Mapping):
-        raw_p = answer.get("noul", 0.0)
+        raw_p = answer.get("noul")
         raw_conf = answer.get("confidence", 0.0)
     else:
-        raw_p = getattr(answer, "noul", 0.0)
+        raw_p = getattr(answer, "noul", None)
         raw_conf = getattr(answer, "confidence", 0.0)
-    return float(raw_p), float(raw_conf)
+    if raw_p is None or isinstance(raw_p, bool) or raw_conf is None or isinstance(raw_conf, bool):
+        raise ValueError(f"Invalid noul answer payload: noul={raw_p!r}, confidence={raw_conf!r}")
+    p_yes = float(raw_p)
+    conf = float(raw_conf)
+    if not (math.isfinite(p_yes) and math.isfinite(conf)):
+        raise ValueError(f"Non-finite noul answer payload: noul={p_yes!r}, confidence={conf!r}")
+    return p_yes, conf
 
 
 def evaluate_triage_decisions(
@@ -231,6 +240,9 @@ def evaluate_triage_decisions(
     image_resolution: str = "medium",
 ) -> tuple[list[str], dict[str, Any]] | None:
     """Classify an issue via ``gemini-decision-1``, returning ``None`` to trigger fallback."""
+    if not label_metadata:
+        return None
+
     if len(label_metadata) > MAX_TRIAGE_DECISIONS_LABELS:
         print(
             f"Warning: Repository has {len(label_metadata)} labels, exceeding Decisions API triage cap "
@@ -266,21 +278,35 @@ def evaluate_triage_decisions(
         return None
 
     answers = result.answers
-    actionable_answer = answers.get("is_actionable_issue")
-    if actionable_answer is not None:
-        actionable_p, actionable_conf = _extract_noul_scores(actionable_answer)
-        actionable = actionable_p >= ACTIONABLE_THRESHOLD
-    else:
-        actionable_p, actionable_conf = 1.0, 1.0
-        actionable = True
+    try:
+        actionable_answer = answers.get("is_actionable_issue")
+        if actionable_answer is not None:
+            actionable_p, actionable_conf = _extract_noul_scores(actionable_answer)
+            actionable = actionable_p >= ACTIONABLE_THRESHOLD
+        else:
+            actionable_p, actionable_conf = 1.0, 1.0
+            actionable = True
 
-    scored: list[tuple[int, str, float, float]] = []
-    for idx, (key, name) in enumerate(key_to_label.items()):
-        label_answer = answers.get(key)
-        if label_answer is None:
-            continue
-        p_yes, conf = _extract_noul_scores(label_answer)
-        scored.append((idx, name, p_yes, conf))
+        scored: list[tuple[int, str, float, float]] = []
+        for idx, (key, name) in enumerate(key_to_label.items()):
+            label_answer = answers.get(key)
+            if label_answer is None:
+                continue
+            p_yes, conf = _extract_noul_scores(label_answer)
+            scored.append((idx, name, p_yes, conf))
+    except (TypeError, ValueError) as parse_err:
+        print(
+            f"Warning: Malformed Decisions API answer payload ({parse_err}). Falling back to generate_content...",
+            file=sys.stderr,
+        )
+        return None
+
+    if not scored:
+        print(
+            "Warning: Decisions API returned no label scores. Falling back to generate_content...",
+            file=sys.stderr,
+        )
+        return None
 
     scored.sort(key=lambda item: (-item[2], item[0]))
     selected = [name for _, name, p_yes, _ in scored if actionable and p_yes >= threshold]
@@ -527,6 +553,11 @@ def main():
         client_cls=genai.Client,
     )
     sdk_service_tier = types.ServiceTier.FLEX if (not use_vertexai and requested_service_tier == "flex") else None
+    effective_service_tier = "standard" if use_vertexai else requested_service_tier
+    tier_state: dict[str, Any] = {
+        "effective_service_tier": effective_service_tier,
+        "flex_fallback": False,
+    }
 
     # Extract and fetch remote screenshots from issue body and discussion comments once for either engine
     multimodal_parts = build_triage_multimodal_parts(
@@ -613,6 +644,7 @@ def main():
             contents=triage_contents,
             config=triage_config,
             service_tier_fallback=service_tier_fallback,
+            tier_state=tier_state,
         )
     except Exception as gen_err:
         last_err: Exception = gen_err
@@ -634,6 +666,7 @@ def main():
                     contents=triage_contents,
                     config=triage_config,
                     service_tier_fallback=service_tier_fallback,
+                    tier_state=tier_state,
                 )
             except Exception as err_after_thinking:
                 last_err = err_after_thinking
@@ -660,6 +693,7 @@ def main():
                         contents=triage_contents,
                         config=triage_config,
                         service_tier_fallback=service_tier_fallback,
+                        tier_state=tier_state,
                     )
                 except Exception as err_after_strip:
                     last_err = err_after_strip
@@ -688,6 +722,7 @@ def main():
                 contents=triage_prompt,
                 config=triage_config,
                 service_tier_fallback=service_tier_fallback,
+                tier_state=tier_state,
             )
 
         if response is None:
@@ -707,15 +742,17 @@ def main():
                 "cached_tokens": cached_tokens,
                 "candidates_tokens": candidates_tokens,
                 "thoughts_tokens": thoughts_tokens,
-                "service_tier": "flex" if sdk_service_tier == types.ServiceTier.FLEX else "standard",
+                "service_tier": tier_state.get("effective_service_tier", effective_service_tier),
+                "flex_fallback": bool(tier_state.get("flex_fallback", False)),
                 "vertex_location": location if use_vertexai else "",
             },
             model=model_name,
         )
+        cost_str = usd(cost.total) if cost.rate is not None else "n/a"
         print(
             f"Triage telemetry: Engine=generate_content ({model_name}) | latency={elapsed_ms:.1f}ms | "
             f"input_tokens={prompt_tokens:,} | output_tokens={candidates_tokens:,} | "
-            f"thinking_tokens={thoughts_tokens:,} | cost={usd(cost.total)}",
+            f"thinking_tokens={thoughts_tokens:,} | cost={cost_str}",
             file=sys.stderr,
         )
 

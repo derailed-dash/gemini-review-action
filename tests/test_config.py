@@ -288,14 +288,23 @@ class TestConfigAndModelResolution:
         monkeypatch.setenv("GEMINI_TRIAGE_THRESHOLD", " 0.80 ")
         assert get_triage_threshold({"triage_threshold": 0.50}) == pytest.approx(0.80)
 
+        # Upper boundary 1.0 is valid; whitespace-only env falls through to config
+        monkeypatch.setenv("GEMINI_TRIAGE_THRESHOLD", "   ")
+        assert get_triage_threshold({"triage_threshold": 1.0}) == pytest.approx(1.0)
+
         monkeypatch.setenv("GEMINI_TRIAGE_ENGINE", "invalid_engine")
         assert get_triage_engine() == "auto"
         assert "invalid_engine" in capsys.readouterr().err
 
-        for bad_thresh in ("0", "0.0", "-0.1", "1.5", "abc"):
+        for bad_thresh in ("0", "0.0", "-0.1", "1.5", "nan", "inf", "-inf", "abc"):
             monkeypatch.setenv("GEMINI_TRIAGE_THRESHOLD", bad_thresh)
             assert get_triage_threshold() == pytest.approx(0.70)
             assert bad_thresh in capsys.readouterr().err
+
+        monkeypatch.delenv("GEMINI_TRIAGE_THRESHOLD", raising=False)
+        for bool_thresh in (True, False):
+            assert get_triage_threshold({"triage_threshold": bool_thresh}) == pytest.approx(0.70)
+            assert str(bool_thresh) in capsys.readouterr().err
 
         action_yml = (Path(__file__).resolve().parent.parent / "action.yml").read_text(encoding="utf-8")
         for key, expected_default in (

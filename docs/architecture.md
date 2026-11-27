@@ -203,7 +203,7 @@ The issue triage script automatically categorises and labels new or reopened iss
 
 ### 4. Deterministic Allowlist Filtering & API Label Application
 
-* Before calling the GitHub API, `gemini_issue_triage.py` deduplicates `triage.selected_labels` in order and filters them strictly against the repository's `available_labels` allowlist, dropping any hallucinated or unrecognised labels with a warning.
+* Before calling the GitHub API, `gemini_issue_triage.py` deduplicates selected labels (from either Decisions triage or `TriageResult`) in order and filters them strictly against the repository's `available_labels` allowlist, dropping any hallucinated or unrecognised labels with a warning.
 * The script then calls `apply_labels()` to add the validated labels to the issue on GitHub.
 
 ---
