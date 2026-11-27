@@ -56,20 +56,16 @@ def parse_skill_metadata(skill_path: str) -> dict[str, str]:
     return metadata
 
 
-def list_available_skills() -> list[dict[str, str]]:
-    """Lists all custom agent skills available, including built-in action skills and workspace skills.
-
-    The agent can call load_skill_instructions to retrieve instructions for a specific skill.
-    """
+def discover_available_skills() -> list[dict[str, str]]:
+    """Discover all custom agent skills (built-in action skills and workspace skills) without tool-call logging."""
     fn_parse_skill_metadata = _get_pr_review_func("parse_skill_metadata", parse_skill_metadata)
-    print("Tool Call: list_available_skills() invoked by agent.", file=sys.stderr)
-    skills = []
+    skills: list[dict[str, str]] = []
 
     # 1. Built-in skills packaged with the action
     action_dir = os.path.dirname(os.path.dirname(__file__))
     built_in_dir = os.path.join(action_dir, "starter-examples", "skills")
     if os.path.isdir(built_in_dir):
-        for entry in os.listdir(built_in_dir):
+        for entry in sorted(os.listdir(built_in_dir)):
             entry_path = os.path.join(built_in_dir, entry)
             if os.path.isdir(entry_path):
                 # Search only for SKILL.md or main .md files at the root of the skill folder
@@ -79,7 +75,7 @@ def list_available_skills() -> list[dict[str, str]]:
                     meta["id"] = f"builtin:{entry}/SKILL.md"
                     skills.append(meta)
                 else:
-                    for f in os.listdir(entry_path):
+                    for f in sorted(os.listdir(entry_path)):
                         if f.endswith(".md") and os.path.isfile(os.path.join(entry_path, f)):
                             meta = fn_parse_skill_metadata(os.path.join(entry_path, f))
                             meta["id"] = f"builtin:{entry}/{f}"
@@ -88,7 +84,7 @@ def list_available_skills() -> list[dict[str, str]]:
     # 2. Workspace-specific skills in the target repo
     skills_dir = ".agents/skills"
     if os.path.isdir(skills_dir):
-        for entry in os.listdir(skills_dir):
+        for entry in sorted(os.listdir(skills_dir)):
             entry_path = os.path.join(skills_dir, entry)
             if os.path.isdir(entry_path):
                 skill_md = os.path.join(entry_path, "SKILL.md")
@@ -97,7 +93,7 @@ def list_available_skills() -> list[dict[str, str]]:
                     meta["id"] = f"{entry}/SKILL.md"
                     skills.append(meta)
                 else:
-                    for f in os.listdir(entry_path):
+                    for f in sorted(os.listdir(entry_path)):
                         if f.endswith(".md") and os.path.isfile(os.path.join(entry_path, f)):
                             meta = fn_parse_skill_metadata(os.path.join(entry_path, f))
                             meta["id"] = f"{entry}/{f}"
@@ -110,14 +106,17 @@ def list_available_skills() -> list[dict[str, str]]:
     return skills
 
 
-def load_skill_instructions(skill_id: str) -> str:
-    """Retrieves the full instructions/rules for a specific skill.
+def list_available_skills() -> list[dict[str, str]]:
+    """Lists all custom agent skills available, including built-in action skills and workspace skills.
 
-    Args:
-        skill_id: The relative path or identifier of the skill (e.g. 'builtin:agent-aware-cli/SKILL.md' or
-            'git-workflow-and-versioning.md').
+    The agent can call load_skill_instructions to retrieve instructions for a specific skill.
     """
-    print(f"Tool Call: load_skill_instructions(skill_id='{skill_id}') invoked by agent.", file=sys.stderr)
+    print("Tool Call: list_available_skills() invoked by agent.", file=sys.stderr)
+    return discover_available_skills()
+
+
+def read_skill_instructions(skill_id: str) -> str:
+    """Read skill instructions from disk with path-traversal protection and without tool-call logging."""
     if skill_id.startswith("builtin:"):
         action_dir = os.path.dirname(os.path.dirname(__file__))
         skills_dir = os.path.realpath(os.path.join(action_dir, "starter-examples", "skills"))
@@ -144,3 +143,14 @@ def load_skill_instructions(skill_id: str) -> str:
             return f"Error reading skill instructions: {e}"
 
     return f"Error: Skill '{skill_id}' not found."
+
+
+def load_skill_instructions(skill_id: str) -> str:
+    """Retrieves the full instructions/rules for a specific skill.
+
+    Args:
+        skill_id: The relative path or identifier of the skill (e.g. 'builtin:agent-aware-cli/SKILL.md' or
+            'git-workflow-and-versioning.md').
+    """
+    print(f"Tool Call: load_skill_instructions(skill_id='{skill_id}') invoked by agent.", file=sys.stderr)
+    return read_skill_instructions(skill_id)

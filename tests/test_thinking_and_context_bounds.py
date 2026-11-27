@@ -671,3 +671,76 @@ def test_post_review_renders_thinking_cost_rows(mocker):
     assert "| **Cost (thinking / reasoning)** |" in body
     assert "| **Cost (response output)** |" in body
     assert "| **Estimated Total Cost** |" in body
+
+
+def test_post_review_renders_preflight_router_telemetry(mocker):
+    """post_review formats Pre-Flight Router tokens, routing summary, and cost rows when present."""
+    from gemini_review.github import post_review
+    from gemini_review.schemas import ReviewResult
+
+    mock_post = mocker.patch("requests.post")
+    mock_post.return_value = mocker.Mock(status_code=200)
+
+    review = ReviewResult(summary="PR LGTM", general_feedback=[], comments=[])
+    usage_metadata = {
+        "model": "gemini-4-hydrogen",
+        "fresh_tokens": 50_000,
+        "cached_tokens": 0,
+        "candidates_tokens": 500,
+        "thoughts_tokens": 200,
+        "preflight_router_input_tokens": 1_200,
+        "preflight_routing": {
+            "complexity": "trivial",
+            "thinking_level": "low",
+            "thinking_overridden": False,
+            "include_dev_knowledge": False,
+            "matched_skills": ["bigquery-basics"],
+        },
+        "total_tokens": 51_900,
+    }
+
+    post_review("owner/repo", 42, "head_sha", review, {"Authorization": "token abc"}, usage_metadata=usage_metadata)
+
+    body = mock_post.call_args[1]["json"]["body"]
+    assert "| **Pre-Flight Router Tokens** | 1,200 |" in body
+    assert "| **Pre-Flight Routing** |" in body
+    assert "`trivial`" in body
+    assert "`low`" in body
+    assert "| **Cost (pre-flight router)** |" in body
+
+
+def test_post_review_sanitises_preflight_markdown_and_none_tokens(mocker):
+    """post_review tolerates preflight_router_input_tokens=None and escapes pipe/backtick skill names."""
+    from gemini_review.github import post_review
+    from gemini_review.schemas import ReviewResult
+
+    mock_post = mocker.patch("requests.post")
+    mock_post.return_value = mocker.Mock(status_code=200)
+
+    review = ReviewResult(summary="OK", general_feedback=[], comments=[])
+    post_review(
+        "owner/repo",
+        42,
+        "head_sha",
+        review,
+        {"Authorization": "token abc"},
+        usage_metadata={
+            "model": "gemini-4-hydrogen",
+            "fresh_tokens": 100,
+            "cached_tokens": 0,
+            "candidates_tokens": 10,
+            "preflight_router_input_tokens": None,
+            "preflight_routing": {
+                "complexity": "standard",
+                "thinking_level": "medium",
+                "thinking_overridden": True,
+                "include_dev_knowledge": True,
+                "matched_skills": ["weird|skill`name"],
+            },
+            "total_tokens": 110,
+        },
+    )
+    body = mock_post.call_args[1]["json"]["body"]
+    assert "| **Pre-Flight Router Tokens** |" not in body
+    assert "(overridden)" in body
+    assert "`weird/skill'name`" in body

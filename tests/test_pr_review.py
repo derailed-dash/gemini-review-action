@@ -2974,3 +2974,179 @@ def test_main_skips_duplicate_workspace_rules_in_system_instruction_when_covered
     sys_uncovered = mock_client_2.models.generate_content.call_args.kwargs["config"].system_instruction
     assert "Project Rules & Best Practices" in sys_uncovered
     assert "UNIQUE_WORKSPACE_RULE_MARKER" in sys_uncovered
+
+
+def test_main_preflight_router_applies_thinking_turn2_skills_and_tool_gating(mocker):
+    """Pre-flight router routes thinking_level, injects matched skills into Turn 2 only, and gates Dev Docs."""
+    from gemini_pr_review import main
+    from gemini_review.preflight import PreflightRoutingResult, PreflightSkillMatch
+
+    mock_client, _ = _setup_dry_run_main(
+        mocker,
+        {
+            "GEMINI_MODEL": "gemini-4-hydrogen",
+            "GEMINI_THINKING_LEVEL": "auto",
+            "GEMINI_ENABLE_PREFLIGHT_ROUTER": "true",
+        },
+        clear_env=True,
+    )
+    mocker.patch("gemini_review.get_google_auth_headers", return_value={"X-Goog-Api-Key": "dk-test-key"})
+    mocker.patch(
+        "gemini_review.discover_available_skills",
+        return_value=[{"id": "builtin:s1/SKILL.md", "name": "skill-one", "description": "Matched skill"}],
+    )
+    mocker.patch("gemini_review.read_skill_instructions", return_value="PRELOADED_SKILL_CONTENT")
+    mocker.patch(
+        "gemini_review.run_preflight_router",
+        return_value=PreflightRoutingResult(
+            complexity="trivial",
+            complexity_confidence=0.92,
+            risk_flags={"touches_security_or_auth": 0.05},
+            triggered_risk_flags=[],
+            upward_fallback_applied=False,
+            thinking_level="low",
+            include_dev_knowledge=False,
+            dev_docs_probability=0.04,
+            matched_skills=[
+                PreflightSkillMatch(
+                    id="builtin:s1/SKILL.md",
+                    name="skill-one",
+                    description="Matched skill",
+                    probability=0.91,
+                )
+            ],
+            input_tokens=450,
+            total_tokens=450,
+            cost_usd=0.000045,
+            elapsed_ms=210.0,
+        ),
+    )
+
+    main()
+
+    call_kwargs = mock_client.models.generate_content.call_args.kwargs
+    gen_cfg = call_kwargs["config"]
+    contents = call_kwargs["contents"]
+
+    # 1. Routed thinking_level='low' applied
+    assert gen_cfg.thinking_config == types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW)
+
+    # 2. Skill tools stay registered (prefix invariance), while Dev Docs tools are gated off
+    tool_names = [getattr(t, "__name__", str(t)) for t in (gen_cfg.tools or [])]
+    assert "list_available_skills" in tool_names
+    assert "load_skill_instructions" in tool_names
+    assert "search_google_developer_knowledge" not in tool_names
+    assert "get_google_developer_documents" not in tool_names
+    assert "Google Developer Knowledge search tools" not in gen_cfg.system_instruction
+
+    # 3. Pre-loaded skill content appears strictly in Turn 2, NEVER in system_instruction or Turn 0
+    assert "PRELOADED_SKILL_CONTENT" not in gen_cfg.system_instruction
+    assert "PRELOADED_SKILL_CONTENT" not in contents[0].parts[0].text
+    assert "PRELOADED_SKILL_CONTENT" in contents[2].parts[0].text
+
+
+def test_main_explicit_thinking_level_overrides_preflight_router(mocker):
+    """Explicit GEMINI_THINKING_LEVEL overrides the router's thinking choice while keeping skill/tool routing."""
+    from gemini_pr_review import main
+    from gemini_review.preflight import PreflightRoutingResult
+
+    mock_client, _ = _setup_dry_run_main(
+        mocker,
+        {
+            "GEMINI_MODEL": "gemini-4-hydrogen",
+            "GEMINI_THINKING_LEVEL": "high",
+            "GEMINI_ENABLE_PREFLIGHT_ROUTER": "true",
+        },
+        clear_env=True,
+    )
+    mocker.patch("gemini_review.discover_available_skills", return_value=[])
+    mocker.patch(
+        "gemini_review.run_preflight_router",
+        return_value=PreflightRoutingResult(
+            complexity="trivial",
+            complexity_confidence=0.95,
+            risk_flags={},
+            triggered_risk_flags=[],
+            upward_fallback_applied=False,
+            thinking_level="low",
+            include_dev_knowledge=True,
+            dev_docs_probability=0.80,
+            matched_skills=[],
+            input_tokens=300,
+            total_tokens=300,
+            cost_usd=0.00003,
+            elapsed_ms=180.0,
+        ),
+    )
+
+    main()
+
+    gen_cfg = mock_client.models.generate_content.call_args.kwargs["config"]
+    assert gen_cfg.thinking_config == types.ThinkingConfig(thinking_level=types.ThinkingLevel.HIGH)
+
+
+def test_main_preflight_router_disabled_does_not_call_router(mocker):
+    """Setting GEMINI_ENABLE_PREFLIGHT_ROUTER=false skips pre-flight routing completely."""
+    from gemini_pr_review import main
+
+    _setup_dry_run_main(
+        mocker,
+        {
+            "GEMINI_MODEL": "gemini-4-hydrogen",
+            "GEMINI_ENABLE_PREFLIGHT_ROUTER": "false",
+        },
+        clear_env=True,
+    )
+    mock_router = mocker.patch("gemini_review.run_preflight_router")
+
+    main()
+
+    mock_router.assert_not_called()
+
+
+def test_main_vertexai_bypasses_skill_scan_and_preflight_router_cleanly(mocker):
+    """Under Vertex AI + thinking_level='auto', main() skips skill discovery/router and sets thinking_config=None."""
+    from gemini_pr_review import main
+
+    mock_client, _ = _setup_dry_run_main(
+        mocker,
+        {
+            "GEMINI_MODEL": "gemini-4-hydrogen",
+            "GOOGLE_GENAI_USE_VERTEXAI": "true",
+            "GOOGLE_CLOUD_PROJECT": "test-proj",
+            "GEMINI_THINKING_LEVEL": "auto",
+            "GEMINI_ENABLE_PREFLIGHT_ROUTER": "true",
+        },
+        clear_env=True,
+    )
+    mock_discover = mocker.patch("gemini_review.discover_available_skills")
+    mock_router = mocker.patch("gemini_review.run_preflight_router")
+
+    main()
+
+    mock_discover.assert_not_called()
+    mock_router.assert_not_called()
+    gen_cfg = mock_client.models.generate_content.call_args.kwargs["config"]
+    assert gen_cfg.thinking_config is None
+
+
+def test_select_dynamic_context_files_auto_thinking_defaults_to_low(mocker):
+    """When GEMINI_THINKING_LEVEL='auto', Sparse Mode candidate selection still uses 'low' thinking."""
+    from gemini_review import select_dynamic_context_files
+
+    mock_client = mocker.Mock()
+    mock_client.models.generate_content.return_value = mocker.Mock(
+        text='{"selected_files": [], "reasoning": "ok"}',
+        usage_metadata=None,
+    )
+    mocker.patch.dict(os.environ, {"GEMINI_THINKING_LEVEL": "auto"})
+
+    select_dynamic_context_files(
+        mock_client,
+        "gemini-4-hydrogen",
+        [{"filename": "a.py", "patch": "+x"}],
+        ["b.py"],
+    )
+
+    cfg = mock_client.models.generate_content.call_args.kwargs["config"]
+    assert cfg.thinking_config == types.ThinkingConfig(thinking_level=types.ThinkingLevel.LOW)

@@ -333,6 +333,16 @@ def post_review(
         ctx_candidates_tokens = usage_metadata.get("context_selection_candidates_tokens", 0)
         ctx_thoughts_tokens = usage_metadata.get("context_selection_thoughts_tokens", 0)
         ctx_total_tokens = ctx_prompt_tokens + ctx_candidates_tokens + ctx_thoughts_tokens
+        raw_pf_tokens = usage_metadata.get("preflight_router_input_tokens")
+        preflight_tokens = (
+            max(0, int(raw_pf_tokens))
+            if isinstance(raw_pf_tokens, (int, float))
+            and not isinstance(raw_pf_tokens, bool)
+            and raw_pf_tokens == raw_pf_tokens
+            and raw_pf_tokens not in (float("inf"), float("-inf"))
+            else 0
+        )
+        preflight_routing = usage_metadata.get("preflight_routing") or {}
 
         cache_str = f" (⚡ {cache_percentage:.1f}% cached)" if cached_tokens > 0 else ""
 
@@ -347,6 +357,23 @@ def post_review(
         table_rows.append(f"| **Output Tokens** | {candidates_tokens:,d} |")
         if ctx_total_tokens > 0:
             table_rows.append(f"| **Dynamic Context Selection Tokens** | {ctx_total_tokens:,d} |")
+        if preflight_tokens > 0:
+            table_rows.append(f"| **Pre-Flight Router Tokens** | {preflight_tokens:,d} |")
+        if isinstance(preflight_routing, dict) and preflight_routing:
+            comp = str(preflight_routing.get("complexity", "unknown")).replace("`", "'").replace("|", "/")
+            routed_think = str(preflight_routing.get("thinking_level", "default")).replace("`", "'").replace("|", "/")
+            think_suffix = " (overridden)" if preflight_routing.get("thinking_overridden") else ""
+            dev_docs_state = "attached" if preflight_routing.get("include_dev_knowledge") else "gated off"
+            skills_list = preflight_routing.get("matched_skills") or []
+            if skills_list:
+                cleaned_skills = [f"`{str(s).replace('`', chr(39)).replace('|', '/')}`" for s in skills_list]
+                skills_label = ", ".join(cleaned_skills)
+            else:
+                skills_label = "none"
+            table_rows.append(
+                f"| **Pre-Flight Routing** | `{comp}` -> thinking `{routed_think}`{think_suffix}; "
+                f"dev docs {dev_docs_state}; skills: {skills_label} |"
+            )
         table_rows.append(f"| **Total Session Tokens** | **{total_tokens:,d}** |")
 
         # Cost, from the same counts. A model with no rate entry renders tokens only —
@@ -384,6 +411,8 @@ def post_review(
                 cost_rows.append(f"| **Cost (output)** | {usd(cost.output)} |")
             if cost.context_selection > 0:
                 cost_rows.append(f"| **Cost (context selection)** | {usd(cost.context_selection)} |")
+            if cost.preflight_router > 0:
+                cost_rows.append(f"| **Cost (pre-flight router)** | {usd(cost.preflight_router)} |")
             cost_rows.append(f"| **Estimated Total Cost** | **{usd(cost.total)}** |")
 
         caveat_md = ""

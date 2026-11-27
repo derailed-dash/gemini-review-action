@@ -110,9 +110,10 @@ def select_dynamic_context_files(
     )
 
     # Context selector defaults to 'low' thinking to prevent token waste
-    eff_thinking_level = (
-        thinking_level if thinking_level is not None else (os.environ.get("GEMINI_THINKING_LEVEL") or "low")
-    )
+    env_thinking = os.environ.get("GEMINI_THINKING_LEVEL", "").strip()
+    if env_thinking.lower() == "auto":
+        env_thinking = ""
+    eff_thinking_level = thinking_level if thinking_level is not None else (env_thinking or "low")
     thinking_cfg = build_thinking_config(eff_thinking_level, model=model)
 
     try:

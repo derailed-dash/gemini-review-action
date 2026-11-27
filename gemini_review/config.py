@@ -23,6 +23,9 @@ DEFAULT_VISUAL_DIFF_MEDIA_RESOLUTION = "high"
 DEFAULT_TRIAGE_MEDIA_RESOLUTION = "medium"
 DEFAULT_TRIAGE_ENGINE = "auto"
 DEFAULT_TRIAGE_THRESHOLD = 0.70
+DEFAULT_ENABLE_PREFLIGHT_ROUTER = True
+DEFAULT_PREFLIGHT_CONFIDENCE_THRESHOLD = 0.75
+DEFAULT_PREFLIGHT_MAX_SKILLS = 3
 
 
 def get_default_model(explicit_model: str | None = None) -> str:
@@ -107,7 +110,7 @@ def build_thinking_config(
             level_str = "low"
         else:
             return types.ThinkingConfig(thinking_budget=0)
-    if level_str in ("none", "default"):
+    if level_str in ("none", "default", "auto"):
         return None
     if level_str == "minimal" and gemini_4:
         print(
@@ -366,15 +369,20 @@ def get_service_tier(config: dict | None = None) -> str:
     )
 
 
-def get_service_tier_fallback(config: dict | None = None) -> bool:
-    """Whether exhausted/shed Flex requests automatically fall back to Standard tier (default True)."""
+def _resolve_bool_setting(
+    env_var: str,
+    config: dict | None,
+    config_key: str,
+    default: bool,
+) -> bool:
+    """Resolve a boolean setting (env > config), warning and falling back to default on invalid values."""
     candidates: list[tuple[str, object]] = []
-    if "GEMINI_SERVICE_TIER_FALLBACK" in os.environ:
-        env_raw = os.environ.get("GEMINI_SERVICE_TIER_FALLBACK", "")
+    if env_var in os.environ:
+        env_raw = os.environ.get(env_var, "")
         if env_raw.strip():
-            candidates.append(("GEMINI_SERVICE_TIER_FALLBACK", env_raw))
-    if config and config.get("service_tier_fallback") is not None:
-        candidates.append(("service_tier_fallback", config.get("service_tier_fallback")))
+            candidates.append((env_var, env_raw))
+    if config and config.get(config_key) is not None:
+        candidates.append((config_key, config.get(config_key)))
 
     for source, val in candidates:
         if isinstance(val, bool):
@@ -387,11 +395,67 @@ def get_service_tier_fallback(config: dict | None = None) -> bool:
         if cleaned in ("false", "0", "no"):
             return False
         print(
-            f"Warning: Invalid {source}='{str(val).strip()}'. Defaulting to True.",
+            f"Warning: Invalid {source}='{str(val).strip()}'. Defaulting to {default}.",
             file=sys.stderr,
         )
-        return True
-    return True
+        return default
+    return default
+
+
+def _resolve_probability_threshold(
+    env_var: str,
+    config: dict | None,
+    config_key: str,
+    default: float,
+) -> float:
+    """Resolve a probability threshold in (0.0, 1.0] (env > config), rejecting bools and non-finite floats."""
+    for source, raw in (
+        (env_var, os.environ.get(env_var)),
+        (config_key, config.get(config_key) if config else None),
+    ):
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            continue
+        if isinstance(raw, bool):
+            print(
+                f"Warning: Invalid {source}='{raw}'. Defaulting to {default:.2f}.",
+                file=sys.stderr,
+            )
+            return default
+        try:
+            parsed = float(raw)
+        except (TypeError, ValueError):
+            print(
+                f"Warning: Invalid {source}='{raw}'. Defaulting to {default:.2f}.",
+                file=sys.stderr,
+            )
+            return default
+        if not math.isfinite(parsed) or not (0.0 < parsed <= 1.0):
+            print(
+                f"Warning: {source} must be in (0.0, 1.0] (got {parsed}). Defaulting to {default:.2f}.",
+                file=sys.stderr,
+            )
+            return default
+        return parsed
+    return default
+
+
+def get_thinking_level(config: dict | None = None) -> str:
+    """Return configured thinking_level (env > config), preserving explicit '0' or 'false' values."""
+    env_val = os.environ.get("GEMINI_THINKING_LEVEL")
+    if env_val is not None and env_val.strip():
+        return env_val.strip()
+    if config is not None:
+        cfg_val = config.get("thinking_level")
+        if cfg_val is not None:
+            cleaned = str(cfg_val).strip()
+            if cleaned:
+                return cleaned
+    return ""
+
+
+def get_service_tier_fallback(config: dict | None = None) -> bool:
+    """Whether exhausted/shed Flex requests automatically fall back to Standard tier (default True)."""
+    return _resolve_bool_setting("GEMINI_SERVICE_TIER_FALLBACK", config, "service_tier_fallback", True)
 
 
 def get_context_media_resolution(config: dict | None = None) -> str:
@@ -440,32 +504,26 @@ def get_triage_engine(config: dict | None = None) -> str:
 
 def get_triage_threshold(config: dict | None = None) -> float:
     """Return probability threshold in (0.0, 1.0] for Decisions issue triage (default 0.70)."""
-    for source, raw in (
-        ("GEMINI_TRIAGE_THRESHOLD", os.environ.get("GEMINI_TRIAGE_THRESHOLD")),
-        ("triage_threshold", config.get("triage_threshold") if config else None),
-    ):
-        if raw is None or (isinstance(raw, str) and not raw.strip()):
-            continue
-        if isinstance(raw, bool):
-            print(
-                f"Warning: Invalid {source}='{raw}'. Defaulting to {DEFAULT_TRIAGE_THRESHOLD:.2f}.",
-                file=sys.stderr,
-            )
-            return DEFAULT_TRIAGE_THRESHOLD
-        try:
-            parsed = float(raw)
-        except (TypeError, ValueError):
-            print(
-                f"Warning: Invalid {source}='{raw}'. Defaulting to {DEFAULT_TRIAGE_THRESHOLD:.2f}.",
-                file=sys.stderr,
-            )
-            return DEFAULT_TRIAGE_THRESHOLD
-        if not math.isfinite(parsed) or not (0.0 < parsed <= 1.0):
-            print(
-                f"Warning: {source} must be in (0.0, 1.0] (got {parsed}). "
-                f"Defaulting to {DEFAULT_TRIAGE_THRESHOLD:.2f}.",
-                file=sys.stderr,
-            )
-            return DEFAULT_TRIAGE_THRESHOLD
-        return parsed
-    return DEFAULT_TRIAGE_THRESHOLD
+    return _resolve_probability_threshold(
+        "GEMINI_TRIAGE_THRESHOLD", config, "triage_threshold", DEFAULT_TRIAGE_THRESHOLD
+    )
+
+
+def get_enable_preflight_router(config: dict | None = None) -> bool:
+    """Whether the Decisions API pre-flight PR router runs on Gemini Developer API (default True)."""
+    return _resolve_bool_setting(
+        "GEMINI_ENABLE_PREFLIGHT_ROUTER",
+        config,
+        "enable_preflight_router",
+        DEFAULT_ENABLE_PREFLIGHT_ROUTER,
+    )
+
+
+def get_preflight_confidence_threshold(config: dict | None = None) -> float:
+    """Return probability confidence threshold in (0.0, 1.0] for pre-flight routing (default 0.75)."""
+    return _resolve_probability_threshold(
+        "GEMINI_PREFLIGHT_CONFIDENCE_THRESHOLD",
+        config,
+        "preflight_confidence_threshold",
+        DEFAULT_PREFLIGHT_CONFIDENCE_THRESHOLD,
+    )
