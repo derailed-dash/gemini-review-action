@@ -318,3 +318,75 @@ class TestConfigAndModelResolution:
             )
             assert match is not None, f"Missing default for {key} in action.yml"
             assert match.group(1).strip() == expected_default
+
+    def test_get_enable_preflight_router_and_threshold(self, monkeypatch, capsys):
+        """Pre-flight router toggle and threshold validate inputs and match action.yml."""
+        import re
+        from pathlib import Path
+
+        import pytest
+
+        from gemini_review.config import (
+            DEFAULT_ENABLE_PREFLIGHT_ROUTER,
+            DEFAULT_PREFLIGHT_CONFIDENCE_THRESHOLD,
+            build_thinking_config,
+            get_enable_preflight_router,
+            get_preflight_confidence_threshold,
+        )
+
+        assert DEFAULT_ENABLE_PREFLIGHT_ROUTER is True
+        assert DEFAULT_PREFLIGHT_CONFIDENCE_THRESHOLD == pytest.approx(0.75)
+
+        monkeypatch.delenv("GEMINI_ENABLE_PREFLIGHT_ROUTER", raising=False)
+        monkeypatch.delenv("GEMINI_PREFLIGHT_CONFIDENCE_THRESHOLD", raising=False)
+
+        assert get_enable_preflight_router() is True
+        assert get_enable_preflight_router({"enable_preflight_router": False}) is False
+        monkeypatch.setenv("GEMINI_ENABLE_PREFLIGHT_ROUTER", "false")
+        assert get_enable_preflight_router({"enable_preflight_router": True}) is False
+        monkeypatch.setenv("GEMINI_ENABLE_PREFLIGHT_ROUTER", "1")
+        assert get_enable_preflight_router() is True
+        monkeypatch.setenv("GEMINI_ENABLE_PREFLIGHT_ROUTER", "maybe")
+        assert get_enable_preflight_router() is True
+        assert "maybe" in capsys.readouterr().err
+
+        assert get_preflight_confidence_threshold() == pytest.approx(0.75)
+        assert get_preflight_confidence_threshold({"preflight_confidence_threshold": 0.85}) == pytest.approx(0.85)
+        monkeypatch.setenv("GEMINI_PREFLIGHT_CONFIDENCE_THRESHOLD", " 0.80 ")
+        assert get_preflight_confidence_threshold({"preflight_confidence_threshold": 0.60}) == pytest.approx(0.80)
+
+        for bad in ("0", "0.0", "-0.1", "1.5", "nan", "inf", "abc"):
+            monkeypatch.setenv("GEMINI_PREFLIGHT_CONFIDENCE_THRESHOLD", bad)
+            assert get_preflight_confidence_threshold() == pytest.approx(0.75)
+            assert bad in capsys.readouterr().err
+
+        monkeypatch.delenv("GEMINI_PREFLIGHT_CONFIDENCE_THRESHOLD", raising=False)
+        assert get_preflight_confidence_threshold({"preflight_confidence_threshold": True}) == pytest.approx(0.75)
+
+        # 'auto' thinking_level returns None (model default) when router does not resolve it
+        assert build_thinking_config("auto", model="gemini-4-hydrogen") is None
+        assert build_thinking_config("AUTO", model="gemini-4-neon") is None
+
+        # get_thinking_level honours env > config and preserves falsy '0' / False
+        from gemini_review.config import get_thinking_level
+
+        monkeypatch.delenv("GEMINI_THINKING_LEVEL", raising=False)
+        assert get_thinking_level() == ""
+        assert get_thinking_level({"thinking_level": 0}) == "0"
+        assert get_thinking_level({"thinking_level": False}) == "False"
+        assert get_thinking_level({"thinking_level": "medium"}) == "medium"
+        monkeypatch.setenv("GEMINI_THINKING_LEVEL", "auto")
+        assert get_thinking_level({"thinking_level": "low"}) == "auto"
+
+        action_yml = (Path(__file__).resolve().parent.parent / "action.yml").read_text(encoding="utf-8")
+        for key, expected_default in (
+            ("enable_preflight_router", "true"),
+            ("preflight_confidence_threshold", f"{DEFAULT_PREFLIGHT_CONFIDENCE_THRESHOLD:.2f}"),
+        ):
+            match = re.search(
+                rf"^  {key}:\s*\n(?:    [^\n]+\n)*?    default:\s*['\"]?([^'\"\n]+)['\"]?\s*$",
+                action_yml,
+                re.MULTILINE,
+            )
+            assert match is not None, f"Missing default for {key} in action.yml"
+            assert match.group(1).strip() == expected_default

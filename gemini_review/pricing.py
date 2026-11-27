@@ -193,6 +193,7 @@ class Cost:
     context_selection: float = 0.0
     thinking: float = 0.0
     candidates_output: float = 0.0
+    preflight_router: float = 0.0
 
 
 def _is_vertex_regional_location(location: str | None) -> bool:
@@ -288,6 +289,19 @@ def estimate_cost(usage: dict, model: str | None, config: dict | None = None, to
             candidates_cost *= multiplier
             context_selection_cost *= multiplier
 
+    # Pre-flight router cost (runs on gemini-decision-1 at flat standard input rate, never scaled by main model tier)
+    raw_preflight_tokens = usage.get("preflight_router_input_tokens")
+    preflight_input_tokens = (
+        max(0, int(raw_preflight_tokens))
+        if isinstance(raw_preflight_tokens, (int, float))
+        and not isinstance(raw_preflight_tokens, bool)
+        and raw_preflight_tokens == raw_preflight_tokens
+        and raw_preflight_tokens not in (float("inf"), float("-inf"))
+        else 0
+    )
+    preflight_rate = RATES.get("gemini-decision-1")
+    preflight_cost = (preflight_input_tokens / 1e6 * preflight_rate.input) if preflight_rate else 0.0
+
     if cached > 0:
         # Deliberately hedged. Cache STORAGE is a separate per-token-hour SKU for some model families
         # and, as far as the published Vertex SKU catalogue goes, not for others: there are storage
@@ -301,7 +315,7 @@ def estimate_cost(usage: dict, model: str | None, config: dict | None = None, to
         )
 
     return Cost(
-        total=uncached_cost + cached_cost + output_cost + context_selection_cost,
+        total=uncached_cost + cached_cost + output_cost + context_selection_cost + preflight_cost,
         uncached_input=uncached_cost,
         cached_input=cached_cost,
         output=output_cost,
@@ -310,6 +324,7 @@ def estimate_cost(usage: dict, model: str | None, config: dict | None = None, to
         context_selection=context_selection_cost,
         thinking=thinking_cost,
         candidates_output=candidates_cost,
+        preflight_router=preflight_cost,
     )
 
 

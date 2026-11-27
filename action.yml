@@ -87,9 +87,17 @@ inputs:
     required: false
     default: '.github/review-instruction-additions.md'
   thinking_level:
-    description: 'Thinking / reasoning level for Gemini models (e.g. low, medium, high, xhigh, none, or numeric budget on Gemini 3). Controls reasoning token output.'
+    description: "Thinking / reasoning level for Gemini models (e.g. 'auto', 'low', 'medium', 'high', 'xhigh', 'none', or numeric budget on Gemini 3). Empty or 'auto' allows the pre-flight router to choose dynamically; explicit values override the router."
     required: false
     default: ''
+  enable_preflight_router:
+    description: 'Run the Decisions API pre-flight PR router (gemini-decision-1) to route thinking_level, pre-inject matched skills into Turn 2, and gate Developer Knowledge tools (Gemini Developer API only; skipped on Vertex AI).'
+    required: false
+    default: 'true'
+  preflight_confidence_threshold:
+    description: "Probability confidence threshold in (0.0, 1.0] for pre-flight routing, skill injection, and safe upward thinking fallback (defaults to '0.75')."
+    required: false
+    default: '0.75'
   max_candidate_files:
     description: 'Maximum number of candidate files considered during dynamic context selection (bounds token overhead in large monorepos).'
     required: false
@@ -201,6 +209,8 @@ runs:
         GEMINI_SKIP_INLINE_SUGGESTIONS: ${{ inputs.skip_inline_suggestions }}
         GEMINI_CUSTOM_INSTRUCTIONS: ${{ inputs.custom_instructions }}
         GEMINI_THINKING_LEVEL: ${{ inputs.thinking_level }}
+        GEMINI_ENABLE_PREFLIGHT_ROUTER: ${{ inputs.enable_preflight_router }}
+        GEMINI_PREFLIGHT_CONFIDENCE_THRESHOLD: ${{ inputs.preflight_confidence_threshold }}
         GEMINI_MAX_CANDIDATE_FILES: ${{ inputs.max_candidate_files }}
         GEMINI_EXTRA_CONTEXT_FILES: ${{ inputs.extra_context_files }}
         GEMINI_CONTEXT_DIFF_DIRECTORIES_ONLY: ${{ inputs.context_diff_directories_only }}

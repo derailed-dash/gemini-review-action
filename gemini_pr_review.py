@@ -246,16 +246,66 @@ def main():
         repository, pr_number, config, custom_instructions=custom_instructions
     )
 
-    # Assemble tools list
-    tools = [gr.list_available_skills, gr.load_skill_instructions]
+    # Pre-flight PR router (Wave 2 Decisions API): resolves dynamic thinking_level,
+    # skill matches for Turn 2 injection, and Google Developer Knowledge tool gating.
     auth_headers = gr.get_google_auth_headers()
     disable_dev_k = os.environ.get("DISABLE_DEVELOPER_KNOWLEDGE", "false").lower() == "true"
-    has_dev_knowledge = bool(
+    dev_knowledge_available = bool(
         not disable_dev_k and auth_headers and ("X-Goog-Api-Key" in auth_headers or "Authorization" in auth_headers)
     )
+
+    raw_thinking_level = gr.get_thinking_level(config)
+    thinking_is_auto = (not raw_thinking_level) or (raw_thinking_level.lower() == "auto")
+    preflight_result = None
+    preloaded_skills_section = ""
+    injected_skill_names: list[str] = []
+    has_dev_knowledge = dev_knowledge_available
+
+    if gr.get_enable_preflight_router(config):
+        if use_vertexai:
+            print(
+                "Pre-flight router: skipped on Vertex AI / Enterprise "
+                "(gemini-decision-1 requires Gemini Developer API).",
+                file=sys.stderr,
+            )
+        else:
+            discovered_skills = gr.discover_available_skills()
+            preflight_threshold = gr.get_preflight_confidence_threshold(config)
+            preflight_result = gr.run_preflight_router(
+                client,
+                text_files=text_files,
+                image_files=image_files,
+                skills=discovered_skills,
+                include_dev_knowledge=dev_knowledge_available,
+                threshold=preflight_threshold,
+                use_vertexai=use_vertexai,
+            )
+        if preflight_result is not None:
+            if not preflight_result.include_dev_knowledge:
+                has_dev_knowledge = False
+            if preflight_result.matched_skills:
+                preloaded_skills_section, injected_skills = gr.format_preloaded_skills_section(
+                    preflight_result.matched_skills,
+                    read_skill_fn=gr.read_skill_instructions,
+                )
+                injected_skill_names = [s.name for s in injected_skills]
+            if not thinking_is_auto and preflight_result.thinking_level != raw_thinking_level.lower():
+                print(
+                    f"Pre-flight router: explicit thinking_level='{raw_thinking_level}' overrides "
+                    f"routed '{preflight_result.thinking_level}'.",
+                    file=sys.stderr,
+                )
+
+    # Assemble tools list (skill tools always remain registered to preserve prefix cache invariance)
+    tools = [gr.list_available_skills, gr.load_skill_instructions]
     if has_dev_knowledge:
         print("Registering Google Developer Knowledge MCP tools...", file=sys.stderr)
         tools.extend([gr.search_google_developer_knowledge, gr.get_google_developer_documents])
+    elif dev_knowledge_available and preflight_result is not None and not preflight_result.include_dev_knowledge:
+        print(
+            "Pre-flight router: gated off Google Developer Knowledge tools (unrelated to Google SDKs/APIs).",
+            file=sys.stderr,
+        )
 
     # Add tools info to system instruction
     system_instruction += "\n\n## Tools Availability:"
@@ -310,6 +360,9 @@ def main():
         # system_instruction stays byte-identical across PRs on the same repository (prefix caching).
         if pr_number:
             sections.append(f"### Pull Request Metadata:\n- **Pull Request Number**: #{pr_number}")
+        if preloaded_skills_section:
+            # Injected strictly in Turn 2 (after invariant Turn 0 baseline) to preserve prefix caching.
+            sections.append(preloaded_skills_section)
         if pr_diff:
             sections.append(pr_diff)
         if visual_diff_summary:
@@ -624,8 +677,10 @@ def main():
                 codebase_context, codebase_multimodal_parts, dynamic_pr_prompt, tail_visual_parts
             )
 
-    thinking_level = config.get("thinking_level") or os.environ.get("GEMINI_THINKING_LEVEL")
-    thinking_cfg = gr.build_thinking_config(thinking_level, model=model_name)
+    thinking_level = (
+        preflight_result.thinking_level if (preflight_result is not None and thinking_is_auto) else raw_thinking_level
+    )
+    thinking_cfg = gr.build_thinking_config(thinking_level or None, model=model_name)
 
     if cached_content_name:
         gen_config = types.GenerateContentConfig(
@@ -844,8 +899,9 @@ def main():
         ctx_candidates_tokens = context_telemetry.get("candidates_tokens", 0)
         ctx_thoughts_tokens = context_telemetry.get("thoughts_tokens", 0)
         ctx_total_tokens = ctx_prompt_tokens + ctx_candidates_tokens + ctx_thoughts_tokens
+        preflight_tokens = preflight_result.input_tokens if preflight_result is not None else 0
 
-        overall_total_tokens = total_tokens + ctx_total_tokens
+        overall_total_tokens = total_tokens + ctx_total_tokens + preflight_tokens
 
         usage_dict = {
             "prompt_tokens": prompt_tokens,
@@ -861,6 +917,18 @@ def main():
             "context_selection_candidates_tokens": ctx_candidates_tokens,
             "context_selection_thoughts_tokens": ctx_thoughts_tokens,
             "context_selection_output_tokens": ctx_candidates_tokens + ctx_thoughts_tokens,
+            "preflight_router_input_tokens": preflight_tokens,
+            "preflight_routing": (
+                {
+                    "complexity": preflight_result.complexity,
+                    "thinking_level": thinking_level or "default",
+                    "thinking_overridden": not thinking_is_auto,
+                    "include_dev_knowledge": preflight_result.include_dev_knowledge,
+                    "matched_skills": injected_skill_names,
+                }
+                if preflight_result is not None
+                else None
+            ),
             # Recorded so the telemetry can be priced. Without it the table can only
             # show tokens, which is what it did before this was added.
             "model": model_name,
@@ -872,12 +940,13 @@ def main():
         cache_str = f" ({cache_percentage:.1f}% cached)" if cached_tokens > 0 else ""
         thoughts_str = f", {thoughts_tokens:,d} thinking tokens" if thoughts_tokens > 0 else ""
         ctx_str = f" [Dynamic context selection: {ctx_total_tokens:,d} tokens]" if ctx_total_tokens > 0 else ""
+        pf_str = f" [Pre-flight router: {preflight_tokens:,d} tokens]" if preflight_tokens > 0 else ""
         cost = gr.estimate_cost(usage_dict, model_name, config)
         cost_str = f" Estimated cost: {gr.usd(cost.total)}." if cost.rate else " No rate entry for this model."
         print(
             f"Token Usage: {prompt_tokens:,d} input tokens{cache_str}, "
             f"{candidates_tokens:,d} output tokens{thoughts_str}."
-            f" Total: {overall_total_tokens:,d} tokens{ctx_str}.{cost_str}",
+            f" Total: {overall_total_tokens:,d} tokens{ctx_str}{pf_str}.{cost_str}",
             file=sys.stderr,
         )
 

@@ -388,3 +388,44 @@ class TestServiceTierAndVertexRegionalPricing:
             config={"rate_input": 10.0, "rate_output": 20.0},
         )
         assert cost.total == pytest.approx(10.0)
+
+
+class TestPreflightRouterPricing:
+    """Verify pre-flight router usage on gemini-decision-1 is billed flat alongside main review cost."""
+
+    def test_preflight_router_cost_billed_flat_and_included_in_total(self):
+        base = estimate_cost(usage(fresh=100_000, output=1_000), "gemini-4-hydrogen", today=date(2026, 11, 27))
+        with_router = estimate_cost(
+            {
+                **usage(fresh=100_000, output=1_000),
+                "preflight_router_input_tokens": 5_000,
+                "service_tier": "flex",
+                "vertex_location": "eu",
+            },
+            "gemini-4-hydrogen",
+            today=date(2026, 11, 27),
+        )
+        expected_router = 5_000 / 1e6 * RATES["gemini-decision-1"].input
+        assert with_router.preflight_router == pytest.approx(expected_router)
+        # Main review cost gets Flex * Vertex regional; router stays at exact gemini-decision-1 rate
+        base_scaled = estimate_cost(
+            {**usage(fresh=100_000, output=1_000), "service_tier": "flex", "vertex_location": "eu"},
+            "gemini-4-hydrogen",
+            today=date(2026, 11, 27),
+        )
+        assert with_router.total == pytest.approx(base_scaled.total + expected_router)
+        assert base.preflight_router == 0.0
+
+    def test_preflight_router_handles_none_and_bool_gracefully(self):
+        cost_none = estimate_cost(
+            {**usage(fresh=10_000), "preflight_router_input_tokens": None},
+            "gemini-4-hydrogen",
+            today=date(2026, 11, 27),
+        )
+        cost_bool = estimate_cost(
+            {**usage(fresh=10_000), "preflight_router_input_tokens": True},
+            "gemini-4-hydrogen",
+            today=date(2026, 11, 27),
+        )
+        assert cost_none.preflight_router == 0.0
+        assert cost_bool.preflight_router == 0.0
