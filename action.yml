@@ -138,6 +138,14 @@ inputs:
     description: "Gemini per-part media_resolution for remote issue triage screenshots ('medium' [default, 560 tokens] or 'high' [1,120 tokens]; 'low' is disallowed)."
     required: false
     default: 'medium'
+  triage_engine:
+    description: "Issue triage classification engine: 'auto' (default: Gemini Decisions API on Developer API with automatic generate_content fallback), 'decisions', or 'generate_content'."
+    required: false
+    default: 'auto'
+  triage_threshold:
+    description: "Probability threshold in (0.0, 1.0] required to apply a label during Decisions API issue triage (defaults to '0.70')."
+    required: false
+    default: '0.70'
   context_mode:
     description: "Codebase context mode: 'auto' (default, Full under max_context_bytes else Sparse), 'full', 'sparse', or 'diff_only'."
     required: false
@@ -205,6 +213,8 @@ runs:
         GEMINI_CONTEXT_MEDIA_RESOLUTION: ${{ inputs.context_media_resolution }}
         GEMINI_VISUAL_DIFF_MEDIA_RESOLUTION: ${{ inputs.visual_diff_media_resolution }}
         GEMINI_TRIAGE_MEDIA_RESOLUTION: ${{ inputs.triage_media_resolution }}
+        GEMINI_TRIAGE_ENGINE: ${{ inputs.triage_engine }}
+        GEMINI_TRIAGE_THRESHOLD: ${{ inputs.triage_threshold }}
         GEMINI_CONTEXT_MODE: ${{ inputs.context_mode }}
         GEMINI_MAX_CONTEXT_BYTES: ${{ inputs.max_context_bytes }}
         GEMINI_MAX_DIFF_FULL_FILE_BYTES: ${{ inputs.max_diff_full_file_bytes }}

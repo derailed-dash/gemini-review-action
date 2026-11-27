@@ -252,3 +252,60 @@ class TestConfigAndModelResolution:
             )
             assert match is not None, f"Missing default for {key} in action.yml"
             assert match.group(1).strip() == default_val
+
+    def test_get_triage_engine_and_threshold(self, monkeypatch, capsys):
+        """Triage engine and threshold resolvers validate inputs, honour env > config, and match action.yml."""
+        import re
+        from pathlib import Path
+
+        import pytest
+
+        from gemini_review.config import (
+            DEFAULT_TRIAGE_ENGINE,
+            DEFAULT_TRIAGE_THRESHOLD,
+            VALID_TRIAGE_ENGINES,
+            get_triage_engine,
+            get_triage_threshold,
+        )
+
+        assert DEFAULT_TRIAGE_ENGINE == "auto"
+        assert DEFAULT_TRIAGE_THRESHOLD == pytest.approx(0.70)
+        assert VALID_TRIAGE_ENGINES == ("auto", "decisions", "generate_content")
+
+        monkeypatch.delenv("GEMINI_TRIAGE_ENGINE", raising=False)
+        monkeypatch.delenv("GEMINI_TRIAGE_THRESHOLD", raising=False)
+
+        assert get_triage_engine() == "auto"
+        assert get_triage_threshold() == pytest.approx(0.70)
+
+        assert get_triage_engine({"triage_engine": "DECISIONS"}) == "decisions"
+        assert get_triage_engine({"triage_engine": "generate_content"}) == "generate_content"
+        assert get_triage_threshold({"triage_threshold": 0.85}) == pytest.approx(0.85)
+
+        monkeypatch.setenv("GEMINI_TRIAGE_ENGINE", " decisions ")
+        assert get_triage_engine({"triage_engine": "generate_content"}) == "decisions"
+
+        monkeypatch.setenv("GEMINI_TRIAGE_THRESHOLD", " 0.80 ")
+        assert get_triage_threshold({"triage_threshold": 0.50}) == pytest.approx(0.80)
+
+        monkeypatch.setenv("GEMINI_TRIAGE_ENGINE", "invalid_engine")
+        assert get_triage_engine() == "auto"
+        assert "invalid_engine" in capsys.readouterr().err
+
+        for bad_thresh in ("0", "0.0", "-0.1", "1.5", "abc"):
+            monkeypatch.setenv("GEMINI_TRIAGE_THRESHOLD", bad_thresh)
+            assert get_triage_threshold() == pytest.approx(0.70)
+            assert bad_thresh in capsys.readouterr().err
+
+        action_yml = (Path(__file__).resolve().parent.parent / "action.yml").read_text(encoding="utf-8")
+        for key, expected_default in (
+            ("triage_engine", DEFAULT_TRIAGE_ENGINE),
+            ("triage_threshold", f"{DEFAULT_TRIAGE_THRESHOLD:.2f}"),
+        ):
+            match = re.search(
+                rf"^  {key}:\s*\n(?:    [^\n]+\n)*?    default:\s*['\"]?([^'\"\n]+)['\"]?\s*$",
+                action_yml,
+                re.MULTILINE,
+            )
+            assert match is not None, f"Missing default for {key} in action.yml"
+            assert match.group(1).strip() == expected_default

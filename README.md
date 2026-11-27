@@ -438,6 +438,14 @@ jobs:
           language: 'English (UK)'           # Optional
 ```
 
+#### Calibrated Multi-Label Issue Triage (Gemini Decisions API)
+
+When `command: 'triage'` runs against the Gemini Developer API (`GEMINI_API_KEY`) with `triage_engine: 'auto'` (the default), the action classifies issues using **`gemini-decision-1`** (`client.decisions.create` on `v1beta`) in a single zero-output-token prefill pass:
+
+* **Label Descriptions & Actionability Guardrail**: Fetches repository labels together with their GitHub descriptions (`get_available_label_metadata()`), evaluating one `noul` (yes/no) question per label alongside an `is_actionable_issue` guardrail (so sparse or test issues cleanly receive `[]`).
+* **Calibrated Probabilities & Cost Telemetry**: Evaluates text, discussion comments, and `"medium"`-resolution screenshots (`triage_media_resolution`), applying every label whose `P(yes)` meets `triage_threshold` (default `'0.70'`) and logging per-label probabilities, confidence scores, latency, input tokens, and estimated USD cost (`$0.10` / 1M input tokens, `0` output tokens).
+* **Automatic Graceful Fallback**: Transparently falls back to standard `generate_content` (`TriageResult` Structured Outputs) when `triage_engine: 'generate_content'` is set, when running on Vertex AI / Enterprise (where `gemini-decision-1` is not currently hosted), when a custom `.github/commands/gemini-triage.toml` override is present under `'auto'`, when a repository exceeds `990` labels or `262,144` estimated tokens, or if the Decisions API errors or triggers `prompt_feedback` filtering.
+
 ### Excluding another reviewer's comments
 
 Comment history exists so the reviewer does not re-raise its **own** feedback once you have addressed it. That is a good default.
@@ -494,6 +502,8 @@ Excluded comments never reach the prompt and are not counted in the reported tok
 | `context_media_resolution` | Gemini per-part `media_resolution` for background Markdown images and attached PDFs (`'medium'` [default, 560 tokens] or `'high'` [1,120 tokens]; `'low'` is disallowed). | No | `'medium'` |
 | `visual_diff_media_resolution` | Gemini per-part `media_resolution` for active PR visual diff images (`'high'` [default, 1,120 tokens] or `'medium'` [560 tokens]; `'low'` is disallowed). | No | `'high'` |
 | `triage_media_resolution` | Gemini per-part `media_resolution` for remote issue triage screenshots (`'medium'` [default, 560 tokens] or `'high'` [1,120 tokens]; `'low'` is disallowed). | No | `'medium'` |
+| `triage_engine` | Issue triage classification engine: `'auto'` (default: `gemini-decision-1` Decisions API on the Gemini Developer API with automatic fallback to `generate_content`), `'decisions'`, or `'generate_content'`. | No | `'auto'` |
+| `triage_threshold` | Minimum calibrated probability `P(yes)` in `(0.0, 1.0]` required to apply a label during Decisions API issue triage. | No | `'0.70'` |
 | `service_tier` | Inference tier for Google AI Studio (`GEMINI_API_KEY`): `'standard'` (default) or `'flex'` (**50% discount** across all input, cached, thinking, and output tokens with 1–15 min target latency; ignored with a warning on Vertex AI). | No | `'standard'` |
 | `service_tier_fallback` | When `service_tier` is `'flex'`, automatically fall back to `'standard'` tier after bounded retries if capacity is shed (`503`/`429`) or timed out. | No | `'true'` |
 | `timeout` | Timeout for API requests in seconds (the Gemini review client enforces a 300s minimum HTTP timeout floor — raised to 600s for `service_tier: 'flex'` — and automatically falls back to streaming on connection resets). | No | `60` |

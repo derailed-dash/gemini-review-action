@@ -206,6 +206,8 @@ The action supports four distinct reviewer personas configured via the `persona`
 | `context_media_resolution` | Per-part `media_resolution` for background Markdown images and PDFs (`'medium'` or `'high'`). | `'medium'` |
 | `visual_diff_media_resolution` | Per-part `media_resolution` for active PR visual diff images (`'high'` or `'medium'`). | `'high'` |
 | `triage_media_resolution` | Per-part `media_resolution` for issue triage screenshots (`'medium'` or `'high'`). | `'medium'` |
+| `triage_engine` | Issue triage classification engine (`'auto'`, `'decisions'`, or `'generate_content'`). | `'auto'` |
+| `triage_threshold` | Probability threshold in `(0.0, 1.0]` required to apply a label during Decisions triage. | `'0.70'` |
 
 ## Workflow Templates
 

@@ -16,9 +16,12 @@ VALID_CONTEXT_MODES = ("auto", "full", "sparse", "diff_only")
 VALID_ATTACH_MARKDOWN_IMAGES = ("all", "core", "diff", "none")
 VALID_SERVICE_TIERS = ("standard", "flex")
 VALID_MEDIA_RESOLUTIONS = ("medium", "high")
+VALID_TRIAGE_ENGINES = ("auto", "decisions", "generate_content")
 DEFAULT_CONTEXT_MEDIA_RESOLUTION = "medium"
 DEFAULT_VISUAL_DIFF_MEDIA_RESOLUTION = "high"
 DEFAULT_TRIAGE_MEDIA_RESOLUTION = "medium"
+DEFAULT_TRIAGE_ENGINE = "auto"
+DEFAULT_TRIAGE_THRESHOLD = 0.70
 
 
 def get_default_model(explicit_model: str | None = None) -> str:
@@ -421,3 +424,41 @@ def get_triage_media_resolution(config: dict | None = None) -> str:
         VALID_MEDIA_RESOLUTIONS,
         DEFAULT_TRIAGE_MEDIA_RESOLUTION,
     )
+
+
+def get_triage_engine(config: dict | None = None) -> str:
+    """Return issue triage classification engine ('auto', 'decisions', or 'generate_content'; default 'auto')."""
+    return _resolve_choice_setting(
+        "GEMINI_TRIAGE_ENGINE",
+        config,
+        "triage_engine",
+        VALID_TRIAGE_ENGINES,
+        DEFAULT_TRIAGE_ENGINE,
+    )
+
+
+def get_triage_threshold(config: dict | None = None) -> float:
+    """Return probability threshold in (0.0, 1.0] for Decisions issue triage (default 0.70)."""
+    for source, raw in (
+        ("GEMINI_TRIAGE_THRESHOLD", os.environ.get("GEMINI_TRIAGE_THRESHOLD")),
+        ("triage_threshold", config.get("triage_threshold") if config else None),
+    ):
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            continue
+        try:
+            parsed = float(raw)
+        except (TypeError, ValueError):
+            print(
+                f"Warning: Invalid {source}='{raw}'. Defaulting to {DEFAULT_TRIAGE_THRESHOLD:.2f}.",
+                file=sys.stderr,
+            )
+            return DEFAULT_TRIAGE_THRESHOLD
+        if not (0.0 < parsed <= 1.0):
+            print(
+                f"Warning: {source} must be in (0.0, 1.0] (got {parsed}). "
+                f"Defaulting to {DEFAULT_TRIAGE_THRESHOLD:.2f}.",
+                file=sys.stderr,
+            )
+            return DEFAULT_TRIAGE_THRESHOLD
+        return parsed
+    return DEFAULT_TRIAGE_THRESHOLD
